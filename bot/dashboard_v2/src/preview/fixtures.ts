@@ -494,7 +494,13 @@ export function getPreviewApiFixture(
   if (endpoint === '/feedback/counts') return { total: 0, unread: 0 };
   if (endpoint === '/streamers') return [{ login: 'midcore_live', twitchUserId: '123456789', isPartner: true }, ...(SOCIAL_WORKSPACE_PREVIEW ? [{ login: 'preview_second', twitchUserId: '987654321', isPartner: true }] : [])];
   if (endpoint === '/billing/catalog') return BILLING_CATALOG_FIXTURE;
-  if (endpoint === '/internal-home') return INTERNAL_HOME_FIXTURE;
+  if (endpoint === '/internal-home') return {
+    ...INTERNAL_HOME_FIXTURE,
+    profile: {
+      twitch_login: INTERNAL_HOME_FIXTURE.twitchLogin,
+      display_name: INTERNAL_HOME_FIXTURE.displayName,
+    },
+  };
   if (endpoint === '/roadmap') return ROADMAP_FIXTURE;
   if (endpoint === '/ads-schedule') return ADS_SCHEDULE_FIXTURE;
   if (endpoint === '/chat-hype-timeline') return CHAT_HYPE_TIMELINE_FIXTURE;

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ ${DL_DISCORD_HUB_SECRETS_READY:-0} != 1 ]]; then
+  set -a
+  source /etc/deadlock-twitch/infisical.conf
+  set +a
+  unset INFISICAL_SERVICE_TOKEN
+  if [[ ! -r ${CREDENTIALS_DIRECTORY:?}/infisical-token ]]; then
+    printf 'Infisical-Zugang für den Discord-Hub fehlt.\n' >&2
+    exit 1
+  fi
+  INFISICAL_SERVICE_TOKEN=$(<"$CREDENTIALS_DIRECTORY/infisical-token")
+  export INFISICAL_SERVICE_TOKEN DL_DISCORD_HUB_SECRETS_READY=1
+  exec /usr/local/libexec/dl-infisical-env --profile all -- /usr/bin/bash "$0" "$@"
+fi
+
+unset INFISICAL_SERVICE_TOKEN DL_DISCORD_HUB_SECRETS_READY
+set -a
+source /etc/deadlock-twitch/discord-hub.conf
+set +a
+unset INFISICAL_SERVICE_TOKEN MASTER_BROKER_BASE_URL
+: "${DISCORD_DEADLOCK_TWITCH_BOT:?Discord-Bot-Zugang fehlt}"
+: "${DISCORD_DEADLOCK_TWITCH_BOT_INTERNAL_TOKEN:?Interner Discord-Hub-Zugang fehlt}"
+: "${TWITCH_INTERNAL_API_TOKEN:?Interner Twitch-Zugang fehlt}"
+export MASTER_BROKER_TOKEN="$TWITCH_INTERNAL_API_TOKEN"
+exec /opt/deadlock/twitch/current/rust/target/release/tb-discord-hub "$@"

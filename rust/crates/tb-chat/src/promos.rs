@@ -2676,10 +2676,8 @@ impl PromoEngine {
         // als stille Lurker (messages=0, seen_via_chatters_api) öffentlich
         // ge-@-mentioned. Python: build_known_chat_bot_not_in_clause, injiziert in
         // historische CTE UND live_candidates (promos.py:451–458, 490, 523).
-        // Die Bot-Logins sind eine Compile-Zeit-Konstante; trotzdem als Bind-Params
-        // (ab $5) gebunden statt als SQL-Literal interpoliert (clean-SQL).
-        let historical_bot_clause = known_chat_bot_not_in_clause("sc.chatter_login", 5);
-        let current_bot_clause = known_chat_bot_not_in_clause("lc.chatter_login", 5);
+        let historical_bot_clause = known_chat_bot_not_in_clause("sc.chatter_login", 6);
+        let current_bot_clause = known_chat_bot_not_in_clause("lc.chatter_login", 6);
         let sql = format!(
             r#"WITH historical_lurks AS (
                 SELECT CASE
@@ -2715,6 +2713,8 @@ impl PromoEngine {
                   WHERE sc.last_seen_at >= NOW() - INTERVAL '{freshness} minutes'
                     AND COALESCE(sc.messages, 0) = 0
                     AND sc.seen_via_chatters_api = TRUE
+                    AND COALESCE(TRIM(sc.chatter_id), '') <> $1
+                    AND ($5 = '' OR COALESCE(TRIM(sc.chatter_id), '') <> $5)
                )
                SELECT lc.chatter_login
                  FROM historical_lurks hl
@@ -2732,8 +2732,8 @@ impl PromoEngine {
             .bind(broadcaster_id)
             .bind(LURKER_TAX_MIN_PRIOR_SESSIONS)
             .bind(LURKER_TAX_MIN_WATCHTIME_MINUTES)
-            .bind(LURKER_TAX_CANDIDATE_FETCH);
-        // Bot-Logins (lowercase) in stabiler Reihenfolge an $5.. binden.
+            .bind(LURKER_TAX_CANDIDATE_FETCH)
+            .bind(&self.bot_user_id);
         for bot in crate::mention_scoring::WHITELISTED_BOTS {
             query = query.bind(bot.to_lowercase());
         }
@@ -7271,6 +7271,38 @@ mod db_tests {
         .execute(pool)
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn lurker_candidates_exclude_broadcaster_and_bot_by_id() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        create_channel_points_table(&pool).await;
+        let engine = make_engine(pool.clone()).set_bot_user_id("bot-id");
+        let live = seed_live_channel(&pool, "channel", "broadcaster-id").await;
+        for (login, id) in [
+            ("renamed_broadcaster", "broadcaster-id"),
+            ("renamed_bot", "bot-id"),
+            ("viewer", "viewer-id"),
+            ("active_viewer", "active-id"),
+            ("NightBot", "known-bot-id"),
+        ] {
+            seed_qualifying_lurker(&pool, "channel", live, login, id).await;
+        }
+        sqlx::query(
+            "UPDATE twitch_session_chatters SET messages = 1
+             WHERE session_id = $1 AND chatter_id = 'active-id'",
+        )
+        .bind(live)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            engine.get_lurker_tax_candidates("broadcaster-id").await,
+            vec!["viewer".to_string()]
+        );
     }
 
     #[tokio::test]

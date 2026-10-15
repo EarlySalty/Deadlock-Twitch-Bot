@@ -377,6 +377,7 @@ mod tests {
                     ResponseTemplate::new(429)
                         .set_body_json(json!({"retry_after": 0.01, "global": false})),
                 )
+                .with_priority(1)
                 .up_to_n_times(1)
                 .expect(1)
                 .mount(&server)
@@ -384,6 +385,7 @@ mod tests {
             Mock::given(method(verb))
                 .and(path(&route))
                 .respond_with(ResponseTemplate::new(204))
+                .with_priority(2)
                 .expect(1)
                 .mount(&server)
                 .await;
@@ -402,6 +404,7 @@ mod tests {
             .build()
             .expect("test client without a virtual-time request timeout");
         async {
+            tracing::callsite::rebuild_interest_cache();
             rest.interaction_callback(7, token, &ephemeral_deferred())
                 .await
                 .expect("callback retry");
@@ -411,6 +414,7 @@ mod tests {
         }
         .with_subscriber(subscriber)
         .await;
+        assert_eq!(server.received_requests().await.unwrap().len(), 4);
         let output =
             String::from_utf8(logs.0.lock().expect("log buffer").clone()).expect("UTF-8 logs");
         assert_eq!(output.matches("Discord-Rate-Limit").count(), 2);

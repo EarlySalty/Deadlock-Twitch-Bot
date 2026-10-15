@@ -24,6 +24,10 @@ pub fn routes() -> Router<PgPool> {
         .route("/twitch/api/admin/social-ai/usage", get(usage))
         .route("/twitch/api/admin/social-ai/limits", get(limits))
         .route(
+            "/twitch/api/admin/social-ai/external-consent",
+            get(external_consent).put(save_external_consent),
+        )
+        .route(
             "/twitch/api/admin/social-ai/limits/global",
             post(save_global),
         )
@@ -113,6 +117,72 @@ async fn limits_response(pool: &PgPool) -> Result<Response, ApiError> {
         .await
         .map_err(limit_error)?;
     Ok(([(CACHE_CONTROL, "no-store")], Json(data)).into_response())
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct ExternalConsent {
+    enabled: bool,
+}
+
+async fn external_consent(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+) -> Result<Response, ApiError> {
+    if let Some(error) = crate::auth::require_admin(&auth) {
+        return Err(error);
+    }
+    let value = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT value::text FROM social_media_settings WHERE key = $1",
+    )
+    .bind(tb_social_media::settings::KEY_EXTERNAL_LLM_CONSENT)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|_| {
+        failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Die Freigabe konnte nicht geladen werden.",
+        )
+    })?
+    .flatten();
+    let enabled = value
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        == Some(serde_json::Value::Bool(true));
+    Ok((
+        [(CACHE_CONTROL, "no-store")],
+        Json(ExternalConsent { enabled }),
+    )
+        .into_response())
+}
+
+async fn save_external_consent(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    state: Option<Extension<DashboardAuthState>>,
+    session: Option<Extension<AuthenticatedAdminSessionId>>,
+    partner: Option<Extension<AuthenticatedPartnerSessionId>>,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    if let Some(error) = crate::auth::require_admin(&auth) {
+        return Err(error);
+    }
+    let change: ExternalConsent = parse(&body)?;
+    let actor = actor(&auth, state, session, partner).await?;
+    tb_social_media::settings::set_setting(
+        &pool,
+        tb_social_media::settings::KEY_EXTERNAL_LLM_CONSENT,
+        &serde_json::Value::Bool(change.enabled),
+        Some(&actor),
+    )
+    .await
+    .map_err(|_| {
+        failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Die Freigabe konnte nicht gespeichert werden. Bitte lade den Stand neu.",
+        )
+    })?;
+    Ok(([(CACHE_CONTROL, "no-store")], Json(change)).into_response())
 }
 
 pub async fn limits(

@@ -96,11 +96,17 @@ impl DiscordConfig {
         let mut ids = Vec::new();
         let mut after = String::new();
         loop {
-            let guilds: Vec<Value> = self
+            let request = self
                 .http
                 .get(format!("{}/users/@me/guilds", self.api_base))
                 .bearer_auth(access)
-                .query(&[("limit", "200"), ("after", after.as_str())])
+                .query(&[("limit", "200")]);
+            let request = if after.is_empty() {
+                request
+            } else {
+                request.query(&[("after", after.as_str())])
+            };
+            let guilds: Vec<Value> = request
                 .send()
                 .await
                 .map_err(|_| ())?
@@ -422,11 +428,11 @@ async fn status(Extension(auth): Extension<DashboardAuthState>, headers: HeaderM
     };
     let guilds = sqlx::query_as::<_, Guild>("SELECT guild_id::text, name, language, auto_partner_default FROM discord_guilds WHERE guild_id = ANY($1) AND status = 'active' AND removed_at IS NULL ORDER BY name, guild_id")
         .bind(&session.guild_ids).fetch_all(auth.pool()).await;
-    let memberships = sqlx::query_as::<_, (String, bool)>("SELECT sg.guild_id::text, sg.active AND g.status = 'active' AND g.removed_at IS NULL FROM streamer_guilds sg JOIN discord_guilds g USING (guild_id) WHERE twitch_user_id = $1")
+    let memberships = sqlx::query_as::<_, (String, bool, bool)>("SELECT sg.guild_id::text, sg.active AND g.status = 'active' AND g.removed_at IS NULL AND (NOT sg.require_discord_link OR (sg.is_on_discord AND i.discord_user_id IS NOT NULL)), (sg.active AND sg.require_discord_link AND (NOT sg.is_on_discord OR i.discord_user_id IS NULL)) OR (NOT sg.active AND sg.source <> 'admin' AND COALESCE(sg.deactivated_by IN ('discord_leave','guild_removed','identity_change'), false)) FROM streamer_guilds sg JOIN discord_guilds g USING (guild_id) LEFT JOIN twitch_streamer_identities i ON i.twitch_user_id = sg.twitch_user_id WHERE sg.twitch_user_id = $1")
         .bind(&session.twitch_user_id).fetch_all(auth.pool()).await;
     match (guilds, memberships) {
         (Ok(guilds), Ok(memberships)) => no_store(Json(json!({"twitch_login": session.twitch_login, "discord_linked": session.discord_user_id.is_some(), "guilds": guilds,
-            "memberships": memberships.into_iter().map(|(guild_id, active)| json!({"guild_id":guild_id,"active":active})).collect::<Vec<_>>()})).into_response()),
+            "memberships": memberships.into_iter().map(|(guild_id, active, can_rejoin)| json!({"guild_id":guild_id,"active":active,"can_rejoin":can_rejoin})).collect::<Vec<_>>()})).into_response()),
         _ => unavailable(),
     }
 }
@@ -481,7 +487,7 @@ async fn assign(pool: &PgPool, hash: &str, guild: i64) -> Result<Option<bool>, s
         .bind(&session.twitch_user_id)
         .execute(&mut *tx)
         .await?;
-    let allowed: bool = sqlx::query_scalar("SELECT NOT EXISTS (SELECT 1 FROM twitch_exclusions WHERE twitch_user_id = $1 AND reactivated_at IS NULL) AND NOT EXISTS (SELECT 1 FROM twitch_partner_signup_denylist WHERE twitch_user_id = $1 OR lower(twitch_login) = lower($2)) AND NOT EXISTS (SELECT 1 FROM twitch_partners WHERE twitch_user_id = $1 AND (lower(coalesce(technical_pause_reason, '')) IN ('blocked','bot_banned') OR coalesce(manual_partner_opt_out, 0) = 1 OR admin_archived_at IS NOT NULL))")
+    let allowed: bool = sqlx::query_scalar("WITH current_partner AS (SELECT manual_partner_opt_out, admin_archived_at FROM twitch_partners WHERE twitch_user_id = $1 ORDER BY CASE COALESCE(status, '') WHEN 'active' THEN 0 WHEN 'archived' THEN 1 WHEN 'departnered' THEN 2 ELSE 3 END, COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST LIMIT 1) SELECT NOT EXISTS (SELECT 1 FROM twitch_exclusions WHERE twitch_user_id = $1 AND reactivated_at IS NULL) AND NOT EXISTS (SELECT 1 FROM twitch_partner_signup_denylist WHERE twitch_user_id = $1 OR lower(twitch_login) = lower($2)) AND NOT EXISTS (SELECT 1 FROM twitch_partners WHERE twitch_user_id = $1 AND lower(btrim(coalesce(technical_pause_reason, ''))) IN ('blocked','bot_banned')) AND NOT EXISTS (SELECT 1 FROM current_partner WHERE coalesce(manual_partner_opt_out, 0) = 1 OR admin_archived_at IS NOT NULL)")
         .bind(&session.twitch_user_id).bind(&session.twitch_login).fetch_one(&mut *tx).await?;
     if !allowed {
         return Ok(None);
@@ -506,13 +512,20 @@ async fn assign(pool: &PgPool, hash: &str, guild: i64) -> Result<Option<bool>, s
     if conflict {
         return Ok(None);
     }
-    sqlx::query("INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id, discord_display_name) VALUES ($1,$2,$3,$4) ON CONFLICT (twitch_user_id) DO UPDATE SET twitch_login = EXCLUDED.twitch_login, discord_user_id = EXCLUDED.discord_user_id, discord_display_name = EXCLUDED.discord_display_name")
-        .bind(&session.twitch_user_id).bind(&session.twitch_login).bind(&session.discord_user_id).bind(&session.discord_name).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id, discord_display_name, is_on_discord) VALUES ($1,$2,$3,$4,CASE WHEN $5 THEN 1 ELSE 0 END) ON CONFLICT (twitch_user_id) DO UPDATE SET twitch_login = EXCLUDED.twitch_login, discord_user_id = EXCLUDED.discord_user_id, discord_display_name = EXCLUDED.discord_display_name, is_on_discord = CASE WHEN $5 THEN 1 ELSE twitch_streamer_identities.is_on_discord END")
+        .bind(&session.twitch_user_id).bind(&session.twitch_login).bind(&session.discord_user_id).bind(&session.discord_name).bind(guild == HOME).execute(&mut *tx).await?;
     let active: bool = sqlx::query_scalar("INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, deactivated_at, source, is_on_discord, require_discord_link) VALUES ($1,$2,$3,CASE WHEN $3 THEN NULL ELSE now() END,'onboarding',true,true) ON CONFLICT (twitch_user_id,guild_id) DO UPDATE SET is_on_discord = true, active = CASE WHEN streamer_guilds.deactivated_by = 'admin' OR streamer_guilds.source = 'admin' OR streamer_guilds.active THEN streamer_guilds.active ELSE $3 END, deactivated_at = CASE WHEN streamer_guilds.deactivated_by = 'admin' OR streamer_guilds.source = 'admin' OR streamer_guilds.active THEN streamer_guilds.deactivated_at WHEN $3 THEN NULL ELSE now() END RETURNING active")
         .bind(&session.twitch_user_id).bind(guild).bind(automatic).fetch_one(&mut *tx).await?;
     if active {
-        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, added_by) SELECT $1,$2,'active','guild_onboarding' WHERE NOT EXISTS (SELECT 1 FROM twitch_partners WHERE twitch_user_id = $1)")
-            .bind(&session.twitch_user_id).bind(&session.twitch_login).execute(&mut *tx).await?;
+        if guild != HOME {
+            sqlx::query("SET LOCAL tb.foreign_guild_admission = 'true'")
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query("UPDATE twitch_partners SET status = 'active', departnered_at = NULL, require_discord_link = CASE WHEN $2 THEN 1 ELSE require_discord_link END, technical_pause_reason = CASE WHEN lower(btrim(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN NULL ELSE technical_pause_reason END WHERE id = (SELECT id FROM twitch_partners WHERE twitch_user_id = $1 ORDER BY CASE COALESCE(status, '') WHEN 'active' THEN 0 WHEN 'archived' THEN 1 WHEN 'departnered' THEN 2 ELSE 3 END, COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST LIMIT 1 FOR UPDATE) AND (status <> 'active' OR $2) AND admin_archived_at IS NULL AND COALESCE(manual_partner_opt_out, 0) = 0 AND lower(btrim(COALESCE(technical_pause_reason, ''))) NOT IN ('blocked','bot_banned')")
+            .bind(&session.twitch_user_id).bind(guild == HOME).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, added_by, require_discord_link) SELECT $1,$2,'active','guild_onboarding',CASE WHEN $3 THEN 1 ELSE 0 END WHERE NOT EXISTS (SELECT 1 FROM twitch_partners WHERE twitch_user_id = $1)")
+            .bind(&session.twitch_user_id).bind(&session.twitch_login).bind(guild == HOME).execute(&mut *tx).await?;
     }
     tx.commit().await?;
     Ok(Some(active))

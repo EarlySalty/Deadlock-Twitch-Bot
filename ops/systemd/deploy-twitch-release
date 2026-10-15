@@ -13,7 +13,7 @@ Aufruf:
 
 Nach einem abgebrochenen Deploy kann der eingefrorene Buildpfad erneut als Quelle dienen.
 STT-Modelle werden nur mit --install-stt-models aus dem geprüften Release installiert.
-Ohne --restart werden wie bisher Dashboard, Bot und Coaching-Watch neu gestartet.
+Ohne --restart werden Dashboard, Bot, Coaching-Watch und Discord-Hub neu gestartet.
 Mit --restart werden nur die explizit genannten Twitch-Dienste neu gestartet.
 
 Erlaubte Restart-Ziele:
@@ -21,6 +21,7 @@ Erlaubte Restart-Ziele:
   twitch-bot
   twitch-audit
   coaching-watch
+  discord-hub
   all
 EOF
 }
@@ -33,6 +34,7 @@ pruefen() {
     deadlock-twitch-bot-rust
     deadlock-twitch-dashboard-rust
     deadlock-twitch-stream-coaching-watch
+    deadlock-twitch-discord-hub-rust
   )
 
   if ! current_target=$(readlink -e -- "$current"); then
@@ -159,10 +161,14 @@ add_restart_target() {
     twitch-audit|coaching-watch|twitch-coaching-watch|deadlock-twitch-stream-coaching-watch|deadlock-twitch-stream-coaching-watch.service)
       canonical="coaching-watch"
       ;;
+    discord-hub|twitch-discord-hub|deadlock-twitch-discord-hub-rust|deadlock-twitch-discord-hub-rust.service)
+      canonical="discord-hub"
+      ;;
     all)
       add_restart_target twitch-dashboard
       add_restart_target twitch-bot
       add_restart_target coaching-watch
+      add_restart_target discord-hub
       return
       ;;
     *)
@@ -284,6 +290,7 @@ required_artifacts=(
   rust/target/release/tb-stream-audit
   rust/target/release/tb-config-check
   rust/target/release/tb-llm-usage-recover
+  rust/target/release/tb-discord-hub
   "$dashboard_source"
   bot/admin_dashboard/dist
   website/dist
@@ -722,6 +729,10 @@ if [[ $native_expected -eq 1 ]]; then
     install -m 0644 "$candidate/ops/systemd/deadlock-twitch-bot-watchdog.conf" /etc/deadlock-twitch/bot-watchdog.conf
   fi
 fi
+install -m 0644 "$candidate/ops/systemd/deadlock-twitch-discord-hub-rust.service" /etc/systemd/system/deadlock-twitch-discord-hub-rust.service
+if [[ ! -e /etc/deadlock-twitch/discord-hub.conf ]]; then
+  install -m 0644 "$candidate/ops/systemd/discord-hub.conf" /etc/deadlock-twitch/discord-hub.conf
+fi
 systemctl daemon-reload
 systemctl enable --now deadlock-twitch-llm-usage-recover.timer
 
@@ -800,6 +811,9 @@ for target in "${restart_targets[@]}"; do
       ;;
     coaching-watch)
       systemctl restart deadlock-twitch-stream-coaching-watch.service
+      ;;
+    discord-hub)
+      systemctl restart deadlock-twitch-discord-hub-rust.service
       ;;
   esac
 done

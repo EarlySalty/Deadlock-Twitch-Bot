@@ -19,8 +19,11 @@ describe('guild onboarding selection', () => {
   });
   it('does not re-submit a pending or already active membership', () => {
     for (const active of [true, false]) {
-      expect(automaticGuild({ ...session, memberships: [{ guild_id: session.guilds[0].guild_id, active }] })).toBeNull();
+      expect(automaticGuild({ ...session, memberships: [{ guild_id: session.guilds[0].guild_id, active, can_rejoin: false }] })).toBeNull();
     }
+  });
+  it('allows a returning member to re-verify without treating pending admission as a departure', () => {
+    expect(automaticGuild({ ...session, memberships: [{ guild_id: session.guilds[0].guild_id, active: false, can_rejoin: true }] })).toBe(session.guilds[0].guild_id);
   });
   it('translates every dedicated onboarding label to English', () => {
     for (const [de, en] of Object.entries(GUILD_ONBOARDING_EN)) {

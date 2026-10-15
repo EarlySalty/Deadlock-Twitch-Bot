@@ -120,7 +120,7 @@ pub(crate) async fn run(
         config.pool,
     ));
     let (tx, rx) = mpsc::unbounded_channel();
-    let worker = tokio::spawn(sink_worker(rx, sink));
+    let mut worker = tokio::spawn(sink_worker(rx, sink));
 
     let result = Runner {
         session: Session::new(config.bot_token, protocol::INTENTS),
@@ -131,8 +131,13 @@ pub(crate) async fn run(
     .run_loop()
     .await;
 
-    worker.abort();
-    let _ = worker.await;
+    if tokio::time::timeout(Duration::from_secs(5), &mut worker)
+        .await
+        .is_err()
+    {
+        worker.abort();
+        let _ = worker.await;
+    }
     result
 }
 
@@ -239,6 +244,8 @@ impl Runner {
         };
         let (mut write, mut read) = ws.split();
         let mut heartbeat: Option<Interval> = None;
+        let mut registration = tokio::time::interval(Duration::from_secs(30));
+        registration.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             let actions: Vec<Action> = tokio::select! {
@@ -269,6 +276,12 @@ impl Runner {
                     None => vec![self.session.on_close(None)],
                 },
                 _ = tick(&mut heartbeat) => vec![self.session.on_heartbeat_tick()],
+                _ = registration.tick() => {
+                    if self.ctx.bot_user_id.load(Ordering::Relaxed) != 0 {
+                        self.register_commands_once();
+                    }
+                    Vec::new()
+                },
             };
 
             for action in actions {
@@ -854,7 +867,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/applications/77/commands"))
             .and(body_partial_json(
-                json!([{"name":"setup","default_member_permissions":"32"}]),
+                json!({"name":"setup","default_member_permissions":"32"}),
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
             .expect(1)
@@ -889,6 +902,63 @@ mod tests {
         .await
         .unwrap();
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn registration_retries_without_another_ready() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ws_url = format!("ws://{}", listener.local_addr().unwrap());
+        let api = mock_gateway_bot(&ws_url, 1).await;
+        let received = Arc::new(tokio::sync::Notify::new());
+        let notify = Arc::clone(&received);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = Arc::clone(&calls);
+        Mock::given(method("POST"))
+            .and(path("/applications/77/commands"))
+            .and(body_partial_json(json!({"name":"setup"})))
+            .respond_with(move |_: &wiremock::Request| {
+                if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(503)
+                } else {
+                    notify.notify_one();
+                    ResponseTemplate::new(200).set_body_json(json!({"name":"setup"}))
+                }
+            })
+            .expect(2)
+            .mount(&api)
+            .await;
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            send(&mut ws, json!({"op":10,"d":{"heartbeat_interval":45000}})).await;
+            expect_op(&mut ws, 2).await;
+            send(&mut ws, json!({"op":0,"s":1,"t":"READY","d":{"session_id":"s1","resume_gateway_url":"ws://127.0.0.1:1","user":{"id":"50"},"guilds":[]}})).await;
+            loop {
+                tokio::select! {
+                    _ = received.notified() => break,
+                    frame = ws.next() => {
+                        if let Some(Ok(Message::Text(text))) = frame {
+                            let value: Value = serde_json::from_str(&text).unwrap();
+                            if value["op"] == 1 { send(&mut ws, json!({"op":11})).await; }
+                        } else { panic!("Gateway closed before registration retry"); }
+                    }
+                }
+            }
+            close(&mut ws, 4004).await;
+        });
+        tokio::time::timeout(
+            Duration::from_secs(70),
+            run(
+                config(Some(77)),
+                Arc::new(RecordingSink::default()),
+                &api.uri(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        server.await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

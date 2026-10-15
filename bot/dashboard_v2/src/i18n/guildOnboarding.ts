@@ -12,6 +12,7 @@ export const GUILD_ONBOARDING_EN: Record<string, string> = {
   'Deine Aufnahme wartet auf Freigabe durch den Server-Admin.': 'Your membership is waiting for approval from a server admin.',
   'Du wirst direkt Partner dieses Servers.': 'You will immediately become a partner of this server.',
   'Ein Server-Admin muss deine Aufnahme freigeben.': 'A server admin needs to approve your membership.',
+  'Deine Mitgliedschaft ist nicht mehr aktiv. Bestätige den Server erneut.': 'Your membership is no longer active. Confirm the server again.',
   'Diesen Server wählen': 'Choose this server',
   'Deine Serverwahl wird gespeichert …': 'Saving your server choice …',
   'Weiter zum Dashboard': 'Continue to dashboard',
