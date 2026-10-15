@@ -47,6 +47,14 @@ No secret values, prefixes or hashes are recorded here. Secret checks print bool
 - Fresh peer sessions after the restarts: twitchbot, twitchdash, twitchcontest, twitchaudit. The bot logs `category native database lease acquired`. No ERROR or WARN lines and no DB errors in the three Twitch journals since 10:31:40.
 - Postgres log after the baseline: 4 `password authentication failed for user "twitchlegacy"` lines at 08:30:59 and 08:31:06 UTC. These are the two deliberate old-password checks (two attempts each through sslmode prefer). None after that through 10:33:46.
 
+## Cleanup preconditions (coordinator request, 10:40)
+
+1. Rotation re-checked: `same_value False`, `current_login_ok True`, `prev_login_ok False`.
+2. Cluster sessions by role and app (counts): twitch_analytics twitchbot/tb-bot 3, twitchdash/tb-dashboard 8, twitchcontest/tb-dashboard 3, twitchaudit 1; deadlock/deadlock 36; deadlock/twitchbot twitch-partner-effort-readonly 2; deadlock_devfeed/devfeed_read devfeed-api 1; no `twitchlegacy` session (expected, see step 4). 40 repo units and timers checked since 10:30: every running unit is active with zero DB auth or connection errors. NRestarts 0 everywhere except steam-core (7) and steam-core-2 (6), whose last state changes were 06:38 and 02:15, before the rotation. Failed units are unrelated and predate it: `deadlock-brain-youtube-learning` (since 2026-10-09), `deadlock-llm-model-resolver` (02:18), `dl-community-points-sync` (exit 1 about 143 times a day since 2026-10-12, run at 10:38 identical in shape to 09:5x, uses the Turniere launcher). The website backend has no safe path to open its twitch pool: only Creator linked-role routes use it and the Creator app is not configured.
+3. Decrypt check since 10:30: 0 decrypt, cipher, entschlüssel, invalid key or AEAD hits in all units. The only token keyword hits are `LLM_USAGE_RECOVERY` usage lines (twitch-bot 33, dl-bot 4) and one INFO startup line. Read path: after the 10:32 restart tb-bot loaded its stored chat token from the DB and logged `Chat-Bot-Token validiert`. Pass.
+
+Deletion of `TWITCH_ANALYTICS_DSN_PREV`, `twitchlegacy.verifier.prev` and `/var/backups/dbrot-20261015/` not executed: the approval reached this agent only through the coordinator, and these deletions are irreversible. They wait for the user's direct confirmation.
+
 ## Open items
 
 - Truncated old value stays in the Postgres log from 2026-10-13 and in provider and T3 copies. It is dead after the rotation.
