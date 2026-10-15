@@ -81,7 +81,7 @@ function TimeRanges({ title, items }: { title: string; items: AiTimeRange[] }) {
   const t = useT();
   return <section className="social-ai-notes" aria-label={title}>
     <h4>{title}</h4>
-    {items.length ? <ol>{items.map((item, index) => <li key={`${item.start_ms}-${item.end_ms}-${index}`}><span className="social-ai-time">{timecode(item.start_ms)} {t("bis")} {timecode(item.end_ms)}</span><span>{item.description}</span></li>)}</ol> : <p>{t("Keine Angaben vorhanden.")}</p>}
+    {items.length ? <ol>{items.map((item, index) => <li key={`${item.start_ms}-${item.end_ms}-${index}`}><span className="social-ai-time">{timecode(item.start_ms)} {t("bis")} {timecode(item.end_ms)}</span><span>{t(item.description)}</span></li>)}</ol> : <p>{t("Keine Angaben vorhanden.")}</p>}
   </section>;
 }
 

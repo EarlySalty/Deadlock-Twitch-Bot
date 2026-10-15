@@ -698,6 +698,7 @@ select.studio-select {
   font-weight: 600;
 }
 .studio-legacy-plan .studio-savebar {
+  position: static;
   width: 100%;
 }
 .studio-workspace-surface {
