@@ -1,6 +1,6 @@
 # Register (max 30 lines)
 
-Round 2 (Opus r2, 2026-10-15): Main = 408557c6a (D11-D13, SOC-EN, SEC-NPM, H1 on top of LIVE 1a46231ee). Release 408557c6a building/deploying. Report to main orch f52add9e-54d7-4bc7-9351-2bb88580787b. Round 1 thread 44b13b55 stopped, do not resume.
+Round 2 (Opus r2, 2026-10-15): Main = LIVE 408557c6a (D11-D13, SOC-EN, SEC-NPM, H1). Deployed via ops/twitch-release-build + deploy-twitch-release, --pruefen exit 0, #1060 closed. Report to main orch f52add9e-54d7-4bc7-9351-2bb88580787b. Round 1 thread 44b13b55 stopped, do not resume.
 
 | Pkg | Agent | Worktree | Branch | HEAD | Status |
 |---|---|---|---|---|---|
