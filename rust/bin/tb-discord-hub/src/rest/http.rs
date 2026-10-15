@@ -123,18 +123,11 @@ impl DiscordHttp {
         let url = format!("{}{}", self.base_url, path);
 
         for attempt in 1..=MAX_ATTEMPTS {
-            let waiting_since = std::time::Instant::now();
-            let reservation = loop {
-                match self.limiter.acquire(&route) {
-                    Ok(reservation) => break reservation,
-                    Err(wait) => {
-                        if waiting_since.elapsed().saturating_add(wait) > MAX_RETRY_WAIT {
-                            return Err(RestError::RateLimited);
-                        }
-                        tokio::time::sleep(wait).await;
-                    }
-                }
-            };
+            let mut bucket = self
+                .limiter
+                .acquire(&route, MAX_RETRY_WAIT)
+                .await
+                .map_err(|()| RestError::RateLimited)?;
 
             let mut builder = self.client.request(method.clone(), &url);
             if let Some(reason) = reason {
@@ -171,8 +164,7 @@ impl DiscordHttp {
                 });
             }
             let headers = response.headers().clone();
-            reservation.update(&headers);
-            drop(reservation);
+            bucket = bucket.update(&headers).await;
             let bytes = response
                 .bytes()
                 .await
@@ -211,7 +203,7 @@ impl DiscordHttp {
                         .is_some_and(|v| v.eq_ignore_ascii_case("true"));
                 let retry_after =
                     Duration::try_from_secs_f64(retry_after).map_err(|_| RestError::RateLimited)?;
-                self.limiter.block(&route, retry_after, global);
+                bucket.block(retry_after, global);
                 tracing::warn!(
                     route = %route.template,
                     attempt,
@@ -222,7 +214,7 @@ impl DiscordHttp {
                 if retry_after > MAX_RETRY_WAIT || attempt == MAX_ATTEMPTS {
                     return Err(RestError::RateLimited);
                 }
-                tokio::time::sleep(retry_after).await;
+                drop(bucket);
                 continue;
             }
             let code = json.get("code").and_then(Value::as_i64);
