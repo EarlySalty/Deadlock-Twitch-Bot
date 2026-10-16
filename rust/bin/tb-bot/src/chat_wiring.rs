@@ -886,9 +886,30 @@ async fn foreign_impersonation_guard(
         bot_login,
         Arc::new(ForeignActions::new(
             api,
-            Some(Arc::new(GlobalChatterBanEnforcer::new(pool))),
+            Some(Arc::new(GlobalChatterBanEnforcer::new(pool.clone()))),
+            Arc::new(DbPartnerPipelineChannels { pool: pool.clone() }),
+            pool,
         )),
     ))
+}
+
+struct DbPartnerPipelineChannels {
+    pool: PgPool,
+}
+
+#[async_trait::async_trait]
+impl tb_chat::impersonation_guard::PartnerPipelineChannels for DbPartnerPipelineChannels {
+    async fn handled_by_partner_pipeline(&self, broadcaster_id: &str) -> bool {
+        match select_eventsub_subscription_broadcasters(&self.pool).await {
+            Ok(rows) => rows.iter().any(|row| {
+                row.twitch_user_id == broadcaster_id && (row.is_partner || row.chat_subscriptions)
+            }),
+            Err(error) => {
+                tracing::warn!(%error, broadcaster_id, "Impersonation-Guard: Partner-Kanalprüfung fehlgeschlagen, Warnhinweis unterbleibt");
+                true
+            }
+        }
+    }
 }
 
 /// Phase 2: baut die komplette Pipeline auf der gebooteten ChatApi.

@@ -72,6 +72,7 @@ use crate::spam_filter::{
     SpamAction, SpamContext, SpamFilter, SPAM_MIN_MATCHES,
 };
 use crate::standard_replies::StandardReplies;
+use crate::suppression_guard::DbManualPartnerOptOutCheck;
 use crate::sus_invite::SusInviteCheck;
 use crate::types::ChatMessageEvent;
 
@@ -808,6 +809,8 @@ impl ChatPipeline {
                 Arc::new(PartnerActions::new(
                     Arc::clone(&self.parts.moderation),
                     Arc::clone(&self.parts.api),
+                    Arc::new(DbManualPartnerOptOutCheck::new(self.parts.pool.clone())),
+                    self.parts.pool.clone(),
                 )),
             ))
         });

@@ -100,6 +100,11 @@ struct CrewAccount {
     impersonates_community: bool,
 }
 
+pub fn registry_account(chatter_id: &str) -> bool {
+    let id = chatter_id.trim();
+    CREW_REGISTRY.iter().any(|acc| acc.twitch_user_id == id)
+}
+
 pub fn registry_impersonator(chatter_id: &str) -> bool {
     let id = chatter_id.trim();
     CREW_REGISTRY
@@ -432,7 +437,7 @@ impl CrewGuard {
                 action_taken: outcome.map_or("none", |o| o.action).into(),
                 source: "passive_patterns".into(),
             };
-            let persisted = if outcome.is_some() {
+            let persisted = if outcome.is_some_and(|o| o.acted()) {
                 persist_radar_action(&pool, &log).await
             } else {
                 persist_radar_alert(&pool, &log).await

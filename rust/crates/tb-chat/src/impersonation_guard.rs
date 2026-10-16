@@ -1,14 +1,17 @@
 use crate::api::ChatApi;
-use crate::crew_guard::registry_impersonator;
+use crate::crew_guard::{registry_account, registry_impersonator};
 use crate::global_chatter_ban::GlobalChatterBanEnforcer;
 use crate::moderation::{ModerationEngine, ModerationEvidence};
+use crate::promos::NoopSuppressionCheck;
+use crate::suppression_guard::{ManualPartnerOptOutCheck, SuppressionGuardChatApi};
 use crate::types::{ChatMessageEvent, SendOutcome};
 use async_trait::async_trait;
 use regex::Regex;
+use sqlx::PgPool;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub const OWN_BOT_LOGIN: &str = "deutschedeadlockcommunity";
 pub const TIMEOUT_SECS: u32 = 600;
@@ -22,6 +25,18 @@ const FOREIGN_WARNING_COOLDOWN: Duration = Duration::from_secs(12 * 60 * 60);
 const FOREIGN_WARNING_WINDOW: Duration = Duration::from_secs(60 * 60);
 const FOREIGN_WARNING_LIMIT: usize = 10;
 const THROTTLE_MAX_KEYS: usize = 4096;
+const ELLIPTICAL_OFFER_MAX_WORDS: usize = 4;
+const CREW_SIGHTING_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+const REGULAR_MIN_DAYS: i64 = 3;
+const NO_CREW_SIGHTING: &str = "no_crew_sighting";
+const FOREIGN_WARNING_THROTTLED: &str = "foreign_warning_throttled";
+const REGULAR_DAYS_SQL: &str = "SELECT COUNT(DISTINCT day) FROM ( \
+     SELECT (message_ts AT TIME ZONE 'Europe/Berlin')::date AS day FROM twitch_chat_messages \
+      WHERE streamer_login = $1 AND chatter_login = $2 AND message_ts >= NOW() - INTERVAL '60 days' \
+     UNION ALL \
+     SELECT (sent_at AT TIME ZONE 'Europe/Berlin')::date AS day FROM category_chat_messages \
+      WHERE room_user_id = $3 AND chatter_user_id = $4 AND sent_at >= NOW() - INTERVAL '60 days' \
+     ) days WHERE day < (NOW() AT TIME ZONE 'Europe/Berlin')::date";
 
 fn six_v_six() -> Option<&'static Regex> {
     static RE: OnceLock<Option<Regex>> = OnceLock::new();
@@ -31,26 +46,62 @@ fn six_v_six() -> Option<&'static Regex> {
 
 fn private_cue() -> Option<&'static Regex> {
     static RE: OnceLock<Option<Regex>> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"privat|turnier|tournament|scrim|lobby|custom").ok())
+    RE.get_or_init(|| Regex::new(r"privat|turnier|tournament|scrim|lobby|custom|match").ok())
+        .as_ref()
+}
+
+fn negated_interest() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\b(kein\w*|null)\s+(bock|lust)\b").ok())
         .as_ref()
 }
 
 fn invite_cue() -> Option<&'static Regex> {
     static RE: OnceLock<Option<Regex>> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b(bock|lust|willst|wollt|kommt|komm)\b").ok())
-        .as_ref()
+    RE.get_or_init(|| {
+        Regex::new(concat!(
+            r"\b(bock|lust|willst|wollt|kommst|mitspielen|mitmachen|mitzocken|joinen|join|dm|whisper|flüster\w*)\b",
+            r"|\b(komm|kommt)\s+(mit|ihr|vorbei)\b",
+            r"|\bwer\s+(will|kommt|hat\s+(bock|lust)|ist\s+dabei|macht\s+mit)\b",
+            r"|\b(hast\s+du|habt\s+ihr|hat\s+wer|hat\s+jemand)\s+(bock|lust|zeit)\b",
+            r"|\beinladung\w*\b",
+            r"|\bdabei\s+sein\b",
+            r"|\b(melde\s+dich|meldet\s+euch)\b",
+            r"|\b(schreib|schreibt)\s+(mir|mich)\b",
+        ))
+        .ok()
+    })
+    .as_ref()
 }
 
 fn matches(re: Option<&'static Regex>, text: &str) -> bool {
     re.is_some_and(|re| re.is_match(text))
 }
 
+fn addresses_people(text: &str) -> bool {
+    let affirmed = match negated_interest() {
+        Some(re) => re.replace_all(text, " ").into_owned(),
+        None => text.to_string(),
+    };
+    matches(invite_cue(), &affirmed)
+}
+
+fn elliptical_private_offer(text: &str) -> bool {
+    let Some(re) = six_v_six() else {
+        return false;
+    };
+    let compact = re.replace_all(text, "6v6");
+    let trimmed = compact.trim_end();
+    trimmed.ends_with('?')
+        && trimmed.contains("privat")
+        && trimmed.split_whitespace().count() <= ELLIPTICAL_OFFER_MAX_WORDS
+}
+
 pub fn private_6v6_pitch(text: &str) -> bool {
     let text = text.to_lowercase();
-    if !matches(six_v_six(), &text) {
-        return false;
-    }
-    matches(private_cue(), &text) || (matches(invite_cue(), &text) && text.contains("match"))
+    matches(six_v_six(), &text)
+        && matches(private_cue(), &text)
+        && (addresses_people(&text) || elliptical_private_offer(&text))
 }
 
 pub fn lookalike_login(login: &str, bot_login: &str) -> bool {
@@ -85,6 +136,10 @@ pub struct ImpersonationOutcome {
 }
 
 impl ImpersonationOutcome {
+    pub fn acted(&self) -> bool {
+        !matches!(self.action, FOREIGN_WARNING_THROTTLED | NO_CREW_SIGHTING)
+    }
+
     pub fn alert_text(&self) -> &'static str {
         match self.action {
             "timeout_statement" => "Timeout (10 Min.) gesetzt und Hinweis im Chat gepostet.",
@@ -92,8 +147,11 @@ impl ImpersonationOutcome {
             "statement" => "Timeout fehlgeschlagen, Hinweis im Chat gepostet.",
             "timeout_failed" => "Timeout und Hinweis sind fehlgeschlagen.",
             "foreign_warning" => "Warnhinweis im fremden Chat gepostet.",
-            "foreign_warning_throttled" => {
+            FOREIGN_WARNING_THROTTLED => {
                 "Kein neuer Warnhinweis, Sperrfrist oder Stundenlimit greift."
+            }
+            NO_CREW_SIGHTING => {
+                "Keine Aktion, in den letzten 24 Std. war kein bekannter Crew-Account in diesem Kanal."
             }
             _ => "Warnhinweis übersprungen, Senden nicht möglich.",
         }
@@ -103,18 +161,49 @@ impl ImpersonationOutcome {
 #[async_trait]
 pub trait ImpersonationPort: Send + Sync {
     async fn timeout(&self, event: &ChatMessageEvent, duration_secs: u32, reason: &str) -> bool;
-    async fn post(&self, broadcaster_id: &str, text: &str) -> bool;
+    async fn post(&self, event: &ChatMessageEvent, text: &str) -> bool;
     async fn banned_by_us(&self, event: &ChatMessageEvent) -> bool;
+    async fn partner_channel(&self, event: &ChatMessageEvent) -> bool;
+    async fn channel_regular(&self, event: &ChatMessageEvent) -> bool;
+}
+
+pub async fn channel_regular(pool: &PgPool, event: &ChatMessageEvent) -> bool {
+    let days = sqlx::query_scalar::<_, i64>(REGULAR_DAYS_SQL)
+        .bind(event.broadcaster_user_login.trim().to_lowercase())
+        .bind(event.chatter_user_login.trim().to_lowercase())
+        .bind(event.broadcaster_user_id.trim())
+        .bind(event.chatter_user_id.trim())
+        .fetch_one(pool)
+        .await;
+    match days {
+        Ok(days) => days >= REGULAR_MIN_DAYS,
+        Err(error) => {
+            warn!(%error, "Impersonation-Guard: Chatverlauf nicht lesbar, Chatter gilt als Stammgast");
+            true
+        }
+    }
 }
 
 pub struct PartnerActions {
     moderation: Arc<ModerationEngine>,
     api: Arc<dyn ChatApi>,
+    opt_out: Arc<dyn ManualPartnerOptOutCheck>,
+    pool: PgPool,
 }
 
 impl PartnerActions {
-    pub fn new(moderation: Arc<ModerationEngine>, api: Arc<dyn ChatApi>) -> Self {
-        Self { moderation, api }
+    pub fn new(
+        moderation: Arc<ModerationEngine>,
+        api: Arc<dyn ChatApi>,
+        opt_out: Arc<dyn ManualPartnerOptOutCheck>,
+        pool: PgPool,
+    ) -> Self {
+        Self {
+            moderation,
+            api,
+            opt_out,
+            pool,
+        }
     }
 }
 
@@ -141,26 +230,55 @@ impl ImpersonationPort for PartnerActions {
             .await
     }
 
-    async fn post(&self, broadcaster_id: &str, text: &str) -> bool {
-        sent(self.api.send_message(broadcaster_id, text).await)
+    async fn post(&self, event: &ChatMessageEvent, text: &str) -> bool {
+        let api = SuppressionGuardChatApi::new(
+            Arc::clone(&self.api),
+            Arc::new(NoopSuppressionCheck),
+            Arc::clone(&self.opt_out),
+            "impersonation",
+            event.broadcaster_user_login.as_str(),
+        );
+        sent(api.send_message(&event.broadcaster_user_id, text).await)
     }
 
     async fn banned_by_us(&self, _event: &ChatMessageEvent) -> bool {
         false
     }
+
+    async fn partner_channel(&self, _event: &ChatMessageEvent) -> bool {
+        true
+    }
+
+    async fn channel_regular(&self, event: &ChatMessageEvent) -> bool {
+        channel_regular(&self.pool, event).await
+    }
+}
+
+#[async_trait]
+pub trait PartnerPipelineChannels: Send + Sync {
+    async fn handled_by_partner_pipeline(&self, broadcaster_id: &str) -> bool;
 }
 
 pub struct ForeignActions {
     api: Option<Arc<dyn ChatApi>>,
     ban_list: Option<Arc<GlobalChatterBanEnforcer>>,
+    partner_channels: Arc<dyn PartnerPipelineChannels>,
+    pool: PgPool,
 }
 
 impl ForeignActions {
     pub fn new(
         api: Option<Arc<dyn ChatApi>>,
         ban_list: Option<Arc<GlobalChatterBanEnforcer>>,
+        partner_channels: Arc<dyn PartnerPipelineChannels>,
+        pool: PgPool,
     ) -> Self {
-        Self { api, ban_list }
+        Self {
+            api,
+            ban_list,
+            partner_channels,
+            pool,
+        }
     }
 }
 
@@ -170,9 +288,9 @@ impl ImpersonationPort for ForeignActions {
         false
     }
 
-    async fn post(&self, broadcaster_id: &str, text: &str) -> bool {
+    async fn post(&self, event: &ChatMessageEvent, text: &str) -> bool {
         match &self.api {
-            Some(api) => sent(api.send_message(broadcaster_id, text).await),
+            Some(api) => sent(api.send_message(&event.broadcaster_user_id, text).await),
             None => false,
         }
     }
@@ -182,6 +300,16 @@ impl ImpersonationPort for ForeignActions {
             Some(ban_list) => ban_list.is_banned(event).await,
             None => false,
         }
+    }
+
+    async fn partner_channel(&self, event: &ChatMessageEvent) -> bool {
+        self.partner_channels
+            .handled_by_partner_pipeline(&event.broadcaster_user_id)
+            .await
+    }
+
+    async fn channel_regular(&self, event: &ChatMessageEvent) -> bool {
+        channel_regular(&self.pool, event).await
     }
 }
 
@@ -246,11 +374,33 @@ impl Throttle {
     }
 }
 
+#[derive(Default)]
+struct Sightings {
+    last: HashMap<String, Instant>,
+}
+
+impl Sightings {
+    fn record(&mut self, channel: &str, now: Instant) {
+        if self.last.len() >= THROTTLE_MAX_KEYS {
+            self.last
+                .retain(|_, at| now.duration_since(*at) < CREW_SIGHTING_WINDOW);
+        }
+        self.last.insert(channel.to_string(), now);
+    }
+
+    fn recent(&self, channel: &str, now: Instant) -> bool {
+        self.last
+            .get(channel)
+            .is_some_and(|at| now.duration_since(*at) < CREW_SIGHTING_WINDOW)
+    }
+}
+
 pub struct ImpersonationGuard {
     mode: GuardMode,
     bot_login: String,
     port: Arc<dyn ImpersonationPort>,
     throttle: Mutex<Throttle>,
+    sightings: Mutex<Sightings>,
 }
 
 impl ImpersonationGuard {
@@ -260,6 +410,7 @@ impl ImpersonationGuard {
             bot_login,
             port,
             throttle: Mutex::new(Throttle::default()),
+            sightings: Mutex::new(Sightings::default()),
         }
     }
 
@@ -314,28 +465,59 @@ impl ImpersonationGuard {
         event: &ChatMessageEvent,
         trusted: bool,
     ) -> Option<ImpersonationOutcome> {
+        let registry = registry_account(&event.chatter_user_id);
+        if registry {
+            self.sightings
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .record(&event.broadcaster_user_id, Instant::now());
+        }
         let reason = self.reason(event, trusted).await?;
-        let action = match self.mode {
-            GuardMode::Partner => self.partner(event).await,
-            GuardMode::Foreign => self.foreign(event).await,
+        if self.mode == GuardMode::Foreign && self.port.partner_channel(event).await {
+            return None;
+        }
+        if !registry && self.port.channel_regular(event).await {
+            return None;
+        }
+        let action = if !registry && !self.crew_sighted(event) {
+            NO_CREW_SIGHTING
+        } else {
+            match self.mode {
+                GuardMode::Partner => self.partner(event).await,
+                GuardMode::Foreign => self.foreign(event).await,
+            }
         };
-        info!(
-            channel = %event.broadcaster_user_login,
-            chatter = %event.chatter_user_login,
-            action,
-            reason,
-            "Impersonation-Guard entschieden"
-        );
-        Some(ImpersonationOutcome { action, reason })
+        let outcome = ImpersonationOutcome { action, reason };
+        if outcome.acted() {
+            info!(
+                channel = %event.broadcaster_user_login,
+                chatter = %event.chatter_user_login,
+                action,
+                reason,
+                "Impersonation-Guard entschieden"
+            );
+        } else {
+            debug!(
+                channel = %event.broadcaster_user_login,
+                chatter = %event.chatter_user_login,
+                action,
+                reason,
+                "Impersonation-Guard gedrosselt"
+            );
+        }
+        Some(outcome)
+    }
+
+    fn crew_sighted(&self, event: &ChatMessageEvent) -> bool {
+        self.sightings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .recent(&event.broadcaster_user_id, Instant::now())
     }
 
     async fn partner(&self, event: &ChatMessageEvent) -> &'static str {
         let timed_out = self.port.timeout(event, TIMEOUT_SECS, TIMEOUT_REASON).await;
-        let posted = self.reserve(event)
-            && self
-                .port
-                .post(&event.broadcaster_user_id, &self.text(event))
-                .await;
+        let posted = self.reserve(event) && self.port.post(event, &self.text(event)).await;
         match (timed_out, posted) {
             (true, true) => "timeout_statement",
             (true, false) => "timeout",
@@ -346,13 +528,9 @@ impl ImpersonationGuard {
 
     async fn foreign(&self, event: &ChatMessageEvent) -> &'static str {
         if !self.reserve(event) {
-            return "foreign_warning_throttled";
+            return FOREIGN_WARNING_THROTTLED;
         }
-        if self
-            .port
-            .post(&event.broadcaster_user_id, &self.text(event))
-            .await
-        {
+        if self.port.post(event, &self.text(event)).await {
             "foreign_warning"
         } else {
             "foreign_warning_skipped"
@@ -370,6 +548,8 @@ mod tests {
         timeouts: Mutex<Vec<u32>>,
         posts: Mutex<Vec<String>>,
         banned: Vec<String>,
+        regulars: Vec<String>,
+        partner: bool,
     }
 
     #[async_trait]
@@ -382,7 +562,7 @@ mod tests {
             true
         }
 
-        async fn post(&self, _broadcaster_id: &str, text: &str) -> bool {
+        async fn post(&self, _event: &ChatMessageEvent, text: &str) -> bool {
             self.posts
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -393,6 +573,22 @@ mod tests {
         async fn banned_by_us(&self, event: &ChatMessageEvent) -> bool {
             self.banned.contains(&event.chatter_user_id)
         }
+
+        async fn partner_channel(&self, _event: &ChatMessageEvent) -> bool {
+            self.partner
+        }
+
+        async fn channel_regular(&self, event: &ChatMessageEvent) -> bool {
+            self.regulars.contains(&event.chatter_user_id)
+        }
+    }
+
+    const CREW_ID: &str = "89018048";
+
+    async fn sight(guard: &ImpersonationGuard, channel: &str) {
+        let mut message = event(CREW_ID, "blackhusky45", "hallo");
+        message.broadcaster_user_id = channel.into();
+        assert_eq!(guard.handle(&message, false).await, None);
     }
 
     impl Recorder {
@@ -443,7 +639,12 @@ mod tests {
             REAL_MESSAGE,
             "6v6 privat turnier?",
             "wer hat lust auf ein privates 6on6",
-            "6 gegen 6 private lobby",
+            "6 gegen 6 private lobby wer kommt",
+            "6 gegen 6 private lobby, wer will mitmachen",
+            "Einladung zum privaten 6v6 Turnier heute Abend",
+            "habt ihr bock auf ein 6v6 scrim",
+            "6v6 privat match? schreib mir",
+            "Moin 6v6 privat match?",
             "willst du ein 6v6 match spielen",
         ] {
             assert!(private_6v6_pitch(text), "{text}");
@@ -457,6 +658,16 @@ mod tests {
             "wir waren 6 gegen 6 und haben verloren",
             "privat match heute?",
             "16 vs 64 lol",
+            "die 6v6 lobby hat ewig geladen",
+            "das 6v6 turnier gestern war krass",
+            "hast du das 6v6 turnier gestern gesehen",
+            "wer schaut heute das 6v6 turnier?",
+            "6v6 scrim war gut",
+            "das custom 6v6 match gestern war krass",
+            "hab keinen bock mehr auf 6v6 scrims",
+            "das 6v6 turnier kommt nächste woche",
+            "gibt es heute noch ein privates 6v6 turnier?",
+            "willst du heute 6v6 spielen",
         ] {
             assert!(!private_6v6_pitch(text), "{text}");
         }
@@ -487,6 +698,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fremder_guard_bleibt_in_partnerkanaelen_still() {
+        let recorder = Arc::new(Recorder {
+            partner: true,
+            banned: vec!["66".into()],
+            ..Recorder::default()
+        });
+        let guard = ImpersonationGuard::new(
+            GuardMode::Foreign,
+            OWN_BOT_LOGIN.into(),
+            Arc::clone(&recorder) as Arc<dyn ImpersonationPort>,
+        );
+        for message in [
+            event("1505528697", "deadlock_germany", REAL_MESSAGE),
+            event("1505528697", "deadlock_germany", "hallo"),
+            event("66", "zufallsname", REAL_MESSAGE),
+        ] {
+            assert_eq!(guard.handle(&message, false).await, None);
+        }
+        assert_eq!(recorder.counts(), (Vec::new(), Vec::new()));
+    }
+
+    #[tokio::test]
     async fn fremder_chat_ohne_nachahmer_namen_bleibt_still() {
         let (guard, recorder) = guard(GuardMode::Foreign);
         assert_eq!(
@@ -509,6 +742,7 @@ mod tests {
             OWN_BOT_LOGIN.into(),
             Arc::clone(&recorder) as Arc<dyn ImpersonationPort>,
         );
+        sight(&guard, "500").await;
         let pitch = guard
             .handle(&event("66", "zufallsname", REAL_MESSAGE), false)
             .await;
@@ -537,6 +771,7 @@ mod tests {
     #[tokio::test]
     async fn partner_pitch_gibt_timeout_und_einmal_statement() {
         let (guard, recorder) = guard(GuardMode::Partner);
+        sight(&guard, "500").await;
         let message = event("88", "fremder", REAL_MESSAGE);
         let first = guard.handle(&message, false).await;
         let second = guard.handle(&message, false).await;
@@ -579,5 +814,120 @@ mod tests {
         broadcaster.broadcaster_user_id = "500".into();
         assert_eq!(guard.handle(&broadcaster, false).await, None);
         assert_eq!(recorder.counts(), (Vec::new(), Vec::new()));
+    }
+
+    #[tokio::test]
+    async fn stammgaeste_bleiben_in_beiden_pfaden_unberuehrt() {
+        for mode in [GuardMode::Partner, GuardMode::Foreign] {
+            let recorder = Arc::new(Recorder {
+                regulars: vec!["88".into(), "1505528697".into()],
+                banned: vec!["88".into()],
+                ..Recorder::default()
+            });
+            let guard = ImpersonationGuard::new(
+                mode,
+                OWN_BOT_LOGIN.into(),
+                Arc::clone(&recorder) as Arc<dyn ImpersonationPort>,
+            );
+            sight(&guard, "500").await;
+            assert_eq!(
+                guard
+                    .handle(&event("88", "stammgast", REAL_MESSAGE), false)
+                    .await,
+                None
+            );
+            let crew = guard
+                .handle(
+                    &event("1505528697", "deadlock_germany", REAL_MESSAGE),
+                    false,
+                )
+                .await;
+            assert!(crew.is_some_and(|o| o.acted()), "{mode:?}");
+            assert_eq!(recorder.counts().1.len(), 1, "{mode:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ohne_crew_sichtung_gibt_es_nur_eine_meldung() {
+        for mode in [GuardMode::Partner, GuardMode::Foreign] {
+            let recorder = Arc::new(Recorder {
+                banned: vec!["88".into()],
+                ..Recorder::default()
+            });
+            let guard = ImpersonationGuard::new(
+                mode,
+                OWN_BOT_LOGIN.into(),
+                Arc::clone(&recorder) as Arc<dyn ImpersonationPort>,
+            );
+            let outcome = guard
+                .handle(&event("88", "fremder", REAL_MESSAGE), false)
+                .await;
+            assert_eq!(
+                outcome.map(|o| o.action),
+                Some(NO_CREW_SIGHTING),
+                "{mode:?}"
+            );
+            assert!(outcome.is_some_and(|o| !o.acted()));
+            assert_eq!(recorder.counts(), (Vec::new(), Vec::new()), "{mode:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn crew_sichtung_im_selben_kanal_schaltet_aktion_frei() {
+        for (mode, expected) in [
+            (GuardMode::Partner, "timeout_statement"),
+            (GuardMode::Foreign, "foreign_warning"),
+        ] {
+            let recorder = Arc::new(Recorder {
+                banned: vec!["88".into()],
+                ..Recorder::default()
+            });
+            let guard = ImpersonationGuard::new(
+                mode,
+                OWN_BOT_LOGIN.into(),
+                Arc::clone(&recorder) as Arc<dyn ImpersonationPort>,
+            );
+            sight(&guard, "500").await;
+            let outcome = guard
+                .handle(&event("88", "fremder", REAL_MESSAGE), false)
+                .await;
+            assert_eq!(outcome.map(|o| o.action), Some(expected), "{mode:?}");
+            assert_eq!(recorder.counts().1.len(), 1, "{mode:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn crew_sichtung_in_anderem_kanal_zaehlt_nicht() {
+        for mode in [GuardMode::Partner, GuardMode::Foreign] {
+            let recorder = Arc::new(Recorder {
+                banned: vec!["88".into()],
+                ..Recorder::default()
+            });
+            let guard = ImpersonationGuard::new(
+                mode,
+                OWN_BOT_LOGIN.into(),
+                Arc::clone(&recorder) as Arc<dyn ImpersonationPort>,
+            );
+            sight(&guard, "999").await;
+            let outcome = guard
+                .handle(&event("88", "fremder", REAL_MESSAGE), false)
+                .await;
+            assert_eq!(
+                outcome.map(|o| o.action),
+                Some(NO_CREW_SIGHTING),
+                "{mode:?}"
+            );
+            assert_eq!(recorder.counts(), (Vec::new(), Vec::new()), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn crew_sichtung_verfaellt_nach_24_stunden() {
+        let mut sightings = Sightings::default();
+        let start = Instant::now();
+        sightings.record("500", start);
+        assert!(sightings.recent("500", start + Duration::from_secs(23 * 60 * 60)));
+        assert!(!sightings.recent("500", start + CREW_SIGHTING_WINDOW));
+        assert!(!sightings.recent("501", start));
     }
 }
