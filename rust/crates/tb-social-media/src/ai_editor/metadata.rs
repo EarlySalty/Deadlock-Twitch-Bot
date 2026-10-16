@@ -215,7 +215,7 @@ pub async fn save(
         owned_video(pool, owner, id).await?;
         return Err(AiEditorError::Conflict.into());
     }
-    sqlx::query("UPDATE twitch_clips_upload_queue q SET title=v.metadata->'platforms'->q.platform->>'title',description=v.metadata->'platforms'->q.platform->>'description',hashtags=(v.metadata->'platforms'->q.platform->'hashtags')::text FROM social_produced_videos v WHERE v.id=$1 AND v.twitch_user_id=$2 AND q.produced_video_id=v.id AND q.status IN ('waiting_exact_file','autopilot_held','autopilot_discarded') AND q.effect_started_at IS NULL AND q.external_id IS NULL")
+    sqlx::query("UPDATE twitch_clips_upload_queue q SET title=v.metadata->'platforms'->q.platform->>'title',description=v.metadata->'platforms'->q.platform->>'description',hashtags=(v.metadata->'platforms'->q.platform->'hashtags')::text FROM social_produced_videos v WHERE v.id=$1 AND v.twitch_user_id=$2 AND q.produced_video_id=v.id AND v.metadata->'platforms' ? q.platform AND q.status IN ('waiting_exact_file','autopilot_held','autopilot_discarded') AND q.effect_started_at IS NULL AND q.external_id IS NULL")
         .bind(id).bind(owner).execute(&mut *tx).await.map_err(|_| AiEditorError::Storage)?;
     tx.commit().await.map_err(|_| AiEditorError::Storage)?;
     Ok(load(pool, owner, id).await?)
