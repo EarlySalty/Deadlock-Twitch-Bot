@@ -41,6 +41,20 @@ test('plan editor text has an English entry with matching placeholders', () => {
   assert.equal(english('{day} {time} ist doppelt.', { day: 'Montag', time: '08:00' }), 'Montag 08:00 is listed twice.');
 });
 
+test('production queue text next to the plan editor is covered by the shared dictionary', () => {
+  const dictionary = dictionaryFor('en');
+  const panelTree = ts.createSourceFile('ScheduleQueuePanel.tsx', panel, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const keys = descendants(panelTree).filter(ts.isStringLiteral).map(node => node.text)
+    .filter(text => /[äöüß]|^[A-Z][a-z]|\{(?:number|title)\}/.test(text) && !text.includes('/') && text !== 'Server-Fehler');
+  assert.ok(keys.length > 25);
+  for (const key of ['Produktionswarteschlange & Veröffentlichungsmodus', 'Als Nächstes', 'Auftrag entfernen', 'Prüfung nötig']) assert.ok(keys.includes(key), key);
+  for (const key of keys) {
+    assert.ok(Object.hasOwn(dictionary, key), key);
+    assert.equal(translate('de', key), key);
+    assert.deepEqual(placeholders(dictionary[key]), placeholders(key), key);
+  }
+});
+
 test('production queue failure messages are covered by the selected-language dictionary', () => {
   const dictionary = dictionaryFor('en');
   const messages = ['runner.rs', 'recovery.rs'].flatMap(file => {

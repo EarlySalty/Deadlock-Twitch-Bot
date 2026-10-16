@@ -97,6 +97,20 @@ test('plan save keeps the saved part and the unsaved rest after a revision confl
   assert.equal(fixture.policy().review_policy, 'off');
 });
 
+test('plan save reports success when only the refetch after a saved policy fails', async () => {
+  const fixture = createScheduleQueueFixture();
+  const base = await plan.loadPlan(fixture.api);
+  const draft = plan.planDraft(base);
+  draft.review_policy = 'off';
+  const api = { ...fixture.api, load: async () => { throw new TypeError('offline'); } };
+  const outcome = await plan.savePlan(api, undefined, base, draft);
+  assert.equal(outcome.failure, undefined);
+  assert.equal(outcome.partial, false);
+  assert.equal(outcome.state.policy.review_policy, 'off');
+  assert.equal(plan.policyChange(outcome.state, draft), null);
+  assert.equal(fixture.policy().review_policy, 'off');
+});
+
 test('plan validation reports duplicate and empty times without a slot ceiling', () => {
   const fixture = createScheduleQueueFixture();
   const draft = plan.planDraft({ snapshot: fixture.snapshot(), policy: fixture.policy() });

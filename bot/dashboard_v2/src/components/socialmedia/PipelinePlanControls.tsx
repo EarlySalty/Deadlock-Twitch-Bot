@@ -61,7 +61,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
 
   useEffect(() => {
     const controller = new AbortController();
-    void reload(true, controller.signal);
+    void reload(false, controller.signal);
     const timer = window.setInterval(() => { void reload(false, controller.signal); }, 60000);
     return () => { controller.abort(); window.clearInterval(timer); };
   }, [reload, reloadKey]);

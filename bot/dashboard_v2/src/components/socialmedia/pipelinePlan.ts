@@ -291,7 +291,7 @@ export async function savePlan(api: ScheduleQueueApi, owner: string | undefined,
     if (policy) {
       state = { ...state, policy: await api.savePolicy(policy, owner) };
       saved = true;
-      state = { ...state, snapshot: await api.load(owner) };
+      state = await api.load(owner).then(snapshot => ({ ...state, snapshot }), () => state);
     }
     return { state, partial: false };
   } catch (failure) {
