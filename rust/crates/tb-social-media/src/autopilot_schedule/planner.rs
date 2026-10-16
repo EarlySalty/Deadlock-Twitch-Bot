@@ -3,8 +3,8 @@ use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
 
 use super::{
-    hold, production_horizon, reservations_on, reserve_on, review_count_on, Allocation, Allocator,
-    ProductionHold, ScheduleError, Subject,
+    hold, production_horizon, reservations_on, reserve_on, review_count_on, review_required_on,
+    Allocation, Allocator, ProductionHold, ScheduleError, Subject,
 };
 use crate::autopilot_settings::{self, AutopilotSettings, ClipSort};
 
@@ -124,8 +124,10 @@ pub async fn plan_owner(
         next_slot: allocator.plan(now)?.map(|plan| plan.reference),
         ..Default::default()
     };
+    let review_required = review_required_on(&mut tx, owner).await?;
     report.production_hold = hold(
         &settings,
+        review_required,
         allocator.has_schedule(),
         reviews,
         report.next_slot,

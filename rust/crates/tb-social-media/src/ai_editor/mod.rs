@@ -72,6 +72,8 @@ pub enum AiEditorError {
     Publishing(#[from] crate::produced_video::ProducedVideoError),
     #[error("Der Auftrag wurde nicht gefunden.")]
     NotFound,
+    #[error("Für diesen Clip läuft auf dieser Plattform schon eine Veröffentlichung.")]
+    PipelineBusy,
 }
 
 impl From<store::AiStoreError> for AiEditorError {
@@ -83,6 +85,7 @@ impl From<store::AiStoreError> for AiEditorError {
             }
             store::AiStoreError::Conflict => Self::Conflict,
             store::AiStoreError::AttemptsExhausted => Self::Attempts,
+            store::AiStoreError::PipelineBusy => Self::PipelineBusy,
             _ => Self::Storage,
         }
     }

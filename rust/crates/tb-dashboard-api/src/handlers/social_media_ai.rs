@@ -119,6 +119,9 @@ impl IntoResponse for ApiError {
 
 impl From<AiEditorError> for ApiError {
     fn from(error: AiEditorError) -> Self {
+        if matches!(error, AiEditorError::PipelineBusy) {
+            return response_error(StatusCode::CONFLICT, "pipeline_busy");
+        }
         let status = match error {
             AiEditorError::Input => StatusCode::BAD_REQUEST,
             AiEditorError::Publishing(ref error) => match error {

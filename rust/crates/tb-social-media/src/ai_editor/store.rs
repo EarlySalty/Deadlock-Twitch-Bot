@@ -25,6 +25,8 @@ pub enum AiStoreError {
     Lease(#[from] crate::production_lease::ProductionLeaseError),
     #[error("Gespeicherte Auftragsdaten sind ungültig.")]
     InvalidStoredData,
+    #[error("Für diesen Clip läuft auf dieser Plattform schon eine Veröffentlichung.")]
+    PipelineBusy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

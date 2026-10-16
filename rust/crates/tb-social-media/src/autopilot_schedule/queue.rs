@@ -141,14 +141,7 @@ async fn clear_stale_slots_on(
     owner: &str,
     id: i64,
 ) -> Result<(), ScheduleError> {
-    sqlx::query(
-        "UPDATE social_produced_videos SET scheduled_at = NULL WHERE job_id = $1
-        AND twitch_user_id = $2 AND status IN ('rendering', 'failed', 'rejected', 'expired')",
-    )
-    .bind(id)
-    .bind(owner)
-    .execute(connection)
-    .await?;
+    crate::production_jobs::release_unfinished_slots_on(connection, owner, id).await?;
     Ok(())
 }
 

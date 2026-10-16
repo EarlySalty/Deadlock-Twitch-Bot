@@ -756,8 +756,19 @@ pub(crate) fn production_horizon(
         .max(chrono::Duration::minutes(1))
 }
 
+pub(crate) async fn review_required_on(
+    connection: &mut PgConnection,
+    owner: &str,
+) -> Result<bool, sqlx::Error> {
+    Ok(matches!(
+        crate::autopilot_publish::review_mode_on(connection, owner).await?,
+        crate::autopilot_publish::ReviewMode::Review
+    ))
+}
+
 pub(crate) fn hold(
     settings: &AutopilotSettings,
+    review_required: bool,
     has_schedule: bool,
     reviews: i64,
     next: Option<DateTime<Utc>>,
@@ -769,7 +780,7 @@ pub(crate) fn hold(
     if settings.paused {
         return Some(ProductionHold::Paused);
     }
-    if settings.publish_mode == autopilot_settings::PublishMode::Review && reviews >= REVIEW_LIMIT {
+    if review_required && reviews >= REVIEW_LIMIT {
         return Some(ProductionHold::ReviewBacklog);
     }
     if !has_schedule {
@@ -849,9 +860,11 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
     let next_slot = allocator.plan(now)?.map(|plan| plan.reference);
     let next_slots = allocator.next_slots(now)?;
     let review_count = review_count_on(&mut tx, owner).await?;
+    let review_required = review_required_on(&mut tx, owner).await?;
     let jobs = queue_jobs_on(&mut tx, owner).await?;
     let mut production_hold = hold(
         &settings,
+        review_required,
         allocator.has_schedule(),
         review_count,
         next_slot,

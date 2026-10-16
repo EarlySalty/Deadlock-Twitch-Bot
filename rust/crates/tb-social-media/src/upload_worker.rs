@@ -18,8 +18,9 @@ use sqlx::PgPool;
 use crate::approval::is_clip_approved_for;
 use crate::clip_prep_worker::{download_atomic, register_local_file, YtDlpDownloader};
 use crate::clip_queue::{
-    get_upload_queue, mark_upload_uncertain, reschedule_upload, update_upload_status,
-    update_upload_status_with_visibility, wait_for_connection, UploadQueueItem, VertagungsKonto,
+    claim_upload_effect, get_upload_queue, mark_upload_uncertain, reschedule_upload,
+    update_upload_status, update_upload_status_with_visibility, wait_for_connection,
+    UploadQueueItem, VertagungsKonto,
 };
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
 use crate::render::render_clip_vertical;
@@ -247,6 +248,9 @@ impl UploadTask {
         }
         match self.do_upload(&item).await {
             Ok(converted) => {
+                if item.platform != "tiktok" && !self.claim_effect(&item).await {
+                    return false;
+                }
                 let uploaded = if item.platform == "tiktok" {
                     uploader
                         .upload_video_checkpointed(
@@ -659,25 +663,45 @@ impl UploadTask {
         }
     }
 
-    /// Trennt "kaputt" von "spaeter nochmal". Frueher landete jeder Fehler auf
-    /// `failed`, und `failed` holt die Warteschlange nie wieder ab: ein einziges
-    /// 502 oder ein volles Tageskontingent hat den Clip endgueltig verbrannt.
-    async fn mark_uncertain(&self, item: &UploadQueueItem, text: &str, context: &'static str) {
-        for attempt in 0..6u32 {
-            match mark_upload_uncertain(&self.pool, item.id, text).await {
-                Ok(()) => return,
-                Err(db_error) => {
-                    tracing::warn!(
-                        error = %db_error,
-                        queue_id = item.id,
-                        platform = %item.platform,
-                        context,
-                        attempt,
-                        "Unbestätigter Upload konnte nicht vermerkt werden"
-                    );
-                    tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt))).await;
-                }
+    async fn claim_effect(&self, item: &UploadQueueItem) -> bool {
+        match claim_upload_effect(&self.pool, item.id).await {
+            Ok(true) => true,
+            Ok(false) => {
+                tracing::warn!(
+                    queue_id = item.id,
+                    platform = %item.platform,
+                    "Upload übersprungen, der Auftrag ist nicht mehr exklusiv reserviert"
+                );
+                false
             }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    queue_id = item.id,
+                    platform = %item.platform,
+                    "Upload übersprungen, die Reservierung ließ sich nicht speichern"
+                );
+                false
+            }
+        }
+    }
+
+    async fn mark_uncertain(&self, item: &UploadQueueItem, text: &str, context: &'static str) {
+        match mark_upload_uncertain(&self.pool, item.id, text).await {
+            Ok(true) => {}
+            Ok(false) => tracing::warn!(
+                queue_id = item.id,
+                platform = %item.platform,
+                context,
+                "Unbestätigter Upload hat keinen offenen Auftrag mehr verändert"
+            ),
+            Err(error) => tracing::warn!(
+                %error,
+                queue_id = item.id,
+                platform = %item.platform,
+                context,
+                "Unbestätigter Upload konnte nicht vermerkt werden, die Rückholung markiert ihn als unklar"
+            ),
         }
     }
 
@@ -1494,7 +1518,7 @@ mod tests {
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, twitch_user_id TEXT, enabled INTEGER DEFAULT 1, access_token_enc BYTEA, refresh_token_enc BYTEA, client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, platform_user_id TEXT, platform_username TEXT, enc_version INTEGER, authorized_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, custom_title TEXT, layout_override_json JSONB, streamer_login TEXT NOT NULL, twitch_user_id TEXT DEFAULT '42', local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, tiktok_publish_id TEXT, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ, produced_video_id BIGINT)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, tiktok_publish_id TEXT, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ, produced_video_id BIGINT, outcome_reason TEXT, effect_started_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -1531,7 +1555,7 @@ mod tests {
         for ddl in [
             "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, custom_title TEXT, layout_override_json JSONB, streamer_login TEXT NOT NULL, twitch_user_id TEXT DEFAULT '42', local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, tiktok_publish_id TEXT, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ, produced_video_id BIGINT)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, tiktok_publish_id TEXT, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ, produced_video_id BIGINT, outcome_reason TEXT, effect_started_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }

@@ -166,6 +166,8 @@ export const FEHLER_TEXTE: Record<string, string> = {
   invalid_payload: 'Diese Eingabe konnte das Backend nicht verarbeiten.',
   twitch_api_unavailable: 'Twitch antwortet gerade nicht. Bitte später erneut versuchen.',
   queue_failed: 'Der Clip konnte nicht eingereiht werden.',
+  pipeline_unified: 'Dieser Kanal veröffentlicht nur noch über den Autopiloten.',
+  pipeline_busy: 'Für diesen Clip läuft auf dieser Plattform schon eine Veröffentlichung.',
   report_generation_failed: 'Der Report konnte nicht erzeugt werden.',
   upload_too_large: 'Die Datei ist zu groß, höchstens 200 MB.',
   upload_wrong_format: 'Falsches Dateiformat, bitte eine MP4 wählen.',

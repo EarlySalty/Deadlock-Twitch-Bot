@@ -574,7 +574,13 @@ async fn main() {
         let result = tb_social_media::pipeline_migration::run_command(&pool, &command).await;
         pool.close().await;
         match result {
-            Ok(report) => println!("{report:#}"),
+            Ok(report) => {
+                let lines = report["channel_lines"].as_array().into_iter().flatten();
+                for line in lines.filter_map(serde_json::Value::as_str) {
+                    println!("{line}");
+                }
+                println!("{report:#}");
+            }
             Err(error) => {
                 eprintln!("Social-Media-Umstellung nicht abgeschlossen: {error}");
                 std::process::exit(1);

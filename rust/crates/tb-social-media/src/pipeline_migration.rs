@@ -7,8 +7,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool, Row};
 
 use crate::autopilot_settings::{
-    self, AutopilotSettings, MigrationDisposition, PipelineMigrationMapping, PipelinePolicy,
-    PolicyScope, PublishMode, ReviewPolicy, ScheduleSlot, SettingsError,
+    self, AutopilotSettings, MigrationDisposition, PipelineMigrationMapping, PipelineMode,
+    PipelinePolicy, PolicyScope, PublishMode, ReviewPolicy, ScheduleSlot, SettingsError,
 };
 use crate::posting_plan::PLATFORMS;
 
@@ -107,12 +107,14 @@ pub struct LegacyRow {
 #[derive(Debug, Clone, Default)]
 pub struct CanonicalState {
     pub configured: bool,
+    pub policy_saved: bool,
     pub settings: Option<(AutopilotSettings, PipelinePolicy)>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Inventory {
     pub streamers: BTreeSet<String>,
+    pub logins: BTreeMap<String, String>,
     pub cutover: BTreeMap<String, String>,
     pub canonical: BTreeMap<String, CanonicalState>,
     pub pool_clips: BTreeSet<i64>,
@@ -140,6 +142,8 @@ pub struct Plan {
     pub reconciliation: BTreeMap<String, Value>,
     pub legacy_awaiting: usize,
     pub legacy_approved: usize,
+    pub logins: BTreeMap<String, String>,
+    pub open_legacy: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -177,6 +181,32 @@ pub struct MigrationReport {
     pub cutover_changed: usize,
     pub orphans: BTreeMap<String, usize>,
     pub conflicts: Vec<Conflict>,
+    pub channel_policies: BTreeMap<String, Value>,
+    pub channels: Vec<ChannelDecision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelDecision {
+    pub twitch_user_id: String,
+    pub login: String,
+    pub pipeline_mode: String,
+    pub review_policy: String,
+    pub source: String,
+    pub open_legacy_rows: usize,
+}
+
+impl ChannelDecision {
+    pub fn line(&self) -> String {
+        format!(
+            "owner={} login={} mode={} review={} source={} open_legacy_rows={}",
+            self.twitch_user_id,
+            self.login,
+            self.pipeline_mode,
+            self.review_policy,
+            self.source,
+            self.open_legacy_rows
+        )
+    }
 }
 
 type MapKey = (String, String, String);
@@ -229,7 +259,15 @@ pub async fn run_command(pool: &PgPool, command: &CutoverCommand) -> Result<Valu
         return Err(MigrationError::BarrierMissing);
     }
     Ok(match command {
-        CutoverCommand::DryRun => json!({ "migration": dry_run(pool).await? }),
+        CutoverCommand::DryRun => {
+            let migration = dry_run(pool).await?;
+            let lines: Vec<String> = migration
+                .channels
+                .iter()
+                .map(ChannelDecision::line)
+                .collect();
+            json!({ "channel_lines": lines, "migration": migration })
+        }
         CutoverCommand::Apply => {
             let migration = apply(pool).await?;
             let cutover = activate_ready(pool).await?;
@@ -252,7 +290,8 @@ pub async fn resolve_uncertain(
     let mut tx = pool.begin().await?;
     let platform: Option<(i64, String)> = sqlx::query_as(
         "UPDATE twitch_clips_upload_queue SET status = CASE WHEN $2 THEN 'completed' ELSE 'failed' END,
-             outcome_reason = 'operator_resolved', completed_at = NOW()
+             outcome_reason = 'operator_resolved', completed_at = NOW(),
+             last_error = CASE WHEN $2 THEN NULL ELSE last_error END
          WHERE id = $1 AND status = 'uncertain' AND produced_video_id IS NULL
          RETURNING clip_id, platform",
     )
@@ -269,7 +308,10 @@ pub async fn resolve_uncertain(
             "UPDATE twitch_clips_social_media SET
                  uploaded_tiktok = uploaded_tiktok OR $2 = 'tiktok',
                  uploaded_youtube = uploaded_youtube OR $2 = 'youtube',
-                 uploaded_instagram = uploaded_instagram OR $2 = 'instagram'
+                 uploaded_instagram = uploaded_instagram OR $2 = 'instagram',
+                 tiktok_uploaded_at = CASE WHEN $2 = 'tiktok' THEN NOW() ELSE tiktok_uploaded_at END,
+                 youtube_uploaded_at = CASE WHEN $2 = 'youtube' THEN NOW() ELSE youtube_uploaded_at END,
+                 instagram_uploaded_at = CASE WHEN $2 = 'instagram' THEN NOW() ELSE instagram_uploaded_at END
              WHERE id = $1",
         )
         .bind(clip_id)
@@ -278,6 +320,9 @@ pub async fn resolve_uncertain(
         .await?;
     }
     tx.commit().await?;
+    if published {
+        crate::retention::refresh_clip_publication_status(pool, clip_id).await;
+    }
     Ok(true)
 }
 
@@ -629,6 +674,9 @@ fn report(plan: &Plan, stored: &BTreeMap<MapKey, StoredRow>, applied: bool) -> M
                 .or_default(),
             mapping.disposition,
         );
+        if let Some(review) = review_decision(mapping) {
+            channel_policy(&mut report, &mapping.twitch_user_id)["review_policy"] = review;
+        }
         if let Some(reason) = &mapping.unresolved_reason {
             report.conflicts.push(Conflict {
                 twitch_user_id: mapping.twitch_user_id.clone(),
@@ -654,12 +702,63 @@ fn report(plan: &Plan, stored: &BTreeMap<MapKey, StoredRow>, applied: bool) -> M
         }
         planned.insert(key);
     }
+    for (owner, reconciliation) in &plan.reconciliation {
+        let proposed = &reconciliation["proposed_policy"];
+        channel_policy(&mut report, owner)["pipeline_mode"] = json!({
+            "applied": proposed["policy"]["pipeline_mode"],
+            "source": proposed["policy_source"],
+        });
+        report
+            .channels
+            .push(channel_decision(plan, owner, proposed));
+    }
     let owners: BTreeSet<&String> = plan.reconciliation.keys().collect();
     report.stale = stored
         .keys()
         .filter(|key| owners.contains(&key.0) && !planned.contains(*key))
         .count();
     report
+}
+
+fn channel_decision(plan: &Plan, owner: &str, proposed: &Value) -> ChannelDecision {
+    let field = |value: &Value| value.as_str().unwrap_or("unknown").to_string();
+    ChannelDecision {
+        twitch_user_id: owner.to_string(),
+        login: plan
+            .logins
+            .get(owner)
+            .cloned()
+            .unwrap_or_else(|| "-".to_string()),
+        pipeline_mode: field(&proposed["policy"]["pipeline_mode"]),
+        review_policy: field(&proposed["policy"]["review_policy"]),
+        source: match text(proposed, "policy_source") {
+            Some("planen") => "explicit-new",
+            Some("legacy") => "legacy-mapped",
+            _ => "unknown",
+        }
+        .to_string(),
+        open_legacy_rows: plan.open_legacy.get(owner).copied().unwrap_or(0),
+    }
+}
+
+fn channel_policy<'r>(report: &'r mut MigrationReport, owner: &str) -> &'r mut Value {
+    report
+        .channel_policies
+        .entry(owner.to_string())
+        .or_insert_with(|| json!({}))
+}
+
+fn review_decision(mapping: &PipelineMigrationMapping) -> Option<Value> {
+    let subject = mapping.canonical_subject.as_ref()?;
+    if mapping.legacy_table != STREAMER_SETTINGS || text(subject, "kind") != Some("channel_review")
+    {
+        return None;
+    }
+    Some(json!({
+        "legacy": subject.get("legacy_review_policy"),
+        "applied": subject.get("review_policy"),
+        "source": subject.get("review_source"),
+    }))
 }
 
 fn count(counts: &mut DispositionCounts, disposition: MigrationDisposition) {
@@ -774,6 +873,14 @@ pub async fn load_inventory(connection: &mut PgConnection) -> Result<Inventory, 
     let mut inventory = Inventory {
         streamers: sqlx::query_scalar(
             "SELECT twitch_user_id FROM twitch_streamers WHERE twitch_user_id IS NOT NULL",
+        )
+        .fetch_all(&mut *connection)
+        .await?
+        .into_iter()
+        .collect(),
+        logins: sqlx::query_as(
+            "SELECT twitch_user_id, twitch_login FROM twitch_streamers
+             WHERE twitch_user_id IS NOT NULL AND twitch_login IS NOT NULL",
         )
         .fetch_all(&mut *connection)
         .await?
@@ -901,18 +1008,20 @@ async fn load_canonical(
     connection: &mut PgConnection,
     owner: &str,
 ) -> Result<CanonicalState, MigrationError> {
-    let configured: Option<bool> = sqlx::query_scalar(
+    let flags: Option<(bool, bool)> = sqlx::query_as(
         "SELECT COALESCE(enabled OR pipeline_mode IS NOT NULL OR schedule_slots <> '[]'::jsonb
-            OR target_platforms <> '[]'::jsonb, FALSE)
+            OR target_platforms <> '[]'::jsonb, FALSE), policy_revision > 0
          FROM social_media_autopilot_settings WHERE twitch_user_id = $1",
     )
     .bind(owner)
     .fetch_optional(&mut *connection)
     .await?;
+    let (configured, policy_saved) = flags.unwrap_or((false, false));
     let settings = readable(autopilot_settings::load_on(connection, owner).await)?;
     let policy = readable(autopilot_settings::load_policy_on(connection, owner).await)?;
     Ok(CanonicalState {
-        configured: configured.unwrap_or(false),
+        configured,
+        policy_saved,
         settings: settings.zip(policy),
     })
 }
@@ -927,7 +1036,10 @@ fn readable<T>(result: Result<T, SettingsError>) -> Result<Option<T>, MigrationE
 
 pub fn plan(inventory: &Inventory) -> Plan {
     let context = Context::new(inventory);
-    let mut plan = Plan::default();
+    let mut plan = Plan {
+        logins: inventory.logins.clone(),
+        ..Plan::default()
+    };
     let tables: [(&str, &[LegacyRow]); 8] = [
         (CLIPS, &inventory.clips),
         (APPROVALS, &inventory.approvals),
@@ -962,6 +1074,11 @@ pub fn plan(inventory: &Inventory) -> Plan {
             ) {
                 plan.skipped_unified.insert(owner.clone());
                 continue;
+            }
+            if table == QUEUE
+                && text(&row.data, "status").is_none_or(|status| !FINAL_QUEUE.contains(&status))
+            {
+                *plan.open_legacy.entry(owner.clone()).or_default() += 1;
             }
             let occurrence = {
                 let seen = seen.entry((owner.clone(), row.key.clone())).or_default();
@@ -1099,6 +1216,11 @@ impl<'a> Context<'a> {
 
     fn canonical(&self, owner: &str) -> Option<&CanonicalState> {
         self.inventory.canonical.get(owner)
+    }
+
+    fn policy_saved(&self, owner: &str) -> bool {
+        self.canonical(owner)
+            .is_some_and(|state| state.configured && state.policy_saved && state.settings.is_some())
     }
 
     fn live_queue(&self, clip: i64) -> Vec<&'a LegacyRow> {
@@ -1288,34 +1410,38 @@ impl<'a> Context<'a> {
 
     fn map_streamer_settings(&self, owner: &str, row: &LegacyRow) -> Outcome {
         let data = &row.data;
-        let review = match text(data, "approval_mode") {
+        let legacy = match text(data, "approval_mode") {
             Some("manual") => ReviewPolicy::Required,
             Some("veto_window") => ReviewPolicy::VetoUntilDeadline,
             Some("full_auto") => ReviewPolicy::Off,
             _ => return Outcome::unresolved("unknown_approval_mode", None),
         };
+        let canonical = self.canonical(owner).filter(|state| state.configured);
+        let saved = canonical
+            .filter(|state| state.policy_saved)
+            .and_then(|state| state.settings.as_ref())
+            .map(|(_, policy)| policy.review_policy);
         let subject = json!({
             "kind": "channel_review",
-            "review_policy": review,
+            "review_policy": saved.unwrap_or(legacy),
+            "legacy_review_policy": legacy,
+            "review_source": if saved.is_some() { "planen" } else { "legacy" },
             "timezone": data.get("timezone"),
             "subtitles_enabled": data.get("subtitles_enabled"),
             "release_backlog": false,
         });
-        match self.canonical(owner) {
-            Some(state) if state.configured => match &state.settings {
+        match canonical {
+            Some(state) => match &state.settings {
                 None => Outcome::unresolved("canonical_settings_unreadable", Some(subject)),
-                Some((settings, policy)) => {
-                    let timezone = text(data, "timezone");
-                    if policy.review_policy != review
-                        || timezone.is_some_and(|zone| zone != settings.timezone)
-                    {
-                        Outcome::unresolved("conflicts_with_canonical_review", Some(subject))
+                Some((settings, _)) => {
+                    if text(data, "timezone").is_some_and(|zone| zone != settings.timezone) {
+                        Outcome::unresolved("conflicts_with_canonical_timezone", Some(subject))
                     } else {
                         Outcome::mapped(subject)
                     }
                 }
             },
-            _ => Outcome::mapped(subject),
+            None => Outcome::mapped(subject),
         }
     }
 
@@ -1456,6 +1582,11 @@ impl<'a> Context<'a> {
         let mut policy = canonical
             .map(|(_, policy)| policy.clone())
             .unwrap_or_default();
+        let saved = self.policy_saved(owner);
+        if !saved {
+            policy.pipeline_mode = PipelineMode::Upload;
+        }
+        let source = if saved { "planen" } else { "legacy" };
         let mut timezone = canonical.map(|(settings, _)| settings.timezone.clone());
         let mut targets: BTreeSet<String> = canonical
             .map(|(settings, _)| settings.target_platforms.iter().cloned().collect())
@@ -1468,6 +1599,14 @@ impl<'a> Context<'a> {
             let Some(subject) = &mapping.canonical_subject else {
                 continue;
             };
+            if mapping.unresolved_reason.as_deref() == Some("conflicts_with_canonical_timezone") {
+                if let Some(review) = subject
+                    .get("review_policy")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok())
+                {
+                    policy.review_policy = review;
+                }
+            }
             if mapping.disposition != MigrationDisposition::Mapped {
                 continue;
             }
@@ -1512,6 +1651,7 @@ impl<'a> Context<'a> {
         if !legacy_schedule {
             return json!({
                 "policy": policy,
+                "policy_source": source,
                 "timezone": timezone,
                 "target_platforms": targets,
                 "schedule_slots": canonical
@@ -1531,6 +1671,7 @@ impl<'a> Context<'a> {
         };
         json!({
             "policy": policy,
+            "policy_source": source,
             "timezone": timezone,
             "target_platforms": targets,
             "schedule_slots": shared_slots,

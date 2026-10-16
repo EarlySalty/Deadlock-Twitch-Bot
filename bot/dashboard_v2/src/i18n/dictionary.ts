@@ -703,6 +703,8 @@ const EN: Record<string, string> = {
   'Twitch antwortet gerade nicht. Bitte später erneut versuchen.':
     'Twitch is not responding right now. Please try again later.',
   'Der Clip konnte nicht eingereiht werden.': 'The clip could not be queued.',
+  'Dieser Kanal veröffentlicht nur noch über den Autopiloten.': 'This channel now publishes only through the autopilot.',
+  'Für diesen Clip läuft auf dieser Plattform schon eine Veröffentlichung.': 'A publication for this clip on this platform is already in progress.',
   'Der Report konnte nicht erzeugt werden.': 'The report could not be generated.',
   'Die Datei ist zu groß, höchstens 200 MB.': 'The file is too large, 200 MB at most.',
   'Falsches Dateiformat, bitte eine MP4 wählen.': 'Wrong file format, please pick an MP4.',

@@ -112,3 +112,17 @@ Global AI switch `external_llm_consent` needs an admin UI (set to true in prod o
 ## Finish run (2026-10-16 evening)
 - 20:30 U17b worker died; fresh Opus 5.5 (medium) worker resumed in /home/nathanael/.worktrees/tb-social-u17b from the 19 dirty files. Scope includes the user decision: every legacy channel cuts over as "Nur hochladen" keeping its legacy approval setting (full_auto -> review off, approval -> required, veto -> veto until deadline); explicit new Planen choices win; bd04cb = upload-only + review off.
 - Next: U18 six-cell harness (PLAN 7), deploy origin/main, cutover --dry-run table to user, --apply, restart, live check of 58 legacy rows, real upload matrix only after explicit user go.
+
+### From U17b (180c02ddf, 2026-10-16)
+- Double publish: stale reclaim sends rows with `effect_started_at` to `uncertain` (`publish_unconfirmed`) instead of `pending`; YouTube/Instagram claim the effect atomically before the platform call; requeue of a claimed row returns `pipeline_busy`; failed/other writes never overwrite `uncertain`/`completed`.
+- Legacy `uncertain` rows: shown in the dashboard queue with a reason and alerted once per owner per day (`legacy_uncertain:<day>`, kind publication_failed).
+- `--resolve <id> --published` sets `*_uploaded_at` and refreshes the clip's published state.
+- `hold()` review limit and production backlog limit both use `EFFECTIVE_REVIEW`; veto-until-deadline owners do not count against the review limit (unchanged intent, now explicit).
+- Held jobs: slots are released (reservation trigger plus `release_unfinished_slots_on` on review finish and unsuitable flag). The pool clip intentionally stays bound to the held job until Process or Skip and is visible in the review stage.
+- Revision restore with an open legacy row: parent stays parked, API answers 409 `pipeline_busy`. Migration `20261016200000_social_pipeline_barrier_clip_lock.sql`: barrier always takes a per-clip advisory lock (`social_clip_publication:<clip>`) and raises a WARNING when the owner is unresolvable instead of skipping silently.
+- Texts: `pipeline_unified`, `pipeline_busy` and the new reasons in DE (labels.ts) and EN (dictionary.ts, en/social.ts).
+- Cutover: every legacy channel becomes `upload`; legacy approval maps full_auto -> off, manual -> required, veto_window -> veto_until_deadline; a saved Planen choice (policy_revision > 0) wins. `--dry-run` prints one line per channel before the JSON report:
+  `owner=<twitch_user_id> login=<login|-> mode=<pipeline_mode> review=<review_policy> source=<legacy-mapped|explicit-new|unknown> open_legacy_rows=<n>`
+- Integrator before `--apply`: bd04cb's dry-run line must read `mode=upload review=off source=legacy-mapped`. If it shows `source=explicit-new`, the channel has a saved Planen choice and the user must decide (not checkable without prod DB access).
+- Test harness defect (also on origin/main): `upload_worker::tests` race in parallel because `social_media_video_production` is a database-wide advisory lock shared across test schemas; all 16 pass with `--test-threads=1`.
+- Still U18: Instagram 5xx retry, the 63 s retry hold, `--apply` plan rebuild cost per owner, misplaced doc comments in upload_worker.rs/clip_queue.rs; owners with no targets become unified with autopilot off.
