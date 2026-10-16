@@ -95,8 +95,9 @@ impl AutopilotWorker {
         }
         let policy = self.frozen_policy(job, prepared).await?;
         Ok(match policy.pipeline_mode {
-            PipelineMode::Upload => StaticRoute::Upload(Box::new(policy)),
-            PipelineMode::UploadText => StaticRoute::Unavailable("upload_text_mode_unavailable"),
+            PipelineMode::Upload | PipelineMode::UploadText => {
+                StaticRoute::Upload(Box::new(policy))
+            }
             PipelineMode::AiEdit => StaticRoute::Unavailable("ai_edit_mode_mismatch"),
         })
     }
@@ -202,6 +203,11 @@ impl AutopilotWorker {
         let media = self
             .verified_artifact(&checkpoint, &checkpoint.output_path, Some(&output_sha256))
             .await?;
+        if policy.pipeline_mode == PipelineMode::UploadText
+            && !self.resolve_text(lease, job, policy, &video).await?
+        {
+            return Ok(());
+        }
         let artifact = Artifact {
             checkpoint: &checkpoint,
             media,

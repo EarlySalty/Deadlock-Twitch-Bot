@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 
+mod text_mode;
 mod upload_mode;
 
 use crate::production_jobs::autopilot_schedule::{

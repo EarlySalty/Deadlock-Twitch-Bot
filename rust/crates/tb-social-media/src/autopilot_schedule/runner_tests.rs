@@ -1181,11 +1181,89 @@ async fn autopilot_runner_upload_mode_reports_platform_tasks_instead_of_editing(
     cleanup(pool).await;
 }
 
+fn text_worker(pool: &PgPool, root: &Path) -> AutopilotWorker {
+    let mut editor: tb_llm::social_editor::EditorConfig =
+        toml::from_str::<tb_llm::social_editor::SocialAiSection>(
+            tb_llm::social_editor::fixture::SOCIAL_AI_SECTION,
+        )
+        .expect("social_ai fixture")
+        .into_editor_config()
+        .expect("trusted configuration");
+    editor.runtime["source_root"] = json!("clips");
+    editor.runtime["output_root"] = json!("clips");
+    editor.runtime["work_root"] = json!("clips/.ai-editor-work");
+    let mut config = configuration(root);
+    config.editor = Some(
+        crate::ai_editor::EditorRuntime::from_configuration(root, editor)
+            .expect("bounded editor runtime"),
+    );
+    AutopilotWorker::new(
+        pool.clone(),
+        config,
+        Arc::new(NoDownload),
+        VideoProcessor::default(),
+    )
+    .expect("concrete runner configuration")
+}
+
+async fn text_consent(pool: &PgPool, person: bool, global: bool) {
+    sqlx::raw_sql(
+        "CREATE TABLE public.social_media_settings (key TEXT PRIMARY KEY, value JSONB);
+        CREATE TABLE public.social_ai_user_consent (twitch_user_id TEXT PRIMARY KEY,
+            external_ai_consent BOOLEAN NOT NULL DEFAULT FALSE, updated_by TEXT NOT NULL)",
+    )
+    .execute(pool)
+    .await
+    .expect("consent tables");
+    sqlx::query("INSERT INTO public.social_ai_user_consent VALUES ('42', $1, 'test')")
+        .bind(person)
+        .execute(pool)
+        .await
+        .expect("person consent");
+    sqlx::query("INSERT INTO public.social_media_settings VALUES ('external_llm_consent', to_jsonb($1::boolean))")
+        .bind(global)
+        .execute(pool)
+        .await
+        .expect("global consent");
+}
+
+async fn llm_usage_rows(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM llm_usage")
+        .fetch_one(pool)
+        .await
+        .expect("usage ledger")
+}
+
+async fn held_text_job(pool: &PgPool, job_id: i64, reason: &str) -> production_jobs::ProductionJob {
+    let held = production_jobs::get(pool, "42", job_id)
+        .await
+        .expect("held job")
+        .expect("owned job");
+    assert_eq!(held.status, "review");
+    assert_eq!(held.review_reasons, json!([reason]));
+    assert!(held
+        .last_error
+        .as_deref()
+        .is_some_and(|message| !message.is_empty()));
+    assert!(held.policy_snapshot.is_none());
+    held
+}
+
+async fn only_video(pool: &PgPool) -> produced_video::ProducedVideo {
+    let videos = produced_video::list(pool, "42", 50)
+        .await
+        .expect("upload version");
+    assert_eq!(videos.len(), 1);
+    videos.into_iter().next().expect("one version")
+}
+
 #[tokio::test]
-async fn autopilot_runner_upload_text_mode_is_held_without_fallback() {
+async fn autopilot_runner_text_mode_consent_hold_and_restart_reuse_the_upload_artifact() {
     use crate::autopilot_settings::{PipelineMode, ReviewPolicy};
+    use std::os::unix::fs::MetadataExt;
     let pool = pool().await;
-    let (root, _, _, clip_id) = real_static_fixture(&pool).await;
+    let (root, _, source, clip_id) = real_static_fixture(&pool).await;
+    let original = tokio::fs::read(&source).await.expect("original bytes");
     let slot = upload_policy_fixture(
         &pool,
         ReviewPolicy::Off,
@@ -1193,19 +1271,91 @@ async fn autopilot_runner_upload_text_mode_is_held_without_fallback() {
         &["tiktok"],
     )
     .await;
+    text_consent(&pool, true, false).await;
     let job_id = upload_job(&pool, clip_id, slot).await;
-    let runner = worker(&pool, root.path(), VideoProcessor::default());
-    assert!(runner.run_once().await.expect("held dispatch"));
-    let held = production_jobs::get(&pool, "42", job_id)
+    let runner = text_worker(&pool, root.path());
+    assert!(runner.run_once().await.expect("consent hold"));
+    held_text_job(&pool, job_id, "external_ai_consent_required").await;
+    let held = only_video(&pool).await;
+    assert_eq!(held.status, "rendering");
+    assert!(held.metadata.get("ai_text").is_none());
+    assert_eq!(held.metadata["pipeline_mode"], "upload_text");
+    let output = held.metadata["upload"]["output_path"]
+        .as_str()
+        .expect("checkpointed artifact path")
+        .to_owned();
+    assert!(output.ends_with(&format!("production-{job_id}/upload-1.mp4")));
+    assert_eq!(tokio::fs::read(&output).await.expect("artifact"), original);
+    let inode = std::fs::metadata(&output).expect("artifact").ino();
+    assert_eq!(llm_usage_rows(&pool).await, 0);
+    super::resolve_review(&pool, "42", job_id, super::ReviewDecision::Process, None)
         .await
-        .expect("held job")
+        .expect("process held job");
+    assert!(runner.run_once().await.expect("still without consent"));
+    held_text_job(&pool, job_id, "external_ai_consent_required").await;
+    assert_eq!(only_video(&pool).await.id, held.id);
+    assert_eq!(std::fs::metadata(&output).expect("artifact").ino(), inode);
+    let copy = json!({"tiktok":{"title":"KI-Titel","description":"KI-Beschreibung","hashtags":["deadlock"]}});
+    sqlx::query("UPDATE social_produced_videos SET metadata = jsonb_set(metadata, '{platforms}', $2) || jsonb_build_object('ai_text', jsonb_build_object('stage', 'copywriting')) WHERE id=$1")
+        .bind(held.id)
+        .bind(&copy)
+        .execute(&pool)
+        .await
+        .expect("text saved before an interrupted completion");
+    super::resolve_review(&pool, "42", job_id, super::ReviewDecision::Process, None)
+        .await
+        .expect("process held job");
+    assert!(runner.run_once().await.expect("restart with saved text"));
+    let done = production_jobs::get(&pool, "42", job_id)
+        .await
+        .expect("completed job")
         .expect("owned job");
-    assert_eq!(held.status, "review");
-    assert_eq!(held.review_reasons, json!(["upload_text_mode_unavailable"]));
-    assert!(produced_video::list(&pool, "42", 50)
+    assert_eq!(done.status, "completed");
+    assert_eq!(
+        done.policy_snapshot.map(|policy| policy.pipeline_mode),
+        Some(PipelineMode::UploadText)
+    );
+    let video = only_video(&pool).await;
+    assert_eq!(video.id, held.id);
+    assert_eq!(video.status, "review");
+    assert!(!video.needs_review);
+    assert_eq!(video.metadata["platforms"], copy);
+    assert_eq!(video.file_path.as_deref(), Some(output.as_str()));
+    assert_eq!(std::fs::metadata(&output).expect("artifact").ino(), inode);
+    assert_eq!(llm_usage_rows(&pool).await, 0);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn autopilot_runner_text_mode_provider_error_is_held_without_upload_fallback() {
+    use crate::autopilot_settings::{PipelineMode, ReviewPolicy};
+    let pool = pool().await;
+    let (root, _, _, clip_id) = real_static_fixture(&pool).await;
+    sqlx::query("UPDATE twitch_clips_social_media SET custom_title=$2 WHERE id=$1")
+        .bind(clip_id)
+        .bind("x".repeat(20_000))
+        .execute(&pool)
         .await
-        .expect("no fallback version")
-        .is_empty());
+        .expect("request beyond the provider text limit");
+    let slot = upload_policy_fixture(
+        &pool,
+        ReviewPolicy::Off,
+        PipelineMode::UploadText,
+        &["tiktok"],
+    )
+    .await;
+    text_consent(&pool, true, true).await;
+    let job_id = upload_job(&pool, clip_id, slot).await;
+    let runner = text_worker(&pool, root.path());
+    assert!(runner.run_once().await.expect("provider hold"));
+    held_text_job(&pool, job_id, "ai_text_failed").await;
+    let video = only_video(&pool).await;
+    assert_eq!(video.status, "rendering");
+    assert!(video.metadata.get("ai_text").is_none());
+    assert_eq!(
+        video.metadata["platforms"]["tiktok"]["description"],
+        "Lokaler Test"
+    );
     cleanup(pool).await;
 }
 
@@ -1219,10 +1369,17 @@ async fn autopilot_runner_upload_policy_waits_for_unified_cutover() {
             upload_policy_fixture(&pool, ReviewPolicy::Off, PipelineMode::Upload, &["tiktok"])
                 .await;
         match state {
-            Some(state) => sqlx::query("UPDATE social_pipeline_cutover SET state=$1 WHERE twitch_user_id='42'")
-                .bind(state).execute(&pool).await.map(|_| ()),
+            Some(state) => {
+                sqlx::query("UPDATE social_pipeline_cutover SET state=$1 WHERE twitch_user_id='42'")
+                    .bind(state)
+                    .execute(&pool)
+                    .await
+                    .map(|_| ())
+            }
             None => sqlx::query("DELETE FROM social_pipeline_cutover WHERE twitch_user_id='42'")
-                .execute(&pool).await.map(|_| ()),
+                .execute(&pool)
+                .await
+                .map(|_| ()),
         }
         .expect("cutover state");
         let job_id = upload_job(&pool, clip_id, slot).await;
@@ -1248,7 +1405,7 @@ async fn autopilot_runner_upload_policy_waits_for_unified_cutover() {
 }
 
 #[tokio::test]
-async fn autopilot_runner_held_mode_reads_the_changed_policy_after_process() {
+async fn autopilot_runner_held_text_mode_reads_the_changed_policy_after_process() {
     use crate::autopilot_settings::{PipelineMode, ReviewPolicy};
     let pool = pool().await;
     let (root, _, _, clip_id) = real_static_fixture(&pool).await;
@@ -1262,11 +1419,9 @@ async fn autopilot_runner_held_mode_reads_the_changed_policy_after_process() {
     let job_id = upload_job(&pool, clip_id, slot).await;
     let runner = worker(&pool, root.path(), VideoProcessor::default());
     assert!(runner.run_once().await.expect("held dispatch"));
-    let held = production_jobs::get(&pool, "42", job_id)
-        .await
-        .expect("held job")
-        .expect("owned job");
-    assert_eq!(held.status, "review");
+    held_text_job(&pool, job_id, "ai_editor_unavailable").await;
+    let held = only_video(&pool).await;
+    assert_eq!(held.status, "rendering");
     let mut policy = crate::autopilot_settings::load_policy(&pool, "42")
         .await
         .expect("held policy");
@@ -1287,10 +1442,10 @@ async fn autopilot_runner_held_mode_reads_the_changed_policy_after_process() {
         done.policy_snapshot.map(|policy| policy.pipeline_mode),
         Some(PipelineMode::Upload)
     );
-    let videos = produced_video::list(&pool, "42", 50)
-        .await
-        .expect("upload version");
-    assert_eq!(videos.len(), 1);
-    assert_eq!(videos[0].metadata["production_mode"], "upload");
+    let video = only_video(&pool).await;
+    assert_eq!(video.id, held.id);
+    assert_eq!(video.status, "review");
+    assert_eq!(video.metadata["production_mode"], "upload");
+    assert!(video.metadata.get("ai_text").is_none());
     cleanup(pool).await;
 }
