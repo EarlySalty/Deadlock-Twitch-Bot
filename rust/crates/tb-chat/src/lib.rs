@@ -37,6 +37,7 @@ pub mod db_token_store;
 pub mod fun_responses;
 pub mod global_ban_sweep;
 pub mod global_chatter_ban;
+pub mod impersonation_guard;
 pub mod invite_question;
 mod invite_request;
 pub mod lfg_pitch;

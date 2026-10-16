@@ -1395,6 +1395,7 @@ async fn main() {
                     brain_service_token: settings.internal_api.token.clone(),
                     chat_persist_all_games: config.bot.chat_persist_all_games,
                     lfg_pitch_enabled: config.bot.lfg_pitch_enabled,
+                    impersonation_guard_enabled: config.bot.impersonation_guard_enabled,
                     invite_channel_id: config
                         .twitch
                         .notify_channel_id

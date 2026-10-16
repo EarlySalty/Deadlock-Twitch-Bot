@@ -54,6 +54,7 @@ use crate::conversation_scam::ConversationScamGuard;
 use crate::crew_guard::CrewGuard;
 use crate::fun_responses::FunResponses;
 use crate::global_chatter_ban::GlobalChatterBanEnforcer;
+use crate::impersonation_guard::{GuardMode, ImpersonationGuard, PartnerActions};
 use crate::invite_question::InviteQuestionResponder;
 use crate::lfg_pitch::LfgPitchResponder;
 use crate::mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
@@ -771,15 +772,7 @@ pub struct ChatPipeline {
 
 impl ChatPipeline {
     pub fn new(parts: ChatPipelineParts) -> Self {
-        let crew_guard = Arc::new(CrewGuard::new(
-            true,
-            Arc::clone(&parts.alerter),
-            parts.pool.clone(),
-            parts.bot_user_id.clone(),
-            Arc::clone(&parts.account_age),
-            Arc::clone(&parts.crew_centroid),
-            false,
-        ));
+        let crew_guard = Arc::new(Self::crew_guard(&parts, None));
         let moderation_settings = Arc::new(ModerationSettingsCache::new(parts.pool.clone()));
         Self {
             parts,
@@ -789,6 +782,37 @@ impl ChatPipeline {
             seen_messages: Arc::new(SeenMessages::default()),
             moderation_settings,
         }
+    }
+
+    fn crew_guard(
+        parts: &ChatPipelineParts,
+        impersonation: Option<Arc<ImpersonationGuard>>,
+    ) -> CrewGuard {
+        CrewGuard::new(
+            true,
+            Arc::clone(&parts.alerter),
+            parts.pool.clone(),
+            parts.bot_user_id.clone(),
+            Arc::clone(&parts.account_age),
+            Arc::clone(&parts.crew_centroid),
+            false,
+        )
+        .with_impersonation(impersonation)
+    }
+
+    pub fn with_impersonation_guard(mut self, enabled: bool, bot_login: String) -> Self {
+        let guard = enabled.then(|| {
+            Arc::new(ImpersonationGuard::new(
+                GuardMode::Partner,
+                bot_login,
+                Arc::new(PartnerActions::new(
+                    Arc::clone(&self.parts.moderation),
+                    Arc::clone(&self.parts.api),
+                )),
+            ))
+        });
+        self.crew_guard = Arc::new(Self::crew_guard(&self.parts, guard));
+        self
     }
 
     /// Merkt sich eine Nachrichten-ID und meldet, ob sie neu war

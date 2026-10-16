@@ -858,6 +858,39 @@ pub async fn try_build_api(
     }))
 }
 
+async fn foreign_impersonation_guard(
+    token_manager: &BotTokenManager,
+    raw_api: Arc<dyn ChatApi>,
+    pool: sqlx::PgPool,
+    bot_login: String,
+) -> Arc<tb_chat::impersonation_guard::ImpersonationGuard> {
+    use tb_chat::impersonation_guard::{ForeignActions, GuardMode, ImpersonationGuard};
+    let can_write = token_manager
+        .scopes()
+        .await
+        .iter()
+        .any(|scope| scope == "user:write:chat");
+    if !can_write {
+        tracing::warn!(
+            "Impersonation-Guard: Bot-Token ohne Scope user:write:chat, Warnhinweise in fremden Chats werden übersprungen"
+        );
+    }
+    let api = can_write.then(|| {
+        Arc::new(ChannelPolicyChatApi::new(
+            raw_api,
+            PolicyContext::ImpersonationWarning,
+        )) as Arc<dyn ChatApi>
+    });
+    Arc::new(ImpersonationGuard::new(
+        GuardMode::Foreign,
+        bot_login,
+        Arc::new(ForeignActions::new(
+            api,
+            Some(Arc::new(GlobalChatterBanEnforcer::new(pool))),
+        )),
+    ))
+}
+
 /// Phase 2: baut die komplette Pipeline auf der gebooteten ChatApi.
 pub struct ChatRuntimePorts {
     pub title_context: tb_chat::steam_lookup::CoStreamRuntime,
@@ -876,6 +909,7 @@ pub struct ChatRuntimePorts {
     pub brain_service_token: String,
     pub chat_persist_all_games: bool,
     pub lfg_pitch_enabled: bool,
+    pub impersonation_guard_enabled: bool,
     pub review_log_directory: std::path::PathBuf,
     pub review_relay: Option<BrokerRelay>,
     pub member_relay: Option<BrokerRelay>,
@@ -908,6 +942,7 @@ pub async fn build_runtime(
         brain_service_token,
         chat_persist_all_games,
         lfg_pitch_enabled,
+        impersonation_guard_enabled,
         review_log_directory,
         review_relay,
         member_relay,
@@ -929,6 +964,7 @@ pub async fn build_runtime(
     // send_message (Moderation/Promos/Commands/Scam-Pitch/Fun/Pipeline/
     // Mention-Resolver) durch das Tracking.
     let timeout_guard = Arc::new(TimeoutGuard::new());
+    let raw_api = Arc::clone(&api);
     let tracked_api: Arc<dyn ChatApi> = Arc::new(
         TimeoutTrackingChatApi::new(api, Arc::clone(&timeout_guard), pool.clone())
             .with_bot_ban_handler(bot_ban_handler),
@@ -1113,15 +1149,27 @@ pub async fn build_runtime(
         "http://localhost:8899/changelog",
         discord_chat.moderation_alert_channel_id,
     ));
-    let scout_crew_guard = Arc::new(CrewGuard::new(
-        true,
-        Arc::clone(&alerter),
-        pool.clone(),
-        bot_user_id.clone(),
-        Arc::clone(&account_age),
-        Arc::clone(&crew_centroid),
-        true,
-    ));
+    let bot_login = token_manager.bot_login().await;
+    let foreign_impersonation = if impersonation_guard_enabled {
+        Some(
+            foreign_impersonation_guard(&token_manager, raw_api, pool.clone(), bot_login.clone())
+                .await,
+        )
+    } else {
+        None
+    };
+    let scout_crew_guard = Arc::new(
+        CrewGuard::new(
+            true,
+            Arc::clone(&alerter),
+            pool.clone(),
+            bot_user_id.clone(),
+            Arc::clone(&account_age),
+            Arc::clone(&crew_centroid),
+            true,
+        )
+        .with_impersonation(foreign_impersonation),
+    );
     let lfg_judge: Arc<dyn tb_chat::lfg_pitch::LfgJudge> = Arc::new(LlmLfgJudge::new(
         EngagementLlmClient::new(None, None, None, None),
     ));
@@ -1136,7 +1184,7 @@ pub async fn build_runtime(
             timeout_guard: Arc::clone(&timeout_guard),
             pool: pool.clone(),
         });
-    let pipeline = Arc::new(ChatPipeline::new(ChatPipelineParts {
+    let pipeline = ChatPipeline::new(ChatPipelineParts {
         bot_user_id: bot_user_id.clone(),
         api: Arc::clone(&api),
         pool: pool.clone(),
@@ -1212,7 +1260,9 @@ pub async fn build_runtime(
         alerter,
         account_age,
         crew_centroid,
-    }));
+    });
+    let pipeline =
+        Arc::new(pipeline.with_impersonation_guard(impersonation_guard_enabled, bot_login));
 
     let sweeper = Arc::new(GlobalBanSweeper::new(pool.clone(), Arc::clone(&api)));
     // Engagement-Layer (KI-Stammgast): Der EventSub-Partnerpfad darf weiterhin

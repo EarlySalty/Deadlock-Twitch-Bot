@@ -1,3 +1,4 @@
+use crate::impersonation_guard::{ImpersonationGuard, ImpersonationOutcome};
 use crate::pipeline::{CrewRadarAlert, ModAlerter};
 use crate::scam_pitch::AccountAgePort;
 use crate::style_score::{score as style_score, Centroid, StyleBreakdown};
@@ -61,6 +62,21 @@ pub async fn persist_radar_alert(
     pool: &PgPool,
     record: &CrewRadarLog,
 ) -> Result<Option<i64>, sqlx::Error> {
+    persist_radar(pool, record, false).await
+}
+
+pub async fn persist_radar_action(
+    pool: &PgPool,
+    record: &CrewRadarLog,
+) -> Result<Option<i64>, sqlx::Error> {
+    persist_radar(pool, record, true).await
+}
+
+async fn persist_radar(
+    pool: &PgPool,
+    record: &CrewRadarLog,
+    always_log: bool,
+) -> Result<Option<i64>, sqlx::Error> {
     let Some(id) = record
         .chatter_id
         .as_deref()
@@ -70,7 +86,7 @@ pub async fn persist_radar_alert(
     };
     let mut tx = pool.begin().await?;
     let repetitions = reserviere_radar_meldung(&mut tx, id).await?;
-    if repetitions.is_some() {
+    if always_log || repetitions.is_some() {
         persist_radar_log(&mut *tx, record).await?;
     }
     tx.commit().await?;
@@ -81,6 +97,14 @@ struct CrewAccount {
     twitch_user_id: &'static str,
     login: &'static str,
     has_behavioral_evidence: bool,
+    impersonates_community: bool,
+}
+
+pub fn registry_impersonator(chatter_id: &str) -> bool {
+    let id = chatter_id.trim();
+    CREW_REGISTRY
+        .iter()
+        .any(|acc| acc.impersonates_community && acc.twitch_user_id == id)
 }
 
 const CREW_REGISTRY: &[CrewAccount] = &[
@@ -88,36 +112,43 @@ const CREW_REGISTRY: &[CrewAccount] = &[
         twitch_user_id: "89018048",
         login: "blackhusky45",
         has_behavioral_evidence: true,
+        impersonates_community: false,
     },
     CrewAccount {
         twitch_user_id: "147713656",
         login: "helmbombenricky",
         has_behavioral_evidence: true,
+        impersonates_community: false,
     },
     CrewAccount {
         twitch_user_id: "823493023",
         login: "skifahrertv",
         has_behavioral_evidence: true,
+        impersonates_community: false,
     },
     CrewAccount {
         twitch_user_id: "595804185",
         login: "h4teme666",
         has_behavioral_evidence: false,
+        impersonates_community: false,
     },
     CrewAccount {
         twitch_user_id: "1445014969",
         login: "mr_horizont",
         has_behavioral_evidence: false,
+        impersonates_community: false,
     },
     CrewAccount {
         twitch_user_id: "771345179",
         login: "wall_horizon",
         has_behavioral_evidence: true,
+        impersonates_community: false,
     },
     CrewAccount {
         twitch_user_id: "1505528697",
         login: "deadlock_germany",
         has_behavioral_evidence: true,
+        impersonates_community: true,
     },
 ];
 
@@ -283,6 +314,7 @@ pub struct CrewGuard {
     account_age: Arc<dyn AccountAgePort>,
     centroid: Arc<Centroid>,
     context: ChatterContextBuffer,
+    impersonation: Option<Arc<ImpersonationGuard>>,
 }
 
 impl CrewGuard {
@@ -303,7 +335,13 @@ impl CrewGuard {
             account_age,
             centroid,
             context: ChatterContextBuffer::new(),
+            impersonation: None,
         }
+    }
+
+    pub fn with_impersonation(mut self, guard: Option<Arc<ImpersonationGuard>>) -> Self {
+        self.impersonation = guard;
+        self
     }
 
     pub fn observe(&self, event: &ChatMessageEvent) {
@@ -328,6 +366,8 @@ impl CrewGuard {
         let alerter = self.alerter.clone();
         let age = self.account_age.clone();
         let centroid = self.centroid.clone();
+        let impersonation = self.impersonation.clone();
+        let event = event.clone();
         tokio::spawn(async move {
             let clean = match unauffaellig(&pool, &id).await {
                 Ok(value) => value,
@@ -336,8 +376,13 @@ impl CrewGuard {
                     false
                 }
             };
-            if matches!(signal, CrewSignal::None)
-                || (clean && matches!(signal, CrewSignal::Trigger { .. }))
+            let outcome = match &impersonation {
+                Some(guard) => guard.handle(&event, clean).await,
+                None => None,
+            };
+            if outcome.is_none()
+                && (matches!(signal, CrewSignal::None)
+                    || (clean && matches!(signal, CrewSignal::Trigger { .. })))
             {
                 return;
             }
@@ -359,9 +404,18 @@ impl CrewGuard {
                     "pattern",
                     format!("Mehrdeutige Textmuster: {}", hits.join(", ")),
                 ),
-                CrewSignal::None => return,
+                CrewSignal::None => match outcome {
+                    Some(ImpersonationOutcome { reason, .. }) => {
+                        ("impersonation", reason.to_string())
+                    }
+                    None => return,
+                },
             };
-            let mut message = format!("🔎 **{login}** in #{channel}: Muster gesichtet.\n{detail}\nKein Urteil über das Konto. Es wurde nichts moderiert.\n**Stilähnlichkeit:** {} %\n**Nachrichten:**\n{}", style.total,
+            let action_text = outcome.map_or(
+                "Kein Urteil über das Konto. Es wurde nichts moderiert.",
+                |o| o.alert_text(),
+            );
+            let mut message = format!("🔎 **{login}** in #{channel}: Muster gesichtet.\n{detail}\n{action_text}\n**Stilähnlichkeit:** {} %\n**Nachrichten:**\n{}", style.total,
                 messages.iter().map(|m| format!("> {}", m.chars().take(300).collect::<String>())).collect::<Vec<_>>().join("\n"));
             let log = CrewRadarLog {
                 channel_login: channel.clone(),
@@ -375,10 +429,15 @@ impl CrewGuard {
                 llm_verdict: verdict.to_string(),
                 llm_confidence: None,
                 llm_reasoning: Some(detail),
-                action_taken: "none".into(),
+                action_taken: outcome.map_or("none", |o| o.action).into(),
                 source: "passive_patterns".into(),
             };
-            let repetitions = match persist_radar_alert(&pool, &log).await {
+            let persisted = if outcome.is_some() {
+                persist_radar_action(&pool, &log).await
+            } else {
+                persist_radar_alert(&pool, &log).await
+            };
+            let repetitions = match persisted {
                 Ok(Some(value)) => value,
                 Ok(None) => return,
                 Err(error) => {

@@ -381,6 +381,11 @@ fn bot(b: &mut Builder) {
             "Weist im Chat auf die Mitspielersuche hin.",
         )
         .flag(
+            "bot.impersonation_guard_enabled",
+            "Schutz vor Nachahmern",
+            "Timeoutet Nachahmer der Community in Partner-Chats und warnt in fremden Chats vor ihnen.",
+        )
+        .flag(
             "bot.golive_tips_enabled",
             "Go-Live-Tipps",
             "Sendet Streamern Tipps beim Stream-Start.",
