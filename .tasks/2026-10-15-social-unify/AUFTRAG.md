@@ -85,3 +85,8 @@ Global AI switch `external_llm_consent` needs an admin UI (set to true in prod o
 - U12: uncertain rows on other platforms keep files indefinitely (no cleanup); file still hashed twice per claim; `upload_worker::resolve_tiktok_uploader` duplicates `direct_post_uploader`; `Capabilities.tiktok_effect_boundary` static.
 - notify.rs alerts on held rows only for account and file reasons.
 - U17: no owner has a `social_pipeline_cutover` row yet.
+
+### From U12 (0c5567451, 2026-10-16)
+- Snapshot now has `settings.review_mode` (review / full_auto / veto_until_deadline); U16 shows it.
+- U12b (fix package, parallel to U16): sync review_policy and publish_mode (Q1: review off must auto-publish; today `off` + publish_mode review never publishes); impossible deadline values (month 13) must not break the whole publish tick; promote a veto video whose deadline passes within the same tick instead of silently moving it via schedule_slotless; Instagram "published but no media id" becomes uncertain, not retry.
+- Later: warn before grace-period file release of non-TikTok uncertain uploads; `Capabilities.tiktok_effect_boundary` static.
