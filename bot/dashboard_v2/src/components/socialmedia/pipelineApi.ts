@@ -99,14 +99,26 @@ export const SOURCE_BATCH = 200;
 const MAX_BATCHES = 200;
 
 export async function loadSourceCollection(load: LoadSourcesPage, owner: string, signal?: AbortSignal): Promise<PipelinePage> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const page = await collectSources(load, owner, signal);
+    if (page) return page;
+  }
+  throw new Error('sources_changed');
+}
+
+async function collectSources(load: LoadSourcesPage, owner: string, signal?: AbortSignal): Promise<PipelinePage | null> {
   const sources = new Map<string, PipelineSource>();
+  let total: number | null = null;
   for (let offset = 0, batch = 0; batch < MAX_BATCHES; batch += 1) {
     signal?.throwIfAborted();
     const page = await load(owner, SOURCE_BATCH, offset, signal);
+    if (total !== null && page.total !== total) return null;
+    total = page.total;
     for (const source of page.sources) sources.set(source.clip_id, source);
     offset += page.sources.length;
     if (page.sources.length < SOURCE_BATCH || offset >= page.total) {
-      return { ...page, sources: [...sources.values()], total: Math.max(page.total, sources.size), limit: sources.size, offset: 0 };
+      if (sources.size !== offset) return null;
+      return { ...page, sources: [...sources.values()], total: sources.size, limit: sources.size, offset: 0 };
     }
   }
   throw new Error('sources_too_large');

@@ -594,8 +594,10 @@ function OwnerImportPool({
               selectionMutation.mutate({ clipId, selected, after: onChanged });
             }}
             onBulkSelect={bulkSelect}
+            bulkPending={bulkMutation.isPending}
             onArchived={() => {
               void queryClient.invalidateQueries({ queryKey: poolKey });
+              void queryClient.invalidateQueries({ queryKey: ["social-posting-plan"] });
               onChanged?.();
             }}
           />

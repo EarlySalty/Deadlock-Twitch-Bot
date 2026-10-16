@@ -37,6 +37,7 @@ export interface PipelineClipsProps {
   selectionLocked: boolean;
   onSelect: (clipId: string, selected: boolean) => void;
   onBulkSelect: (clipIds: string[], selected: boolean) => void;
+  bulkPending?: boolean;
   onArchived?: () => void;
   onOpenDetail?: (source: PipelineSource, mode: DetailMode) => void;
 }
@@ -61,7 +62,7 @@ function eligibilityNote(source: PipelineSource, t: Translate): string | null {
   return null;
 }
 
-export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, onArchived, onOpenDetail }: PipelineClipsProps) {
+export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, bulkPending, onArchived, onOpenDetail }: PipelineClipsProps) {
   const { t, locale } = useLanguage();
   const [eligibility, setEligibility] = useState<EligibilityFilter>('all');
   const [stage, setStage] = useState<QueueStage>('all');
@@ -132,6 +133,7 @@ export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, o
       </div>
       <p className="import-pool-help" role="status">
         {t('{count} von {total} Clips', { count: filtered.length.toLocaleString(locale), total: page.sources.length.toLocaleString(locale) })}
+        {bulkPending && ` ${t('Auswahl wird gespeichert …')}`}
       </p>
       {page.sources.length === 0 ? (
         <p className="import-pool-empty">
@@ -294,8 +296,10 @@ function PipelineClip({
               className="studio-icon-button"
               aria-label={`${t('Archivieren')}: ${metadata.title}`}
               title={t('Archivieren')}
-              disabled={noFile || archived || stage === 'planned' || archive.isPending}
-              onClick={() => archive.mutate()}
+              disabled={noFile || stage !== 'new' || archive.isPending}
+              onClick={() => {
+                if (window.confirm(t('Clip „{title}“ archivieren? Er wird danach nicht mehr automatisch gepostet.', { title: metadata.title }))) archive.mutate();
+              }}
             >
               <Archive size={15} aria-hidden="true" />
             </button>
