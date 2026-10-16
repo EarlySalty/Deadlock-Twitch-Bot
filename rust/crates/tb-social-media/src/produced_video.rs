@@ -505,7 +505,9 @@ async fn enqueue(
         .await?;
     ensure_ready(&video, now).await?;
     let settings = autopilot_settings::load_on(&mut tx, &video.twitch_user_id).await?;
-    let automatic = settings.publish_mode == autopilot_settings::PublishMode::FullAuto;
+    let automatic = crate::autopilot_publish::review_mode_on(&mut tx, &video.twitch_user_id)
+        .await?
+        != crate::autopilot_publish::ReviewMode::Review;
     for platform in &selected {
         let approved: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_media_clip_approval WHERE produced_video_id = $1 AND platform = $2 AND state = 'approved' AND (approver_user_id = $3 OR ($4 AND approver_user_id = 'autopilot')))")
             .bind(id).bind(platform).bind(&video.twitch_user_id).bind(automatic).fetch_one(&mut *tx).await?;

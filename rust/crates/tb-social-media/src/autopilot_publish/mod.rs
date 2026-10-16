@@ -134,9 +134,18 @@ pub struct DestinationDecision {
     pub tiktok_options: Option<Value>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewMode {
+    Review,
+    FullAuto,
+    VetoUntilDeadline,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SnapshotSettings {
     pub publish_mode: PublishMode,
+    pub review_mode: ReviewMode,
     pub paused: bool,
     pub notifications: NotificationPreferences,
 }
@@ -436,7 +445,7 @@ pub(crate) async fn valid_approvals_on(
     connection: &mut PgConnection,
     video_id: i64,
     owner: &str,
-    mode: PublishMode,
+    mode: ReviewMode,
 ) -> Result<BTreeSet<String>, sqlx::Error> {
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT platform FROM social_media_clip_approval WHERE produced_video_id = $1
@@ -444,11 +453,29 @@ pub(crate) async fn valid_approvals_on(
     )
     .bind(video_id)
     .bind(owner)
-    .bind(mode == PublishMode::FullAuto)
+    .bind(mode != ReviewMode::Review)
     .bind(AUTOPILOT_APPROVER)
     .fetch_all(connection)
     .await?;
     Ok(rows.into_iter().collect())
+}
+
+pub(crate) async fn review_mode_on(
+    connection: &mut PgConnection,
+    owner: &str,
+) -> Result<ReviewMode, sqlx::Error> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT COALESCE(publish_mode, 'review'), COALESCE(review_policy, 'required')
+         FROM social_media_autopilot_settings WHERE twitch_user_id = $1",
+    )
+    .bind(owner)
+    .fetch_optional(connection)
+    .await?;
+    Ok(match row {
+        Some((_, policy)) if policy == "veto_until_deadline" => ReviewMode::VetoUntilDeadline,
+        Some((mode, _)) if mode == "full_auto" => ReviewMode::FullAuto,
+        _ => ReviewMode::Review,
+    })
 }
 
 pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<PublishSnapshot, PublishError> {
@@ -466,6 +493,7 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<PublishSnapshot, Pub
     let tiktok_account = tiktok_account_on(&mut connection, owner).await?;
     let videos = videos_on(&mut connection, owner, &tiktok_account).await?;
     let notifications = notifications_on(&mut connection, owner).await?;
+    let review_mode = review_mode_on(&mut connection, owner).await?;
     let discord: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM twitch_streamer_identities WHERE twitch_user_id = $1
          AND COALESCE(discord_user_id, '') <> '')",
@@ -477,6 +505,7 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<PublishSnapshot, Pub
         target_platforms: settings.target_platforms.clone(),
         settings: SnapshotSettings {
             publish_mode: settings.publish_mode,
+            review_mode,
             paused: settings.paused,
             notifications: settings.notifications,
         },
@@ -747,7 +776,7 @@ async fn enter_review(
     .execute(&mut *tx)
     .await?;
     for id in automatic {
-        let explicit = valid_approvals_on(tx, id, owner, PublishMode::Review).await?;
+        let explicit = valid_approvals_on(tx, id, owner, ReviewMode::Review).await?;
         let explicit: Vec<String> = explicit.into_iter().collect();
         sqlx::query(
             "DELETE FROM twitch_clips_upload_queue q USING social_produced_videos v
@@ -1105,7 +1134,6 @@ pub async fn schedule(
     let platforms = autopilot_settings::normalize_platforms(platforms)?;
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, owner).await?;
-    let settings = autopilot_settings::load_on(&mut tx, owner).await?;
     let video: Option<SlotState> = sqlx::query_as(
         "SELECT scheduled_at, publication_executed_at FROM social_produced_videos
          WHERE id = $1 AND twitch_user_id = $2 FOR UPDATE",
@@ -1119,7 +1147,8 @@ pub async fn schedule(
         tx.commit().await?;
         return Ok(());
     }
-    let approved = valid_approvals_on(&mut tx, id, owner, settings.publish_mode).await?;
+    let mode = review_mode_on(&mut tx, owner).await?;
+    let approved = valid_approvals_on(&mut tx, id, owner, mode).await?;
     let platforms: Vec<String> = platforms
         .into_iter()
         .filter(|platform| approved.contains(platform))
@@ -1166,7 +1195,6 @@ pub async fn retry(
 ) -> Result<(), PublishError> {
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, owner).await?;
-    let settings = autopilot_settings::load_on(&mut tx, owner).await?;
     let row: Option<(i64, Option<String>, Option<String>, bool)> = sqlx::query_as(
         "SELECT q.id::bigint, q.status, q.outcome_reason,
             v.artifact_deleted_at IS NULL AND v.file_path IS NOT NULL
@@ -1193,7 +1221,8 @@ pub async fn retry(
     if !artifact_present {
         return Err(PublishError::ArtifactDeleted);
     }
-    if !valid_approvals_on(&mut tx, id, owner, settings.publish_mode)
+    let mode = review_mode_on(&mut tx, owner).await?;
+    if !valid_approvals_on(&mut tx, id, owner, mode)
         .await?
         .contains(platform)
     {

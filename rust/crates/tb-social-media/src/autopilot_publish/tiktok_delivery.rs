@@ -2,7 +2,10 @@ use serde_json::Value;
 use sqlx::{PgConnection, PgPool};
 
 use super::executor::{Claim, DestinationPublisher};
-use super::{queue_status, stored_tiktok_options, tiktok_account_on, tiktok_subject, PublishError};
+use super::{
+    queue_status, stored_tiktok_options, tiktok_account_on, tiktok_subject_on, Binding,
+    PublishError,
+};
 use crate::tiktok_recovery::{self, ClaimCheckpoint, PublishState};
 use crate::uploaders::tiktok::TikTokPostOptions;
 use crate::uploaders::UploadError;
@@ -31,8 +34,14 @@ const RECONCILE_BATCH: i64 = 10;
 pub(super) async fn verified_options(
     pool: &PgPool,
     claim: &Claim,
+    digest: &str,
 ) -> Result<Result<TikTokPostOptions, &'static str>, PublishError> {
-    match tiktok_subject(pool, &claim.owner, claim.video_id).await {
+    let binding = Binding {
+        path: claim.request.file_path.clone(),
+        digest: digest.to_string(),
+    };
+    let mut connection = pool.acquire().await?;
+    match tiktok_subject_on(&mut connection, &claim.owner, claim.video_id, &binding).await {
         Ok(subject) => Ok(subject.binding().cloned().map_err(|issue| issue.reason())),
         Err(PublishError::NotFound | PublishError::State | PublishError::Io(_)) => {
             Ok(Err("exact_file_changed"))

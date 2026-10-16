@@ -1024,28 +1024,12 @@ impl UploadWorker {
             .get_channel_credentials_for_id("tiktok", &user)
             .await
             .ok_or(UploadError::NotAuthenticated)?;
-        if options.credential_id != credentials.id
-            || Some(options.platform_user_id.as_str()) != credentials.platform_user_id.as_deref()
-        {
-            return Err(UploadError::Validation(
-                "Das TikTok-Konto hat sich geändert. Bitte plane den Clip erneut ein.".into(),
-            ));
-        }
-        if !credentials
-            .scopes
-            .as_deref()
-            .unwrap_or("")
-            .split([',', ' '])
-            .any(|scope| scope == "video.publish")
-        {
-            return Err(UploadError::Validation(
-                "Bitte verbinde TikTok erneut, damit Clips direkt veröffentlicht werden können."
-                    .into(),
-            ));
-        }
-        Ok(Arc::new(
-            TikTokUploader::new(credentials.access_token).with_post_options(options),
-        ))
+        let uploader = crate::uploaders::tiktok::direct_post_uploader(&credentials, &options)
+            .map_err(|error| match error {
+                UploadError::NotStarted(cause) => *cause,
+                other => other,
+            })?;
+        Ok(Arc::new(uploader))
     }
 
     pub async fn run_once(&self) {
