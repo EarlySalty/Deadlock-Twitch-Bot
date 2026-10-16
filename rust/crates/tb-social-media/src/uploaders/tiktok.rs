@@ -185,6 +185,35 @@ pub fn build_caption(title: &str, description: &str, hashtags: &[String]) -> Str
     truncate_utf16(&parts.join("\n\n"), CAPTION_MAX)
 }
 
+pub(crate) fn direct_post_uploader(
+    credentials: &crate::credentials::SocialMediaCredentials,
+    options: &TikTokPostOptions,
+) -> Result<TikTokUploader, UploadError> {
+    if !options.consent {
+        return Err(UploadError::not_started(UploadError::Validation(
+            "Bitte öffne die TikTok-Freigabe am Clip und wähle die Veröffentlichungseinstellungen."
+                .into(),
+        )));
+    }
+    if options.credential_id != credentials.id
+        || Some(options.platform_user_id.as_str()) != credentials.platform_user_id.as_deref()
+    {
+        return Err(UploadError::not_started(UploadError::Validation(
+            "Das TikTok-Konto hat sich geändert. Bitte öffne die TikTok-Freigabe erneut.".into(),
+        )));
+    }
+    let publish_scope = credentials
+        .scopes
+        .as_deref()
+        .unwrap_or("")
+        .split([',', ' '])
+        .any(|scope| scope == "video.publish");
+    if !publish_scope {
+        return Err(UploadError::not_started(UploadError::NotAuthenticated));
+    }
+    Ok(TikTokUploader::new(credentials.access_token.clone()).with_post_options(options.clone()))
+}
+
 /// TikTok Content-Posting-Uploader (Direct Post).
 pub struct TikTokUploader {
     access_token: String,

@@ -9,14 +9,15 @@ use serde_json::Value;
 use sqlx::{PgConnection, PgPool, Row};
 
 use super::{
-    bind_on, binding, connections_on, notify, now_on, queue_status, release_slot,
+    bind_on, binding, connections_on, notify, now_on, queue_status, release_slot, tiktok_delivery,
     valid_approvals_on, AutopilotNotifier, PublishError, AUTOPILOT_APPROVER,
 };
 use crate::autopilot_settings::{self, AutopilotSettings};
 use crate::credentials::CredentialManager;
 use crate::produced_video;
 use crate::production_jobs::autopilot_schedule;
-use crate::uploaders::UploadError;
+use crate::uploaders::tiktok::{direct_post_uploader, TikTokPostOptions};
+use crate::uploaders::{PlatformUploader, UploadCheckpoint, UploadError};
 
 const TICK: Duration = Duration::from_secs(30);
 const MAX_ATTEMPTS: i32 = 4;
@@ -67,6 +68,18 @@ pub trait DestinationPublisher: Send + Sync {
         platform: &str,
         request: &PublishRequest,
     ) -> Result<PublishOutcome, UploadError>;
+
+    async fn publish_tiktok(
+        &self,
+        _owner: &str,
+        _request: &PublishRequest,
+        _options: &TikTokPostOptions,
+        _checkpoint: &dyn UploadCheckpoint,
+    ) -> Result<String, UploadError> {
+        Err(UploadError::not_started(UploadError::NotImplemented(
+            "TikTok direct post is not available for this publisher".into(),
+        )))
+    }
 }
 
 pub struct PlatformPublisher {
@@ -109,12 +122,31 @@ impl DestinationPublisher for PlatformPublisher {
             visibility,
         })
     }
+
+    async fn publish_tiktok(
+        &self,
+        owner: &str,
+        request: &PublishRequest,
+        options: &TikTokPostOptions,
+        checkpoint: &dyn UploadCheckpoint,
+    ) -> Result<String, UploadError> {
+        let credentials = self
+            .credentials
+            .get_channel_credentials_for_id("tiktok", owner)
+            .await
+            .ok_or_else(|| UploadError::not_started(UploadError::NotAuthenticated))?;
+        let uploader = direct_post_uploader(&credentials, options)?;
+        uploader
+            .upload_video_checkpointed(&request.file_path, &options.caption, "", &[], checkpoint)
+            .await
+    }
 }
 
 pub struct PublishExecutor {
     pool: PgPool,
     publisher: Arc<dyn DestinationPublisher>,
     notifier: Option<Arc<dyn AutopilotNotifier>>,
+    tiktok_dispatch: bool,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -130,21 +162,42 @@ pub struct TickReport {
 }
 
 pub(super) struct Claim {
-    queue_id: i64,
-    generation: i64,
-    video_id: i64,
-    owner: String,
+    pub(super) queue_id: i64,
+    pub(super) generation: i64,
+    pub(super) video_id: i64,
+    pub(super) owner: String,
     platform: String,
-    attempts: i32,
-    request: PublishRequest,
+    pub(super) attempts: i32,
+    pub(super) request: PublishRequest,
     sha256: Option<String>,
     accounts: Value,
+    tiktok_publish_id: Option<String>,
 }
 
 enum Verdict {
-    Upload(Option<String>),
+    Upload {
+        account: Option<String>,
+        tiktok: Option<TikTokPostOptions>,
+    },
     Hold(&'static str),
 }
+
+const START_EFFECT: &str = "UPDATE twitch_clips_upload_queue SET status = $2,
+     outcome_reason = CASE WHEN $2 = $6 THEN outcome_reason ELSE $5 END,
+     effect_started_at = CASE WHEN $2 = $6 THEN clock_timestamp() ELSE effect_started_at END,
+     attempts = CASE WHEN $2 = $6 THEN attempts + 1 ELSE attempts END,
+     account_id = CASE WHEN $2 = $6 THEN $3 ELSE account_id END,
+     next_retry_at = NULL WHERE id = $1 AND status = $4 AND claim_generation = $7
+     AND $8::text IS NULL";
+
+const START_TIKTOK_EFFECT: &str = "UPDATE twitch_clips_upload_queue SET status = $2,
+     outcome_reason = CASE WHEN $2 = $6 THEN outcome_reason ELSE $5 END,
+     effect_started_at = CASE WHEN $2 = $6 THEN clock_timestamp() ELSE effect_started_at END,
+     attempts = CASE WHEN $2 = $6 THEN attempts + 1 ELSE attempts END,
+     account_id = CASE WHEN $2 = $6 THEN $3 ELSE account_id END,
+     tiktok_post_options = CASE WHEN $2 = $6 THEN $8::text::jsonb ELSE tiktok_post_options END,
+     next_retry_at = NULL WHERE id = $1 AND status = $4 AND claim_generation = $7
+     AND tiktok_publish_id IS NULL";
 
 impl PublishExecutor {
     pub fn new(pool: PgPool, publisher: Arc<dyn DestinationPublisher>) -> Self {
@@ -152,7 +205,13 @@ impl PublishExecutor {
             pool,
             publisher,
             notifier: None,
+            tiktok_dispatch: false,
         }
+    }
+
+    pub fn with_tiktok_dispatch(mut self, enabled: bool) -> Self {
+        self.tiktok_dispatch = enabled;
+        self
     }
 
     pub fn with_notifier(mut self, notifier: Arc<dyn AutopilotNotifier>) -> Self {
@@ -537,7 +596,8 @@ impl PublishExecutor {
              RETURNING q.id::bigint AS queue_id, q.claim_generation, v.id AS video_id, v.twitch_user_id,
                  q.platform, q.attempts, v.file_path, q.title, q.description, q.hashtags, c.clip_title,
                  v.metadata#>>ARRAY['publication', 'hashes', q.platform] AS sha256,
-                 COALESCE(v.metadata#>'{publication,accounts}', '{}'::jsonb)::text AS accounts",
+                 COALESCE(v.metadata#>'{publication,accounts}', '{}'::jsonb)::text AS accounts,
+                 NULLIF(to_jsonb(q)->>'tiktok_publish_id', '') AS tiktok_publish_id",
         )
         .bind(queue_status::PREPARING)
         .bind(queue_status::PENDING)
@@ -574,6 +634,7 @@ impl PublishExecutor {
             },
             sha256: row.try_get("sha256")?,
             accounts: serde_json::from_str(&row.try_get::<String, _>("accounts")?)?,
+            tiktok_publish_id: row.try_get("tiktok_publish_id")?,
         }))
     }
 
@@ -590,9 +651,6 @@ impl PublishExecutor {
         if !approved.contains(&claim.platform) {
             return Ok(Verdict::Hold("review_required"));
         }
-        if claim.platform == "tiktok" {
-            return Ok(Verdict::Hold("tiktok_effect_boundary_pending"));
-        }
         let accounts = connections_on(&mut connection, &claim.owner).await?;
         let Some(current) = accounts.get(&claim.platform) else {
             return Ok(Verdict::Hold("account_missing"));
@@ -607,22 +665,53 @@ impl PublishExecutor {
             return Ok(Verdict::Hold("exact_file_changed"));
         };
         match crate::uploaders::tiktok::video_digest(&claim.request.file_path).await {
-            Ok(actual) if actual == expected => Ok(Verdict::Upload(current.clone())),
-            _ => Ok(Verdict::Hold("exact_file_changed")),
+            Ok(actual) if actual == expected => {}
+            _ => return Ok(Verdict::Hold("exact_file_changed")),
+        }
+        let account = current.clone();
+        if claim.platform != "tiktok" {
+            return Ok(Verdict::Upload {
+                account,
+                tiktok: None,
+            });
+        }
+        match tiktok_delivery::verified_options(&self.pool, claim).await? {
+            Err(reason) => Ok(Verdict::Hold(reason)),
+            Ok(_) if !self.tiktok_dispatch => Ok(Verdict::Hold(tiktok_delivery::BOUNDARY_PENDING)),
+            Ok(options) => Ok(Verdict::Upload {
+                account,
+                tiktok: Some(options),
+            }),
         }
     }
 
     pub(super) async fn process(&self, claim: Claim) -> Result<(), PublishError> {
-        let account = match self.verdict(&claim).await? {
+        if claim.platform == "tiktok" && claim.tiktok_publish_id.is_some() {
+            return tiktok_delivery::quarantine(&self.pool, &claim).await;
+        }
+        let (account, tiktok) = match self.verdict(&claim).await? {
             Verdict::Hold(reason) => {
                 self.settle(&claim, queue_status::HELD, Some(reason), None)
                     .await?;
                 return Ok(());
             }
-            Verdict::Upload(account) => account,
+            Verdict::Upload { account, tiktok } => (account, tiktok),
         };
-        if !self.start_effect(&claim, account.as_deref()).await? {
+        if !self
+            .start_effect(&claim, account.as_deref(), tiktok.as_ref())
+            .await?
+        {
             return Ok(());
+        }
+        if let Some(options) = tiktok {
+            return tiktok_delivery::dispatch(
+                &self.pool,
+                self.publisher.as_ref(),
+                &claim,
+                &options,
+                MAX_ATTEMPTS,
+            )
+            .await;
         }
         let attempts = claim.attempts.saturating_add(1);
         match self
@@ -673,6 +762,7 @@ impl PublishExecutor {
         &self,
         claim: &Claim,
         account: Option<&str>,
+        tiktok: Option<&TikTokPostOptions>,
     ) -> Result<bool, PublishError> {
         let mut tx = self.pool.begin().await?;
         autopilot_settings::lock_owner(&mut tx, &claim.owner).await?;
@@ -680,19 +770,20 @@ impl PublishExecutor {
         let approved =
             valid_approvals_on(&mut tx, claim.video_id, &claim.owner, settings.publish_mode)
                 .await?;
-        let (status, reason) = if approved.contains(&claim.platform) {
-            (queue_status::EFFECT_STARTED, None)
-        } else {
-            (queue_status::HELD, Some("review_required"))
+        let mut reason = (!approved.contains(&claim.platform)).then_some("review_required");
+        if let (None, Some(options)) = (reason, tiktok) {
+            reason = tiktok_delivery::binding_issue_on(&mut tx, claim.video_id, options).await?;
+        }
+        let status = match reason {
+            None => queue_status::EFFECT_STARTED,
+            Some(_) => queue_status::HELD,
         };
-        let changed = sqlx::query(
-            "UPDATE twitch_clips_upload_queue SET status = $2,
-             outcome_reason = CASE WHEN $2 = $6 THEN outcome_reason ELSE $5 END,
-             effect_started_at = CASE WHEN $2 = $6 THEN clock_timestamp() ELSE effect_started_at END,
-             attempts = CASE WHEN $2 = $6 THEN attempts + 1 ELSE attempts END,
-             account_id = CASE WHEN $2 = $6 THEN $3 ELSE account_id END,
-             next_retry_at = NULL WHERE id = $1 AND status = $4 AND claim_generation = $7",
-        )
+        let options = tiktok.map(serde_json::to_string).transpose()?;
+        let changed = sqlx::query(if options.is_some() {
+            START_TIKTOK_EFFECT
+        } else {
+            START_EFFECT
+        })
         .bind(claim.queue_id)
         .bind(status)
         .bind(account)
@@ -700,6 +791,7 @@ impl PublishExecutor {
         .bind(reason)
         .bind(queue_status::EFFECT_STARTED)
         .bind(claim.generation)
+        .bind(options)
         .execute(&mut *tx)
         .await?
         .rows_affected();

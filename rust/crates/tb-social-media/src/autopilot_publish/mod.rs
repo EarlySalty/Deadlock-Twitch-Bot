@@ -14,6 +14,7 @@ mod executor;
 mod notify;
 #[cfg(test)]
 mod tests;
+mod tiktok_delivery;
 
 pub use executor::{
     DestinationPublisher, PlatformPublisher, PublishExecutor, PublishOutcome, PublishRequest,
