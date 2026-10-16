@@ -80,6 +80,17 @@ pub trait DestinationPublisher: Send + Sync {
             "TikTok direct post is not available for this publisher".into(),
         )))
     }
+
+    async fn tiktok_status(
+        &self,
+        _owner: &str,
+        _options: &TikTokPostOptions,
+        _publish_id: &str,
+    ) -> Result<Value, UploadError> {
+        Err(UploadError::NotImplemented(
+            "TikTok status checks are not available for this publisher".into(),
+        ))
+    }
 }
 
 pub struct PlatformPublisher {
@@ -140,6 +151,21 @@ impl DestinationPublisher for PlatformPublisher {
             .upload_video_checkpointed(&request.file_path, &options.caption, "", &[], checkpoint)
             .await
     }
+
+    async fn tiktok_status(
+        &self,
+        owner: &str,
+        options: &TikTokPostOptions,
+        publish_id: &str,
+    ) -> Result<Value, UploadError> {
+        let credentials = self
+            .credentials
+            .get_channel_credentials_for_id("tiktok", owner)
+            .await
+            .ok_or(UploadError::NotAuthenticated)?;
+        let uploader = direct_post_uploader(&credentials, options)?;
+        Ok(uploader.get_video_status(publish_id).await)
+    }
 }
 
 pub struct PublishExecutor {
@@ -156,6 +182,7 @@ pub struct TickReport {
     pub rescheduled: usize,
     pub released: usize,
     pub uploads: usize,
+    pub reconciled: usize,
     pub finished: usize,
     pub expired: usize,
     pub cleaned: usize,
@@ -187,8 +214,7 @@ const START_EFFECT: &str = "UPDATE twitch_clips_upload_queue SET status = $2,
      effect_started_at = CASE WHEN $2 = $6 THEN clock_timestamp() ELSE effect_started_at END,
      attempts = CASE WHEN $2 = $6 THEN attempts + 1 ELSE attempts END,
      account_id = CASE WHEN $2 = $6 THEN $3 ELSE account_id END,
-     next_retry_at = NULL WHERE id = $1 AND status = $4 AND claim_generation = $7
-     AND $8::text IS NULL";
+     next_retry_at = NULL WHERE id = $1 AND status = $4 AND claim_generation = $7";
 
 const START_TIKTOK_EFFECT: &str = "UPDATE twitch_clips_upload_queue SET status = $2,
      outcome_reason = CASE WHEN $2 = $6 THEN outcome_reason ELSE $5 END,
@@ -235,6 +261,8 @@ impl PublishExecutor {
         report.promoted += self.schedule_slotless().await?;
         self.execute_due(&mut report).await?;
         report.uploads = self.upload_due().await?;
+        report.reconciled =
+            tiktok_delivery::reconcile(&self.pool, self.publisher.as_ref(), MAX_ATTEMPTS).await?;
         report.finished = self.finalize().await?;
         report.cleaned = self.cleanup_published().await?;
         report.cleaned += self.cleanup_unresolved().await?;
@@ -258,13 +286,17 @@ impl PublishExecutor {
         .execute(&self.pool)
         .await?;
         sqlx::query(
-            "UPDATE twitch_clips_upload_queue SET status = $1, outcome_reason = 'interrupted'
+            "UPDATE twitch_clips_upload_queue SET status = $1,
+             outcome_reason = CASE WHEN platform <> 'tiktok' THEN 'interrupted'
+                 WHEN tiktok_publish_id IS NULL THEN $4 ELSE $5 END
              WHERE produced_video_id IS NOT NULL AND status = $2
              AND effect_started_at < clock_timestamp() - make_interval(mins => $3)",
         )
         .bind(queue_status::UNCERTAIN)
         .bind(queue_status::EFFECT_STARTED)
         .bind(EFFECT_STALE_MINUTES as i32)
+        .bind(tiktok_delivery::INIT_UNCERTAIN)
+        .bind(tiktok_delivery::TRANSFER_UNCERTAIN)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -774,12 +806,15 @@ impl PublishExecutor {
         if let (None, Some(options)) = (reason, tiktok) {
             reason = tiktok_delivery::binding_issue_on(&mut tx, claim.video_id, options).await?;
         }
+        if let (None, Some(options)) = (reason, tiktok) {
+            reason = tiktok_delivery::effect_issue_on(&mut tx, claim, options).await?;
+        }
         let status = match reason {
             None => queue_status::EFFECT_STARTED,
             Some(_) => queue_status::HELD,
         };
         let options = tiktok.map(serde_json::to_string).transpose()?;
-        let changed = sqlx::query(if options.is_some() {
+        let query = sqlx::query(if options.is_some() {
             START_TIKTOK_EFFECT
         } else {
             START_EFFECT
@@ -790,11 +825,12 @@ impl PublishExecutor {
         .bind(queue_status::PREPARING)
         .bind(reason)
         .bind(queue_status::EFFECT_STARTED)
-        .bind(claim.generation)
-        .bind(options)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        .bind(claim.generation);
+        let query = match options {
+            Some(options) => query.bind(options),
+            None => query,
+        };
+        let changed = query.execute(&mut *tx).await?.rows_affected();
         tx.commit().await?;
         Ok(changed == 1 && reason.is_none())
     }
@@ -1069,22 +1105,17 @@ async fn record_cleanup_error(connection: &mut PgConnection, id: i64) -> Result<
     Ok(())
 }
 
-fn settled_states() -> [&'static str; 5] {
+fn settled_states() -> [&'static str; 4] {
     [
         queue_status::PUBLISHED,
         queue_status::DISCARDED,
         queue_status::FAILED,
         queue_status::HELD,
-        queue_status::UNCERTAIN,
     ]
 }
 
-fn unresolved_states() -> [&'static str; 3] {
-    [
-        queue_status::FAILED,
-        queue_status::HELD,
-        queue_status::UNCERTAIN,
-    ]
+fn unresolved_states() -> [&'static str; 2] {
+    [queue_status::FAILED, queue_status::HELD]
 }
 
 #[derive(Clone, Copy)]

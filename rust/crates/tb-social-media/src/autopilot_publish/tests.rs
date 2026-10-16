@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -47,7 +48,7 @@ async fn pool() -> PgPool {
         CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT NOT NULL, twitch_login TEXT NOT NULL, discord_user_id TEXT, updated_at TEXT);
         CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT NOT NULL, twitch_user_id TEXT,
             platform_user_id TEXT, enabled INTEGER DEFAULT 1, authorized_at TEXT DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, twitch_user_id TEXT, clip_id TEXT,
+        CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, clip_id TEXT,
             clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT,
             status TEXT DEFAULT 'pending', game_id TEXT DEFAULT '2132205352', source_kind TEXT DEFAULT 'twitch',
             clip_thumbnail_url TEXT, duration_seconds DOUBLE PRECISION DEFAULT 15, created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -62,6 +63,7 @@ async fn pool() -> PgPool {
             tiktok_publish_id TEXT, tiktok_post_options JSONB)")
         .execute(&pool).await.expect("legacy prerequisite schema");
     for migration in [
+        include_str!("../../../../migrations/20261007042000_social_media_tiktok_direct_post.sql"),
         include_str!("../../../../migrations/20261011100000_social_autopilot_contracts.sql"),
         include_str!("../../../../migrations/20261011101000_social_clip_pool.sql"),
         include_str!("../../../../migrations/20261011102000_social_production_slot_guards.sql"),
@@ -1354,19 +1356,33 @@ async fn unresolved_destinations_release_file_only_after_grace_period() {
     configure(&pool, &["youtube", "tiktok"], &[("youtube", "yt-1")]).await;
     let publisher = ScriptedPublisher::with(vec![]);
     let executor = PublishExecutor::new(pool.clone(), publisher.clone());
-    let expiring: [(&str, &[(&str, &str)]); 4] = [
+    let expiring: [(&str, &[(&str, &str)]); 3] = [
         ("failed", &[("youtube", queue_status::FAILED)]),
         ("held", &[("youtube", queue_status::HELD)]),
-        ("uncertain", &[("youtube", queue_status::UNCERTAIN)]),
         (
             "mixed",
+            &[
+                ("youtube", queue_status::PUBLISHED),
+                ("tiktok", queue_status::FAILED),
+            ],
+        ),
+    ];
+    let keeping: [(&str, &[(&str, &str)]); 7] = [
+        ("uncertain", &[("youtube", queue_status::UNCERTAIN)]),
+        (
+            "uncertain_tiktok",
             &[
                 ("youtube", queue_status::PUBLISHED),
                 ("tiktok", queue_status::UNCERTAIN),
             ],
         ),
-    ];
-    let keeping: [(&str, &[(&str, &str)]); 4] = [
+        (
+            "processing",
+            &[
+                ("youtube", queue_status::PUBLISHED),
+                ("tiktok", queue_status::PROCESSING),
+            ],
+        ),
         ("retry", &[("youtube", queue_status::RETRY)]),
         ("preparing", &[("youtube", queue_status::PREPARING)]),
         (
@@ -1780,6 +1796,8 @@ enum TikTokStep {
 
 struct TikTokFake {
     pool: PgPool,
+    statuses: Mutex<HashMap<String, Value>>,
+    polls: Mutex<Vec<String>>,
     steps: Mutex<Vec<TikTokStep>>,
     calls: Mutex<Vec<(String, TikTokPostOptions)>>,
     persisted_before_transfer: Mutex<Vec<bool>>,
@@ -1789,6 +1807,8 @@ impl TikTokFake {
     fn with(pool: &PgPool, steps: Vec<TikTokStep>) -> Arc<Self> {
         Arc::new(Self {
             pool: pool.clone(),
+            statuses: Mutex::default(),
+            polls: Mutex::default(),
             steps: Mutex::new(steps),
             calls: Mutex::default(),
             persisted_before_transfer: Mutex::default(),
@@ -1797,6 +1817,17 @@ impl TikTokFake {
 
     fn calls(&self) -> Vec<(String, TikTokPostOptions)> {
         self.calls.lock().expect("calls").clone()
+    }
+
+    fn report(&self, publish_id: &str, status: Value) {
+        self.statuses
+            .lock()
+            .expect("statuses")
+            .insert(publish_id.into(), status);
+    }
+
+    fn polls(&self) -> Vec<String> {
+        self.polls.lock().expect("polls").clone()
     }
 
     fn persisted(&self) -> Vec<bool> {
@@ -1861,6 +1892,22 @@ impl DestinationPublisher for TikTokFake {
             }
         }
     }
+
+    async fn tiktok_status(
+        &self,
+        _owner: &str,
+        _options: &TikTokPostOptions,
+        publish_id: &str,
+    ) -> Result<Value, UploadError> {
+        self.polls.lock().expect("polls").push(publish_id.into());
+        Ok(self
+            .statuses
+            .lock()
+            .expect("statuses")
+            .get(publish_id)
+            .cloned()
+            .unwrap_or_else(|| json!({})))
+    }
 }
 
 async fn tiktok_ready(pool: &PgPool, name: &str) -> i64 {
@@ -1885,7 +1932,18 @@ async fn tiktok_row(pool: &PgPool, id: i64) -> (Option<String>, Option<Value>, b
     .expect("tiktok row")
 }
 
-fn dispatching(pool: &PgPool, fake: &Arc<TikTokFake>) -> PublishExecutor {
+async fn unify(pool: &PgPool) {
+    sqlx::query(
+        "INSERT INTO social_pipeline_cutover (twitch_user_id, state, migration_version)
+         VALUES ('owner', 'unified', 1) ON CONFLICT DO NOTHING",
+    )
+    .execute(pool)
+    .await
+    .expect("cutover");
+}
+
+async fn dispatching(pool: &PgPool, fake: &Arc<TikTokFake>) -> PublishExecutor {
+    unify(pool).await;
     PublishExecutor::new(pool.clone(), fake.clone()).with_tiktok_dispatch(true)
 }
 
@@ -1918,6 +1976,7 @@ async fn disabled_tiktok_dispatch_holds_with_the_specific_binding_reason() {
         )
     );
     dispatching(&pool, &fake)
+        .await
         .tick()
         .await
         .expect("dispatch tick");
@@ -1938,7 +1997,7 @@ async fn tiktok_dispatch_persists_publish_id_before_transfer_and_never_repeats()
     .await
     .expect("queue title");
     let fake = TikTokFake::with(&pool, vec![TikTokStep::Transfer("pub-1", Ok(()))]);
-    let executor = dispatching(&pool, &fake);
+    let executor = dispatching(&pool, &fake).await;
     executor.tick().await.expect("dispatch tick");
     let bound: TikTokPostOptions =
         serde_json::from_value(bound_options(&pool, id).await.expect("binding"))
@@ -1951,7 +2010,7 @@ async fn tiktok_dispatch_persists_publish_id_before_transfer_and_never_repeats()
     assert_eq!(
         queue_state(&pool, id, "tiktok").await,
         (
-            queue_status::UNCERTAIN.into(),
+            queue_status::PROCESSING.into(),
             Some("tiktok_processing".into())
         )
     );
@@ -1983,26 +2042,39 @@ async fn failures_around_init_checkpoint_and_transfer_never_start_a_second_opera
             TikTokStep::Transfer("pub-2", Err(UploadError::Api("chunk failed".into()))),
         ],
     );
-    let executor = dispatching(&pool, &fake);
+    let executor = dispatching(&pool, &fake).await;
     executor.tick().await.expect("failure tick");
     assert_eq!(fake.calls().len(), 3);
-    for (id, reason, publish_id) in [
-        (init, "tiktok_init_uncertain", None),
-        (checkpoint, "tiktok_init_uncertain", None),
-        (transfer, "tiktok_transfer_uncertain", Some("pub-2")),
-    ] {
+    for id in [init, checkpoint] {
         assert_eq!(
             queue_state(&pool, id, "tiktok").await,
-            (queue_status::UNCERTAIN.into(), Some(reason.into()))
+            (
+                queue_status::RETRY.into(),
+                Some("tiktok_init_unconfirmed".into())
+            )
         );
-        assert_eq!(tiktok_row(&pool, id).await.0.as_deref(), publish_id);
-        assert!(matches!(
-            retry(&pool, "owner", id, "tiktok").await,
-            Err(PublishError::RetryBlocked)
-        ));
+        let (publish_id, _, started, _) = tiktok_row(&pool, id).await;
+        assert!(publish_id.is_none());
+        assert!(!started);
     }
+    assert_eq!(
+        queue_state(&pool, transfer, "tiktok").await,
+        (
+            queue_status::UNCERTAIN.into(),
+            Some("tiktok_transfer_uncertain".into())
+        )
+    );
+    assert_eq!(
+        tiktok_row(&pool, transfer).await.0.as_deref(),
+        Some("pub-2")
+    );
+    assert!(matches!(
+        retry(&pool, "owner", transfer, "tiktok").await,
+        Err(PublishError::RetryBlocked)
+    ));
     executor.tick().await.expect("second tick");
     assert_eq!(fake.calls().len(), 3);
+    assert!(fake.polls().is_empty());
     cleanup(pool).await;
 }
 
@@ -2050,7 +2122,7 @@ async fn rejected_tiktok_choice_is_held_editable_and_dispatched_once_after_rebin
             TikTokStep::Transfer("pub-3", Ok(())),
         ],
     );
-    let executor = dispatching(&pool, &fake);
+    let executor = dispatching(&pool, &fake).await;
     executor.tick().await.expect("rejected tick");
     assert_eq!(
         queue_state(&pool, id, "tiktok").await,
@@ -2079,7 +2151,7 @@ async fn rejected_tiktok_choice_is_held_editable_and_dispatched_once_after_rebin
     assert_eq!(
         queue_state(&pool, id, "tiktok").await,
         (
-            queue_status::UNCERTAIN.into(),
+            queue_status::PROCESSING.into(),
             Some("tiktok_processing".into())
         )
     );
@@ -2108,6 +2180,7 @@ async fn retry_row_with_a_known_publish_id_is_quarantined_without_upload() {
     .await
     .expect("retry with publish id");
     dispatching(&pool, &fake)
+        .await
         .tick()
         .await
         .expect("quarantine tick");
@@ -2119,5 +2192,309 @@ async fn retry_row_with_a_known_publish_id_is_quarantined_without_upload() {
             Some("tiktok_transfer_uncertain".into())
         )
     );
+    cleanup(pool).await;
+}
+
+async fn age_tiktok(pool: &PgPool, id: i64, attempt: &str, started: Option<&str>) {
+    sqlx::query(
+        "UPDATE twitch_clips_upload_queue SET last_attempt_at = clock_timestamp() - $2::interval,
+         effect_started_at = COALESCE(clock_timestamp() - $3::interval, effect_started_at)
+         WHERE produced_video_id = $1 AND platform = 'tiktok'",
+    )
+    .bind(id)
+    .bind(attempt)
+    .bind(started)
+    .execute(pool)
+    .await
+    .expect("aged tiktok row");
+}
+
+async fn unclear_alerts(pool: &PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM social_autopilot_notifications WHERE content LIKE '%unklar%'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("alerts")
+}
+
+async fn external_id(pool: &PgPool, id: i64) -> Option<String> {
+    sqlx::query_scalar(
+        "SELECT external_id FROM twitch_clips_upload_queue WHERE produced_video_id = $1 AND platform = 'tiktok'",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .expect("external id")
+}
+
+#[tokio::test]
+async fn reconciliation_settles_processing_rows_without_unclear_alerts() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
+    let posted = tiktok_ready(&pool, "posted").await;
+    let inbox = tiktok_ready(&pool, "inbox").await;
+    let rejected = tiktok_ready(&pool, "rejected").await;
+    let slow = tiktok_ready(&pool, "slow").await;
+    let fake = TikTokFake::with(
+        &pool,
+        vec![
+            TikTokStep::Transfer("pub-a", Ok(())),
+            TikTokStep::Transfer("pub-b", Ok(())),
+            TikTokStep::Transfer("pub-c", Ok(())),
+            TikTokStep::Transfer("pub-d", Ok(())),
+        ],
+    );
+    let executor = dispatching(&pool, &fake).await;
+    executor.tick().await.expect("dispatch tick");
+    assert!(fake.polls().is_empty());
+    for id in [posted, inbox, rejected, slow] {
+        assert_eq!(
+            queue_state(&pool, id, "tiktok").await.0,
+            queue_status::PROCESSING
+        );
+        age_tiktok(&pool, id, "2 minutes", None).await;
+    }
+    fake.report(
+        "pub-a",
+        json!({"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": ["post-a"]}),
+    );
+    fake.report("pub-b", json!({"status": "SEND_TO_USER_INBOX"}));
+    fake.report(
+        "pub-c",
+        json!({"status": "FAILED", "fail_reason": "spam_risk"}),
+    );
+    fake.report("pub-d", json!({"status": "PROCESSING_UPLOAD"}));
+    let report = executor.tick().await.expect("reconcile tick");
+    assert_eq!(report.reconciled, 3);
+    assert_eq!(fake.polls().len(), 4);
+    assert_eq!(
+        queue_state(&pool, posted, "tiktok").await,
+        (queue_status::PUBLISHED.into(), None)
+    );
+    assert_eq!(external_id(&pool, posted).await.as_deref(), Some("post-a"));
+    assert!(tiktok_row(&pool, posted).await.3);
+    assert_eq!(
+        queue_state(&pool, inbox, "tiktok").await,
+        (
+            queue_status::FAILED.into(),
+            Some("tiktok_inbox_only".into())
+        )
+    );
+    assert!(!tiktok_row(&pool, inbox).await.3);
+    assert_eq!(
+        queue_state(&pool, rejected, "tiktok").await,
+        (queue_status::FAILED.into(), Some("tiktok_rejected".into()))
+    );
+    assert_eq!(
+        queue_state(&pool, slow, "tiktok").await,
+        (
+            queue_status::PROCESSING.into(),
+            Some("tiktok_processing".into())
+        )
+    );
+    assert_eq!(unclear_alerts(&pool).await, 0);
+    assert_eq!(fake.calls().len(), 4);
+    age_tiktok(&pool, slow, "2 minutes", Some("25 hours")).await;
+    executor.tick().await.expect("escalation tick");
+    assert_eq!(
+        queue_state(&pool, slow, "tiktok").await,
+        (
+            queue_status::UNCERTAIN.into(),
+            Some("tiktok_status_unconfirmed".into())
+        )
+    );
+    assert_eq!(unclear_alerts(&pool).await, 1);
+    assert_eq!(fake.calls().len(), 4);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn restart_recovers_started_rows_by_status_or_safe_retry() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
+    let transferred = tiktok_ready(&pool, "transferred").await;
+    let unsent = tiktok_ready(&pool, "unsent").await;
+    let fake = TikTokFake::with(
+        &pool,
+        vec![
+            TikTokStep::Transfer("pub-r", Ok(())),
+            TikTokStep::Fail(UploadError::Request("timeout".into())),
+        ],
+    );
+    let executor = dispatching(&pool, &fake).await;
+    executor.tick().await.expect("dispatch tick");
+    sqlx::query(
+        "UPDATE twitch_clips_upload_queue SET status = $2, next_retry_at = NULL,
+         outcome_reason = NULL WHERE produced_video_id = ANY($1) AND platform = 'tiktok'",
+    )
+    .bind(vec![transferred, unsent])
+    .bind(queue_status::EFFECT_STARTED)
+    .execute(&pool)
+    .await
+    .expect("crashed rows");
+    for id in [transferred, unsent] {
+        age_tiktok(&pool, id, "3 hours", Some("3 hours")).await;
+    }
+    fake.report(
+        "pub-r",
+        json!({"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": ["post-r"]}),
+    );
+    executor.tick().await.expect("restart tick");
+    assert_eq!(
+        queue_state(&pool, transferred, "tiktok").await,
+        (queue_status::PUBLISHED.into(), None)
+    );
+    assert_eq!(
+        external_id(&pool, transferred).await.as_deref(),
+        Some("post-r")
+    );
+    assert_eq!(
+        queue_state(&pool, unsent, "tiktok").await,
+        (
+            queue_status::RETRY.into(),
+            Some("tiktok_init_unconfirmed".into())
+        )
+    );
+    assert_eq!(fake.calls().len(), 2);
+    assert_eq!(fake.polls(), vec!["pub-r".to_string()]);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn owners_without_unified_cutover_are_held_until_switched() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
+    let id = tiktok_ready(&pool, "legacy").await;
+    let fake = TikTokFake::with(&pool, vec![TikTokStep::Transfer("pub-u", Ok(()))]);
+    let executor = PublishExecutor::new(pool.clone(), fake.clone()).with_tiktok_dispatch(true);
+    executor.tick().await.expect("legacy tick");
+    assert!(fake.calls().is_empty());
+    assert_eq!(
+        queue_state(&pool, id, "tiktok").await,
+        (
+            queue_status::HELD.into(),
+            Some("tiktok_effect_boundary_pending".into())
+        )
+    );
+    approve(&pool, "owner", id, &consented(&pool, id, &["tiktok"]).await)
+        .await
+        .expect("reapprove");
+    assert_eq!(
+        queue_state(&pool, id, "tiktok").await.0,
+        queue_status::RETRY
+    );
+    unify(&pool).await;
+    sqlx::query("UPDATE twitch_clips_upload_queue SET next_retry_at = clock_timestamp() - INTERVAL '1 minute' WHERE produced_video_id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("due retry");
+    executor.tick().await.expect("unified tick");
+    assert_eq!(fake.calls().len(), 1);
+    assert_eq!(
+        queue_state(&pool, id, "tiktok").await.0,
+        queue_status::PROCESSING
+    );
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn legacy_and_autopilot_rows_never_transfer_the_same_clip_twice() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
+    let id = tiktok_ready(&pool, "fenced").await;
+    let clip: i64 = sqlx::query_scalar(
+        "SELECT clip_id::bigint FROM twitch_clips_upload_queue WHERE produced_video_id = $1 AND platform = 'tiktok'",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("clip");
+    let legacy: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, title)
+         VALUES ($1, 'tiktok', 'inbox_pending', 'legacy') RETURNING id::bigint",
+    )
+    .bind(clip)
+    .fetch_one(&pool)
+    .await
+    .expect("legacy row");
+    let fake = TikTokFake::with(&pool, vec![TikTokStep::Transfer("pub-f", Ok(()))]);
+    let executor = dispatching(&pool, &fake).await;
+    executor.tick().await.expect("fenced tick");
+    assert!(fake.calls().is_empty());
+    assert_eq!(
+        queue_state(&pool, id, "tiktok").await,
+        (
+            queue_status::HELD.into(),
+            Some("tiktok_transfer_active".into())
+        )
+    );
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'failed' WHERE id = $1")
+        .bind(legacy)
+        .execute(&pool)
+        .await
+        .expect("legacy settled");
+    approve(&pool, "owner", id, &consented(&pool, id, &["tiktok"]).await)
+        .await
+        .expect("reapprove");
+    sqlx::query("UPDATE twitch_clips_upload_queue SET next_retry_at = clock_timestamp() - INTERVAL '1 minute' WHERE produced_video_id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("due retry");
+    executor.tick().await.expect("autopilot tick");
+    assert_eq!(fake.calls().len(), 1);
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'pending' WHERE id = $1")
+        .bind(legacy)
+        .execute(&pool)
+        .await
+        .expect("legacy pending");
+    assert!(!crate::tiktok_recovery::reserve(&pool, legacy)
+        .await
+        .expect("legacy reserve"));
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn unusable_files_are_held_with_their_own_reason() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
+    let id = tiktok_ready(&pool, "file").await;
+    let fake = TikTokFake::with(
+        &pool,
+        vec![TikTokStep::Fail(UploadError::not_started(UploadError::Io(
+            std::io::Error::other("unreadable"),
+        )))],
+    );
+    dispatching(&pool, &fake)
+        .await
+        .tick()
+        .await
+        .expect("file tick");
+    assert_eq!(
+        queue_state(&pool, id, "tiktok").await,
+        (
+            queue_status::HELD.into(),
+            Some("tiktok_file_invalid".into())
+        )
+    );
+    let (publish_id, _, started, _) = tiktok_row(&pool, id).await;
+    assert!(publish_id.is_none());
+    assert!(!started);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn snapshot_consent_follows_music_consent() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
+    let id = tiktok_ready(&pool, "music").await;
+    assert_eq!(tiktok_state(&pool, id).await, "bound");
+    sqlx::query("DELETE FROM social_media_settings WHERE key LIKE 'tiktok_music_consent:%'")
+        .execute(&pool)
+        .await
+        .expect("revoke music consent");
+    assert_eq!(tiktok_state(&pool, id).await, "stale");
     cleanup(pool).await;
 }

@@ -1836,7 +1836,8 @@ async fn main() {
                 let mut executor = tb_social_media::autopilot_publish::PublishExecutor::new(
                     pool.clone(),
                     Arc::new(publisher),
-                );
+                )
+                .with_tiktok_dispatch(true);
                 match BrokerRelay::new(&settings.broker) {
                     Ok(relay) => {
                         let dm = token_lifecycle_wiring::BrokerTokenLifecycleNotifier::from_config(

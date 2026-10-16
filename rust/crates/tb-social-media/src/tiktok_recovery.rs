@@ -41,10 +41,13 @@ pub(crate) async fn reserve_with_options(
     }
     let active: Option<i64> = sqlx::query_scalar(
         "SELECT id FROM twitch_clips_upload_queue \
-         WHERE clip_id = $1 AND platform = 'tiktok' AND status IN ('inbox', 'inbox_pending') \
+         WHERE clip_id = $1 AND platform = 'tiktok' \
+         AND (status IN ('inbox', 'inbox_pending') \
+             OR (produced_video_id IS NOT NULL AND status = ANY($2))) \
          ORDER BY id LIMIT 1",
     )
     .bind(clip_id)
+    .bind(autopilot_transfer_states())
     .fetch_optional(&mut *tx)
     .await?;
     if let Some(active) = active {
@@ -72,6 +75,45 @@ pub(crate) async fn reserve_with_options(
     .rows_affected();
     tx.commit().await?;
     Ok(changed == 1)
+}
+
+pub(crate) fn autopilot_transfer_states() -> [&'static str; 4] {
+    use crate::autopilot_publish::queue_status;
+    [
+        queue_status::EFFECT_STARTED,
+        queue_status::PROCESSING,
+        queue_status::UNCERTAIN,
+        queue_status::PUBLISHED,
+    ]
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PublishState {
+    Published(Option<String>),
+    Inbox,
+    Rejected,
+    Processing,
+    Unknown,
+}
+
+pub(crate) fn classify(response: &serde_json::Value) -> PublishState {
+    match response.get("status").and_then(serde_json::Value::as_str) {
+        Some("PUBLISH_COMPLETE") => PublishState::Published(
+            response
+                .get("publicaly_available_post_id")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|ids| ids.first())
+                .map(|id| match id.as_str() {
+                    Some(text) => text.to_owned(),
+                    None => id.to_string(),
+                })
+                .filter(|id| !id.trim().is_empty()),
+        ),
+        Some("SEND_TO_USER_INBOX") => PublishState::Inbox,
+        Some("FAILED") => PublishState::Rejected,
+        Some("PROCESSING_UPLOAD" | "PROCESSING_DOWNLOAD") => PublishState::Processing,
+        _ => PublishState::Unknown,
+    }
 }
 
 pub(crate) struct Checkpoint<'a> {
@@ -248,7 +290,7 @@ mod tests {
             .unwrap();
         sqlx::raw_sql(
             "CREATE TABLE twitch_clips_social_media (id BIGINT PRIMARY KEY, uploaded_tiktok BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT); \
-             CREATE TABLE twitch_clips_upload_queue (id BIGINT PRIMARY KEY, clip_id BIGINT, platform TEXT DEFAULT 'tiktok', status TEXT DEFAULT 'pending', last_attempt_at TIMESTAMPTZ, last_error TEXT); \
+             CREATE TABLE twitch_clips_upload_queue (id BIGINT PRIMARY KEY, clip_id BIGINT, produced_video_id BIGINT, platform TEXT DEFAULT 'tiktok', status TEXT DEFAULT 'pending', last_attempt_at TIMESTAMPTZ, last_error TEXT); \
              INSERT INTO twitch_clips_social_media (id) VALUES (1); \
              INSERT INTO twitch_clips_upload_queue (id, clip_id) VALUES (1,1),(2,1);"
         ).execute(&pool).await.unwrap();
@@ -415,5 +457,55 @@ mod tests {
         assert!(!reserve(&pool, 1).await.unwrap());
         rejected(&pool, 1, "operation-1").await.unwrap();
         assert!(reserve(&pool, 2).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn active_autopilot_transfer_blocks_legacy_reservation() {
+        let Some(pool) = pool("t_sm_tiktok_autopilot_fence").await else {
+            return;
+        };
+        sqlx::query(
+            "UPDATE twitch_clips_upload_queue SET produced_video_id = 7, status = $1 WHERE id = 2",
+        )
+        .bind(crate::autopilot_publish::queue_status::EFFECT_STARTED)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(!reserve(&pool, 1).await.unwrap());
+        sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'failed' WHERE id = 2")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'pending' WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(reserve(&pool, 1).await.unwrap());
+    }
+
+    #[test]
+    fn status_responses_map_to_distinct_states() {
+        use serde_json::json;
+        assert_eq!(
+            classify(&json!({"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": [7]})),
+            PublishState::Published(Some("7".into()))
+        );
+        assert_eq!(
+            classify(&json!({"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": [""]})),
+            PublishState::Published(None)
+        );
+        assert_eq!(
+            classify(&json!({"status": "SEND_TO_USER_INBOX"})),
+            PublishState::Inbox
+        );
+        assert_eq!(
+            classify(&json!({"status": "FAILED"})),
+            PublishState::Rejected
+        );
+        assert_eq!(
+            classify(&json!({"status": "PROCESSING_DOWNLOAD"})),
+            PublishState::Processing
+        );
+        assert_eq!(classify(&json!({})), PublishState::Unknown);
     }
 }

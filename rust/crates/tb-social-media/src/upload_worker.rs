@@ -938,19 +938,17 @@ impl UploadWorker {
             {
                 tracing::warn!(queue_id, %error, "TikTok-Veröffentlichungsstand konnte nicht gespeichert werden");
             }
-            let status = response.get("status").and_then(Value::as_str).unwrap_or("");
-            let (next, external_id, reason) = match status {
-                "PUBLISH_COMPLETE" => {
-                    let post_id = response
-                        .get("publicaly_available_post_id")
-                        .and_then(Value::as_array)
-                        .and_then(|ids| ids.first())
-                        .and_then(Value::as_str)
-                        .unwrap_or(&publish_id);
-                    ("completed", Some(post_id), None)
+            let state = crate::tiktok_recovery::classify(&response);
+            let (next, external_id, reason) = match &state {
+                crate::tiktok_recovery::PublishState::Published(post_id) => (
+                    "completed",
+                    Some(post_id.as_deref().unwrap_or(&publish_id)),
+                    None,
+                ),
+                crate::tiktok_recovery::PublishState::Inbox => {
+                    ("inbox", Some(publish_id.as_str()), None)
                 }
-                "SEND_TO_USER_INBOX" => ("inbox", Some(publish_id.as_str()), None),
-                "FAILED" => {
+                crate::tiktok_recovery::PublishState::Rejected => {
                     if let Err(error) =
                         crate::tiktok_recovery::rejected(&self.task.pool, queue_id, &publish_id)
                             .await

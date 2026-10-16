@@ -25,7 +25,7 @@ pub const AUTOPILOT_APPROVER: &str = "autopilot";
 pub const DASHBOARD_LINK: &str =
     "https://deutsche-deadlock-community.de/twitch/social-media?view=plan";
 const RECENT_FINISHED_VIDEOS: i64 = 50;
-const RETRY_BLOCKING_REASONS: [&str; 8] = [
+const RETRY_BLOCKING_REASONS: [&str; 11] = [
     "account_changed",
     "account_missing",
     "exact_file_changed",
@@ -33,17 +33,23 @@ const RETRY_BLOCKING_REASONS: [&str; 8] = [
     "tiktok_consent_missing",
     "tiktok_caption_changed",
     "tiktok_options_invalid",
+    "tiktok_file_invalid",
     "tiktok_music_consent_missing",
+    "tiktok_already_published",
+    "tiktok_transfer_active",
 ];
-const REAPPROVAL_REASONS: [&str; 8] = [
+const REAPPROVAL_REASONS: [&str; 11] = [
     "account_changed",
     "account_missing",
     "exact_file_changed",
     "review_required",
+    "tiktok_effect_boundary_pending",
     "tiktok_consent_missing",
     "tiktok_caption_changed",
     "tiktok_options_invalid",
+    "tiktok_file_invalid",
     "tiktok_music_consent_missing",
+    "tiktok_transfer_active",
 ];
 const TIKTOK_PRIVACY_LEVELS: [&str; 4] = [
     "PUBLIC_TO_EVERYONE",
@@ -63,6 +69,7 @@ pub(crate) mod queue_status {
     pub const PUBLISHED: &str = "completed";
     pub const RETRY: &str = "autopilot_retry";
     pub const HELD: &str = "autopilot_held";
+    pub const PROCESSING: &str = "autopilot_processing";
     pub const UNCERTAIN: &str = "autopilot_uncertain";
     pub const DISCARDED: &str = "autopilot_discarded";
     pub const FAILED: &str = "autopilot_failed";
@@ -305,25 +312,44 @@ fn stored_tiktok_options(metadata: &Value) -> Option<TikTokPostOptions> {
         .and_then(|options| serde_json::from_value(options).ok())
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TikTokAccount {
+    pub credential_id: Option<i32>,
+    pub platform_user_id: Option<String>,
+    pub music_consent: bool,
+}
+
 fn tiktok_consent_state(
     metadata: &Value,
     file_path: Option<&str>,
-    account: Option<&str>,
+    account: &TikTokAccount,
 ) -> &'static str {
     let Some(options) = stored_tiktok_options(metadata) else {
         return "missing";
     };
-    let digest = metadata
-        .pointer("/publication/hashes/tiktok")
-        .and_then(Value::as_str);
-    let current = account.is_some_and(|account| account == options.platform_user_id)
-        && digest == Some(options.approved_video_sha256.as_str())
-        && file_path == Some(options.video_path.as_str())
-        && options.caption == crate::ai_editor::metadata::tiktok_caption(metadata);
-    if current {
-        "bound"
-    } else {
-        "stale"
+    let (Some(file_path), Some(digest)) = (
+        file_path,
+        metadata
+            .pointer("/publication/hashes/tiktok")
+            .and_then(Value::as_str),
+    ) else {
+        return "stale";
+    };
+    let subject = TikTokSubject {
+        video_id: 0,
+        clip_id: 0,
+        file_path: file_path.to_owned(),
+        approved_video_sha256: digest.to_owned(),
+        caption: crate::ai_editor::metadata::tiktok_caption(metadata),
+        duration_ms: None,
+        credential_id: account.credential_id,
+        platform_user_id: account.platform_user_id.clone(),
+        music_consent: account.music_consent,
+        bound_options: None,
+    };
+    match subject.issue(&options) {
+        None => "bound",
+        Some(_) => "stale",
     }
 }
 
@@ -361,6 +387,7 @@ pub(crate) fn destination_state(status: &str) -> &'static str {
         queue_status::PUBLISHED => "published",
         queue_status::RETRY => "retry",
         queue_status::HELD => "held",
+        queue_status::PROCESSING => "processing",
         queue_status::UNCERTAIN => "uncertain",
         queue_status::DISCARDED => "discarded",
         queue_status::FAILED => "failed",
@@ -436,8 +463,8 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<PublishSnapshot, Pub
             account_id: accounts.get(platform).cloned().flatten(),
         })
         .collect();
-    let tiktok_account = accounts.get("tiktok").cloned().flatten();
-    let videos = videos_on(&mut connection, owner, tiktok_account.as_deref()).await?;
+    let tiktok_account = tiktok_account_on(&mut connection, owner).await?;
+    let videos = videos_on(&mut connection, owner, &tiktok_account).await?;
     let notifications = notifications_on(&mut connection, owner).await?;
     let discord: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM twitch_streamer_identities WHERE twitch_user_id = $1
@@ -467,7 +494,7 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<PublishSnapshot, Pub
 async fn videos_on(
     connection: &mut PgConnection,
     owner: &str,
-    tiktok_account: Option<&str>,
+    tiktok_account: &TikTokAccount,
 ) -> Result<Vec<PublishVideo>, PublishError> {
     let rows = sqlx::query(
         "WITH listed AS (
@@ -493,6 +520,7 @@ async fn videos_on(
         queue_status::EFFECT_STARTED,
         queue_status::RETRY,
         queue_status::HELD,
+        queue_status::PROCESSING,
         queue_status::UNCERTAIN,
         queue_status::FAILED,
     ])
@@ -933,6 +961,25 @@ async fn tiktok_subject_on(
     .await?;
     let (clip_id, duration_ms, metadata) = video.ok_or(PublishError::State)?;
     let metadata: Value = serde_json::from_str(&metadata)?;
+    let account = tiktok_account_on(connection, owner).await?;
+    Ok(TikTokSubject {
+        video_id: id,
+        clip_id,
+        file_path: binding.path.clone(),
+        approved_video_sha256: binding.digest.clone(),
+        caption: crate::ai_editor::metadata::tiktok_caption(&metadata),
+        duration_ms,
+        credential_id: account.credential_id,
+        platform_user_id: account.platform_user_id,
+        music_consent: account.music_consent,
+        bound_options: stored_tiktok_options(&metadata),
+    })
+}
+
+pub(crate) async fn tiktok_account_on(
+    connection: &mut PgConnection,
+    owner: &str,
+) -> Result<TikTokAccount, sqlx::Error> {
     let account: Option<(i32, Option<String>)> = sqlx::query_as(
         "SELECT id, platform_user_id FROM social_media_platform_auth
          WHERE twitch_user_id = $1 AND platform = 'tiktok' AND enabled = 1
@@ -949,17 +996,10 @@ async fn tiktok_subject_on(
         Some(account) => music_consent_on(connection, owner, account).await?,
         None => false,
     };
-    Ok(TikTokSubject {
-        video_id: id,
-        clip_id,
-        file_path: binding.path.clone(),
-        approved_video_sha256: binding.digest.clone(),
-        caption: crate::ai_editor::metadata::tiktok_caption(&metadata),
-        duration_ms,
+    Ok(TikTokAccount {
         credential_id,
         platform_user_id,
         music_consent,
-        bound_options: stored_tiktok_options(&metadata),
     })
 }
 
@@ -1002,6 +1042,7 @@ async fn tiktok_effect_started_on(
     .bind([
         queue_status::EFFECT_STARTED,
         queue_status::PUBLISHED,
+        queue_status::PROCESSING,
         queue_status::UNCERTAIN,
     ])
     .fetch_one(connection)
