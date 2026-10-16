@@ -1,5 +1,6 @@
 import type { ClipListResponseMitPosting, SocialClipMitPosting } from '@/api/socialMedia';
 import type { SocialPlatform } from '@/types/socialMedia';
+import type { PipelineSource, SourceEligibility } from './pipelineApi';
 
 export type QueueStage = 'all' | 'new' | 'review' | 'planned' | 'posted' | 'failed' | 'archive';
 export const QUEUE_FILTERS: Array<{ id: QueueStage; label: string }> = [
@@ -77,12 +78,6 @@ export function filterQueue(
   );
 }
 
-/** Vollständiger, kanalgebundener Bestand. Kommt zwischen zwei Seitenabrufen
- * ein Clip dazu, verschieben sich die Offset-Seiten: Überlappungen und ein
- * gewachsenes total werden über Dedup nach clip_db_id toleriert, statt die
- * Ansicht abzubrechen. Abgebrochen wird erst, wenn eine Seite leer bleibt,
- * eine volle Seite keinen einzigen neuen Clip bringt (auch nach einem
- * Neuanlauf ab Seite 1) oder der 200-Seiten-Rahmen gesprengt wird. */
 export async function loadQueueSnapshot(
   loadPage: (page: number) => Promise<ClipListResponseMitPosting>,
   signal?: AbortSignal,
@@ -103,11 +98,72 @@ export async function loadQueueSnapshot(
     if (result.items.length < result.page_size)
       return { items: [...items.values()], total, page: 1, page_size: total };
     if (items.size > previous) continue;
-    // Volle Seite ohne Fortschritt: die Offset-Seiten sind am Bestand
-    // vorbeigerutscht. Ein Neuanlauf ab Seite 1 verankert sie neu.
     if (restarts >= 1) throw new Error('queue_changed');
     restarts += 1;
     page = 0;
   }
   throw new Error('queue_too_large');
+}
+
+const ACTIVE_DESTINATIONS = ['pending', 'processing', 'waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule', 'waiting_exact_file', 'inbox_pending'];
+const DONE_DESTINATIONS = ['completed', 'inbox'];
+
+export function publishedPlatforms(source: PipelineSource): string[] {
+  return [...new Set([
+    ...source.destinations.filter((destination) => DONE_DESTINATIONS.includes(destination.status ?? '')).map((destination) => destination.platform),
+    ...source.legacy_publications.map((publication) => publication.platform),
+  ])];
+}
+
+export function failedPlatforms(source: PipelineSource): string[] {
+  const done = publishedPlatforms(source);
+  return [...new Set(source.destinations
+    .filter((destination) => destination.status === 'failed' && !done.includes(destination.platform))
+    .map((destination) => destination.platform))];
+}
+
+export function sourcePlatforms(source: PipelineSource): string[] {
+  return [...new Set([
+    ...source.destinations.map((destination) => destination.platform),
+    ...source.jobs.flatMap((job) => job.reservations.map((reservation) => reservation.platform)),
+    ...source.legacy_publications.map((publication) => publication.platform),
+  ])];
+}
+
+export function partialResult(source: PipelineSource): boolean {
+  return publishedPlatforms(source).length > 0 && failedPlatforms(source).length > 0;
+}
+
+function sourceActive(source: PipelineSource): boolean {
+  return source.destinations.some((destination) => ACTIVE_DESTINATIONS.includes(destination.status ?? 'pending'))
+    || source.jobs.some((job) => job.status === 'queued' || job.status === 'running')
+    || source.versions.some((version) => ['rendering', 'approved', 'scheduled'].includes(version.status));
+}
+
+function sourceInReview(source: PipelineSource): boolean {
+  return source.jobs.some((job) => job.status === 'review') || source.versions.some((version) => version.status === 'review');
+}
+
+export function sourceStage(source: PipelineSource): Exclude<QueueStage, 'all'> {
+  if (source.discarded_at) return 'archive';
+  if (sourceActive(source)) return 'planned';
+  if (sourceInReview(source)) return 'review';
+  if (failedPlatforms(source).length > 0 || (publishedPlatforms(source).length === 0 && source.jobs.some((job) => job.status === 'failed'))) return 'failed';
+  if (publishedPlatforms(source).length > 0 || source.published_at) return 'posted';
+  return 'new';
+}
+
+export type EligibilityFilter = SourceEligibility | 'all';
+
+export function filterSources(
+  sources: PipelineSource[],
+  filter: { eligibility: EligibilityFilter; stage: QueueStage; search: string; platform: SocialPlatform | 'all' },
+  title: (source: PipelineSource) => string,
+) {
+  const needle = filter.search.trim().toLocaleLowerCase();
+  return sources.filter((source) =>
+    (filter.eligibility === 'all' || source.eligibility === filter.eligibility)
+    && (filter.stage === 'all' || sourceStage(source) === filter.stage)
+    && (filter.platform === 'all' || sourcePlatforms(source).includes(filter.platform))
+    && (!needle || `${title(source)} ${source.clip_id}`.toLocaleLowerCase().includes(needle)));
 }

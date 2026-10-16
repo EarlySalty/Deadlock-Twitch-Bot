@@ -1,7 +1,9 @@
 import { fetchJson, withCookieCredentials } from "@/api/core";
+import type { LoadSourcesPage, PipelinePage } from "../../pipelineApi";
 import type { ImportPoolApi, PoolPreferences } from "./types";
 
 const PREFIX = "/twitch/social-media/api/autopilot";
+const PIPELINE_SOURCES = "/twitch/social-media/api/pipeline/sources";
 
 function endpoint(
   owner: string,
@@ -30,6 +32,12 @@ function jsonBody(value: unknown): RequestInit {
   };
 }
 
+export const fetchPipelineSources: LoadSourcesPage = (owner, limit, offset, signal) => {
+  if (!/^\d+$/.test(owner)) return Promise.reject(new Error("Bitte einen Twitch-Kanal auswählen."));
+  const query = new URLSearchParams({ twitch_user_id: owner, limit: String(limit), offset: String(offset) });
+  return request<PipelinePage>(`${PIPELINE_SOURCES}?${query}`, { signal });
+};
+
 export const importPoolApi: ImportPoolApi = {
   getPreferences: (owner, signal) =>
     request(endpoint(owner, "/preferences"), { signal }),
@@ -56,4 +64,5 @@ export const importPoolApi: ImportPoolApi = {
       endpoint(owner, `/pool/${encodeURIComponent(clipId)}/selection`),
       jsonBody({ selected }),
     ),
+  getSources: fetchPipelineSources,
 };

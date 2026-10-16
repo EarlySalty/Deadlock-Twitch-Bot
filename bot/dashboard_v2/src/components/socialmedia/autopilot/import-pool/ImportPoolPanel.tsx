@@ -2,16 +2,17 @@ import { globalTimezoneUrl } from '@/utils/socialMediaChannel';
 import { ImportPopover } from '../../ImportPopover';
 import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, ExternalLink, Film, Save } from "lucide-react";
+import { Archive, Save } from "lucide-react";
 
 import { useLanguage, useT } from "@/context/LanguageContext";
 import { importPoolApi } from "./api";
-import { activeImport, clipDuration, clipStatus, clipStatusTone, clipThumbnail, filterDescription, localTimestamp, parsePreferencesDraft, poolError, preferencesDraft, samePreferences, selectionAllowed, sourceMetadata, unauthorized, type PreferencesDraft } from "./presentation";
+import { activeImport, filterDescription, parsePreferencesDraft, poolError, preferencesDraft, samePreferences, unauthorized, type PreferencesDraft } from "./presentation";
+import { PipelineClips } from "../../PipelineClips";
+import { loadSourceCollection, poolBackedSources } from "../../pipelineApi";
 import { ImportProgress } from "./ImportProgress";
 import type { ImportJob, ImportPoolApi, ImportPoolPanelProps, PoolPreferences } from "./types";
 import "./ImportPoolPanel.css";
 
-const PAGE_SIZE = 24;
 const POLL_INTERVAL = 5000;
 
 type Completion = { after?: () => void };
@@ -61,11 +62,10 @@ function OwnerImportPool({
   const id = useId();
   const mounted = useRef(false);
   const [draft, setDraft] = useState<PreferencesDraft | null>(null);
-  const [offset, setOffset] = useState(0);
   const [feedback, setFeedback] = useState("");
   const scope = ["social-media", "autopilot", "import-pool", owner];
   const preferencesKey = [...scope, "preferences"];
-  const poolKey = [...scope, "pool"];
+  const poolKey = [...scope, "sources"];
   const latestKey = [...scope, "latest-import"];
 
   useEffect(() => {
@@ -90,8 +90,8 @@ function OwnerImportPool({
     (!parsed?.preferences || !samePreferences(parsed.preferences, saved)),
   );
   const poolQuery = useQuery({
-    queryKey: [...poolKey, saved, offset],
-    queryFn: ({ signal }) => api.getPool(owner, PAGE_SIZE, offset, signal),
+    queryKey: [...poolKey, saved],
+    queryFn: ({ signal }) => loadSourceCollection(api.getSources ?? poolBackedSources(api), owner, signal),
     enabled: Boolean(saved) && !preferencesQuery.isError,
     retry: false,
     refetchOnWindowFocus: false,
@@ -133,7 +133,7 @@ function OwnerImportPool({
   useEffect(() => {
     if (importCount !== undefined) {
       void queryClient.invalidateQueries({
-        queryKey: ["social-media", "autopilot", "import-pool", owner, "pool"],
+        queryKey: ["social-media", "autopilot", "import-pool", owner, "sources"],
       });
     }
   }, [importCount, importStatus, owner, queryClient]);
@@ -168,7 +168,6 @@ function OwnerImportPool({
       changed(after);
       if (mounted.current) {
         setDraft(null);
-        setOffset(0);
         setFeedback(
           "Zeitraum und Reihenfolge gespeichert. Bestehende Aufträge bleiben erhalten.",
         );
@@ -254,13 +253,6 @@ function OwnerImportPool({
     !poolQuery.isError &&
     !poolQuery.isFetching;
   const importKnown = latestQuery.isSuccess && !importQuery.isError;
-  const pageClips = page?.clips ?? [];
-  const selectableOnPage = pageClips.filter(
-    (clip) => clip.selected_at === null && selectionAllowed(clip),
-  );
-  const selectedOnPage = pageClips.filter(
-    (clip) => clip.selected_at !== null && selectionAllowed(clip),
-  );
   const selectionLocked = busy || blocked || !poolKnown;
 
   function bulkSelect(clipIds: string[], selected: boolean) {
@@ -568,41 +560,6 @@ function OwnerImportPool({
               </div>
             </form></ImportPopover>
           )}
-          {page && page.clips.length > 0 && (
-            <div className="import-pool-bulk">
-              <button
-                type="button"
-                className="studio-button"
-                title={t("Alle auf dieser Seite auswählen")}
-                disabled={selectionLocked || selectableOnPage.length === 0}
-                onClick={() =>
-                  bulkSelect(
-                    selectableOnPage.map((clip) => clip.clip_id),
-                    true,
-                  )
-                }
-              >
-                {t(
-                  bulkMutation.isPending
-                    ? "Auswahl wird gespeichert …"
-                    : "Alle auswählen",
-                )}
-              </button>
-              <button
-                type="button"
-                className="studio-button"
-                disabled={selectionLocked || selectedOnPage.length === 0}
-                onClick={() =>
-                  bulkSelect(
-                    selectedOnPage.map((clip) => clip.clip_id),
-                    false,
-                  )
-                }
-              >
-                {t("Auswahl aufheben")}
-              </button>
-            </div>
-          )}
         </div>
       </div>
       {errors.length > 0 && (
@@ -627,145 +584,21 @@ function OwnerImportPool({
             {t("Clip-Pool wird aktualisiert …")}
           </p>
         )}
-        {page && page.clips.length === 0 && (
-          <p className="import-pool-empty">
-            {t(
-              "In diesem Clip-Pool sind noch keine Clips erfasst. Mit einem historischen Import kannst du verfügbare Deadlock-Clips hinzufügen.",
-            )}
-          </p>
-        )}
-        {page && page.clips.length > 0 && (
-          <ul className="import-pool-clips">
-            {page.clips.map((clip) => {
-              const metadata = sourceMetadata(clip);
-              const thumbnail = clipThumbnail(clip);
-              const selected = clip.selected_at !== null;
-              const timezone = page.preferences.timezone;
-              const notes = [
-                clip.first_selected_at &&
-                  `${t("Erstmals ausgewählt")}: ${localTimestamp(clip.first_selected_at, timezone, locale)}`,
-                clip.processed_at &&
-                  `${t("Verarbeitet am")}: ${localTimestamp(clip.processed_at, timezone, locale)}`,
-                clip.published_at &&
-                  `${t("Veröffentlicht am")}: ${localTimestamp(clip.published_at, timezone, locale)}`,
-                !clip.eligible &&
-                  (clip.selected_at ||
-                    clip.processed_at ||
-                    clip.published_at ||
-                    clip.legacy_reserved) &&
-                  t("Außerhalb des gespeicherten Zeitraums"),
-                clip.clip_db_id === null &&
-                  t(
-                    "Verlauf erhalten. Eine Quelldatei für die Verarbeitung ist nicht nachgewiesen.",
-                  ),
-              ].filter((note): note is string => Boolean(note));
-              return (
-                <li
-                  key={clip.clip_id}
-                  data-clip-id={clip.clip_id}
-                  data-selected={selected ? "true" : undefined}
-                  className="import-pool-clip"
-                >
-                  <div className="import-pool-thumb">
-                    {thumbnail ? (
-                      <img src={thumbnail} alt="" loading="lazy" />
-                    ) : (
-                      <Film size={28} aria-hidden="true" />
-                    )}
-                    <label className="import-pool-pick">
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        disabled={selectionLocked || !selectionAllowed(clip)}
-                        aria-label={`${t("Vorziehen")}: ${metadata.title}`}
-                        title={t("Auto-Pilot nimmt diesen Clip zuerst")}
-                        onChange={(event) => {
-                          setFeedback("");
-                          selectionMutation.mutate({
-                            clipId: clip.clip_id,
-                            selected: event.target.checked,
-                            after: onChanged,
-                          });
-                        }}
-                      />
-                      <span>{t("Vorziehen")}</span>
-                    </label>
-                    {metadata.duration !== null && (
-                      <span className="import-pool-duration">
-                        {clipDuration(metadata.duration)}
-                      </span>
-                    )}
-                  </div>
-                  <div className="import-pool-clip-body">
-                    <h4 title={`${t("Clip-ID")}: ${clip.clip_id}`}>
-                      {metadata.title}
-                    </h4>
-                    <p className="import-pool-help">
-                      {localTimestamp(clip.source_created_at, timezone, locale)}
-                      {typeof clip.view_count === "number" &&
-                        ` · ${clip.view_count.toLocaleString(locale)} ${t("Aufrufe")}`}
-                    </p>
-                    <div className="import-pool-clip-foot">
-                      <span
-                        className="import-pool-chip"
-                        data-tone={clipStatusTone(clip)}
-                      >
-                        {t(clipStatus(clip))}
-                      </span>
-                      {metadata.url && (
-                        <a
-                          className="import-pool-link"
-                          href={metadata.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label={`${t("Auf Twitch ansehen")}: ${metadata.title}`}
-                          title={t("Auf Twitch ansehen")}
-                        >
-                          <ExternalLink size={15} aria-hidden="true" />
-                        </a>
-                      )}
-                    </div>
-                    {notes.length > 0 && (
-                      <ul className="import-pool-notes">
-                        {notes.map((note) => (
-                          <li key={note}>{note}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        {(offset > 0 || (page && page.total > page.limit)) && (
-          <nav
-            className="import-pool-pagination"
-            aria-label={t("Clip-Pool-Seiten")}
-          >
-            <button
-              type="button"
-              className="studio-button"
-              disabled={busy || poolQuery.isFetching || offset === 0}
-              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-            >
-              {t("Zurück")}
-            </button>
-            <span>
-              {t("Seite")} {Math.floor(offset / PAGE_SIZE) + 1}
-              {page && ` / ${Math.max(1, Math.ceil(page.total / PAGE_SIZE))}`}
-            </span>
-            <button
-              type="button"
-              className="studio-button"
-              disabled={
-                busy || !poolKnown || !page || offset + page.limit >= page.total
-              }
-              onClick={() => setOffset(offset + PAGE_SIZE)}
-            >
-              {t("Weiter")}
-            </button>
-          </nav>
+        {page && (
+          <PipelineClips
+            page={page}
+            selectionLocked={selectionLocked}
+            onSelect={(clipId, selected) => {
+              if (selectionLocked) return;
+              setFeedback("");
+              selectionMutation.mutate({ clipId, selected, after: onChanged });
+            }}
+            onBulkSelect={bulkSelect}
+            onArchived={() => {
+              void queryClient.invalidateQueries({ queryKey: poolKey });
+              onChanged?.();
+            }}
+          />
         )}
       </div>
     </section>
