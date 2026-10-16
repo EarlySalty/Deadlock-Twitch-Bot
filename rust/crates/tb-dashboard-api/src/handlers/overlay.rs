@@ -376,10 +376,14 @@ where
                 let body = compute().await;
                 {
                     let mut cache = lock_cache(cache);
+                    let now = Instant::now();
+                    cache
+                        .entries
+                        .retain(|_, entry| now.duration_since(entry.inserted_at) < ttl);
                     cache.entries.insert(
                         key.clone(),
                         CacheEntry {
-                            inserted_at: Instant::now(),
+                            inserted_at: now,
                             body: body.clone(),
                         },
                     );
