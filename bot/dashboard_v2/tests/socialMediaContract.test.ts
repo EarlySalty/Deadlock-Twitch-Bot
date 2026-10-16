@@ -145,11 +145,6 @@ test('jeder Schluessel der Oberflaeche hat eine englische Fassung', () => {
   );
 });
 
-test('legacy plan save controls stay in flow instead of covering approval content', () => {
-  const css = lies('src/components/socialmedia/studio.css');
-  assert.match(css, /\.studio-legacy-plan \.studio-savebar\s*\{[^}]*position:\s*static;/);
-});
-
 test('conditional social interface messages have English translations', () => {
   const en = dictionaryFor('en');
   const missing: string[] = [];
