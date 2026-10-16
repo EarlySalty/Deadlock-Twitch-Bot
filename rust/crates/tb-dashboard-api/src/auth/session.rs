@@ -3224,6 +3224,14 @@ print(f.encrypt(payload.encode()).decode(), end='')
         ensure_partners_table(&pool).await;
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
+        sqlx::raw_sql(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES ('888002', 'blocked_user');
+             INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, source) VALUES
+                ('888002', 1289721245281292288, true, 'migration');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, technical_pause_reason)
              VALUES ($1, $2, 'active', 'blocked')
@@ -3258,6 +3266,8 @@ print(f.encrypt(payload.encode()).decode(), end='')
             "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES
                 ('902001', 'former'), ('902002', 'token_err'), ('902003', 'banned'),
                 ('902004', 'former_banned'), ('902005', 'former_excluded'), ('902006', 'former_kicked');
+             INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, source) VALUES
+                ('902003', 1289721245281292288, true, 'migration');
              INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, source, deactivated_by, deactivated_at) VALUES
                 ('902001', 1289721245281292288, false, 'migration', 'migration', now()),
                 ('902002', 1289721245281292288, false, 'migration', 'migration', now()),
