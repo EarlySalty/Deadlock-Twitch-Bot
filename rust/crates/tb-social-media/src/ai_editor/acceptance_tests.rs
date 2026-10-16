@@ -597,19 +597,27 @@ fn assert_delivered(call: &Call, video: &ProducedVideo, hash: &str) {
     );
 }
 
-fn on_large_stack(cell: Cell) {
+fn on_large_stack<F, Fut>(test: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()>,
+{
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(move || {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("cell runtime")
-                .block_on(run_cell(cell))
+                .expect("test runtime")
+                .block_on(test())
         })
-        .expect("cell thread")
+        .expect("test thread")
         .join()
-        .expect("cell passed");
+        .expect("test passed");
+}
+
+fn cell_on_large_stack(cell: Cell) {
+    on_large_stack(move || run_cell(cell));
 }
 
 async fn run_cell(cell: Cell) {
@@ -747,7 +755,7 @@ async fn run_cell(cell: Cell) {
 
 #[test]
 fn acceptance_t1_upload_with_review() {
-    on_large_stack(Cell {
+    cell_on_large_stack(Cell {
         name: "T1",
         mode: PipelineMode::Upload,
         review: ReviewPolicy::Required,
@@ -756,7 +764,7 @@ fn acceptance_t1_upload_with_review() {
 
 #[test]
 fn acceptance_t2_upload_without_review() {
-    on_large_stack(Cell {
+    cell_on_large_stack(Cell {
         name: "T2",
         mode: PipelineMode::Upload,
         review: ReviewPolicy::Off,
@@ -765,7 +773,7 @@ fn acceptance_t2_upload_without_review() {
 
 #[test]
 fn acceptance_t3_ai_text_with_review() {
-    on_large_stack(Cell {
+    cell_on_large_stack(Cell {
         name: "T3",
         mode: PipelineMode::UploadText,
         review: ReviewPolicy::Required,
@@ -774,7 +782,7 @@ fn acceptance_t3_ai_text_with_review() {
 
 #[test]
 fn acceptance_t4_ai_text_without_review() {
-    on_large_stack(Cell {
+    cell_on_large_stack(Cell {
         name: "T4",
         mode: PipelineMode::UploadText,
         review: ReviewPolicy::Off,
@@ -783,7 +791,7 @@ fn acceptance_t4_ai_text_without_review() {
 
 #[test]
 fn acceptance_t5_ai_edit_with_review() {
-    on_large_stack(Cell {
+    cell_on_large_stack(Cell {
         name: "T5",
         mode: PipelineMode::AiEdit,
         review: ReviewPolicy::Required,
@@ -792,7 +800,7 @@ fn acceptance_t5_ai_edit_with_review() {
 
 #[test]
 fn acceptance_t6_ai_edit_without_review() {
-    on_large_stack(Cell {
+    cell_on_large_stack(Cell {
         name: "T6",
         mode: PipelineMode::AiEdit,
         review: ReviewPolicy::Off,
@@ -801,7 +809,7 @@ fn acceptance_t6_ai_edit_without_review() {
 
 #[test]
 fn acceptance_veto_publishes_only_after_the_deadline() {
-    on_large_stack(Cell {
+    cell_on_large_stack(Cell {
         name: "veto",
         mode: PipelineMode::Upload,
         review: ReviewPolicy::VetoUntilDeadline,
@@ -814,8 +822,12 @@ fn same_weekday_slots(now: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
     (at(10), at(20))
 }
 
-#[tokio::test]
-async fn acceptance_per_platform_schedule_on_one_weekday_never_posts_early() {
+#[test]
+fn acceptance_per_platform_schedule_on_one_weekday_never_posts_early() {
+    on_large_stack(per_platform_schedule_never_posts_early);
+}
+
+async fn per_platform_schedule_never_posts_early() {
     let cell = Cell {
         name: "per-platform",
         mode: PipelineMode::Upload,
