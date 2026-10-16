@@ -126,3 +126,25 @@ Global AI switch `external_llm_consent` needs an admin UI (set to true in prod o
 - Integrator before `--apply`: bd04cb's dry-run line must read `mode=upload review=off source=legacy-mapped`. If it shows `source=explicit-new`, the channel has a saved Planen choice and the user must decide (not checkable without prod DB access).
 - Test harness defect (also on origin/main): `upload_worker::tests` race in parallel because `social_media_video_production` is a database-wide advisory lock shared across test schemas; all 16 pass with `--test-threads=1`.
 - Still U18: Instagram 5xx retry, the 63 s retry hold, `--apply` plan rebuild cost per owner, misplaced doc comments in upload_worker.rs/clip_queue.rs; owners with no targets become unified with autopilot off.
+
+### From U18 (caecbde9c, 2026-10-16)
+- Acceptance harness `ai_editor::pipeline::tests::acceptance` (`src/ai_editor/acceptance_tests.rs`): throwaway Postgres, fake publisher for YouTube/TikTok/Instagram, no provider or STT call (`llm_usage` stays 0), real `PublishExecutor` with TikTok dispatch.
+- Cells, all green (also at opt-level 0):
+
+  | Cell | Mode | Review | Result |
+  |---|---|---|---|
+  | T1 | upload | required | ok |
+  | T2 | upload | off | ok |
+  | T3 | AI text | required | ok |
+  | T4 | AI text | off | ok |
+  | T5 | AI edit | required | ok |
+  | T6 | AI edit | off | ok |
+  | veto | upload | veto until deadline | ok |
+  | per-platform schedule (two times on one weekday) | upload | required | ok |
+  | barrier | legacy rows for unified owner | - | ok |
+
+- Per cell: no upload before approval, upload mode makes no AI call, text-only has no edit stage, per-platform text override stays on its platform, TikTok needs per-post consent and never gets it automatically, held states show a reason, every destination gets the exact hash and the frozen text, exactly one post per selected destination, later slots after the first, unselected destinations never contacted, no early post on shared and per-platform schedules, no republish after restart or stale reclaim, completed destination never uploads again.
+- User decision (confirmed 2026-10-16): owners with no social targets cut over as unified with autopilot off; nothing posts until the streamer picks platforms. Asserted by `tests/pipeline_migration.rs::owner_without_targets_cuts_over_unified_with_autopilot_off`.
+- No production defect found. Test-only finding: the unoptimized test profile overflows the default 2 MB test thread stack in the AI edit and per-platform cells, so those run on a 64 MB thread.
+- Tests vs baseline: diff touches only test code in tb-social-media, so tb-dashboard-api and dashboard_v2 are unchanged. Acceptance 10/10 and pipeline_migration 5/5 locally; clippy shows only the two existing warnings (tb-raid signup_denylist.rs, test-support postgres.rs `start`). A full remote rerun was blocked by leaked `uplink-api-pg-*` test Postgres processes holding both ionos slot locks (foreign, left untouched).
+- Still open: no HTTP-level provider fake (publisher is faked above the uploaders); legacy drain covered by the existing pipeline_migration tests, not the harness; Instagram 5xx retry; the 63 s retry hold; `--apply` plan rebuild per owner; misplaced doc comments in upload_worker.rs/clip_queue.rs; real upload matrix only after explicit user go.
