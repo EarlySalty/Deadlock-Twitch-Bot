@@ -973,7 +973,8 @@ impl<'a> Context<'a> {
                 .cloned()
                 .unwrap_or_default(),
         };
-        let slots_conflict = !canonical_slots.is_empty() && sorted(canonical_slots) != slots;
+        let slots_conflict =
+            auto_post && !canonical_slots.is_empty() && sorted(canonical_slots) != slots;
         let target_conflict = !settings.target_platforms.is_empty()
             && settings.target_platforms.contains(&platform) != auto_post;
         if slots_conflict || target_conflict {
@@ -1077,8 +1078,13 @@ impl<'a> Context<'a> {
             .map(|(_, policy)| policy.clone())
             .unwrap_or_default();
         let mut timezone = canonical.map(|(settings, _)| settings.timezone.clone());
-        let mut targets = BTreeSet::new();
-        let mut patterns = BTreeMap::<String, Vec<ScheduleSlot>>::new();
+        let mut targets: BTreeSet<String> = canonical
+            .map(|(settings, _)| settings.target_platforms.iter().cloned().collect())
+            .unwrap_or_default();
+        let mut patterns = canonical
+            .map(|(settings, policy)| canonical_patterns(settings, policy, &targets))
+            .unwrap_or_default();
+        let mut legacy_schedule = false;
         for mapping in rows {
             let Some(subject) = &mapping.canonical_subject else {
                 continue;
@@ -1106,6 +1112,7 @@ impl<'a> Context<'a> {
                         .unwrap_or_default();
                     targets.insert(platform.clone());
                     patterns.insert(platform, slots);
+                    legacy_schedule = true;
                 }
                 Some("tiktok_defaults") => {
                     let description = subject["text_default_override"]["description"]
@@ -1122,6 +1129,16 @@ impl<'a> Context<'a> {
                 }
                 _ => {}
             }
+        }
+        if !legacy_schedule {
+            return json!({
+                "policy": policy,
+                "timezone": timezone,
+                "target_platforms": targets,
+                "schedule_slots": canonical
+                    .map(|(settings, _)| settings.schedule_slots.clone())
+                    .unwrap_or_default(),
+            });
         }
         let first = patterns.values().next().cloned();
         let shared_slots = if patterns.values().all(|slots| Some(slots) == first.as_ref()) {
@@ -1140,6 +1157,27 @@ impl<'a> Context<'a> {
             "schedule_slots": shared_slots,
         })
     }
+}
+
+fn canonical_patterns(
+    settings: &AutopilotSettings,
+    policy: &PipelinePolicy,
+    targets: &BTreeSet<String>,
+) -> BTreeMap<String, Vec<ScheduleSlot>> {
+    targets
+        .iter()
+        .map(|platform| {
+            let slots = match policy.schedule_scope {
+                PolicyScope::Shared => settings.schedule_slots.clone(),
+                PolicyScope::PerPlatform => policy
+                    .platform_schedule_slots
+                    .get(platform)
+                    .cloned()
+                    .unwrap_or_default(),
+            };
+            (platform.clone(), sorted(slots))
+        })
+        .collect()
 }
 
 fn map_queue(row: &LegacyRow) -> Outcome {

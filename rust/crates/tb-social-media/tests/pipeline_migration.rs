@@ -38,7 +38,8 @@ async fn seed(pool: &PgPool) {
             ('alpha', 'youtube', TRUE, 5, 1, '["18:00"]', '100'),
             ('alpha', 'tiktok', TRUE, 5, 1, '["18:00"]', '100'),
             ('alpha', 'instagram', FALSE, 0, 0, '[]', '100'),
-            ('beta', 'youtube', TRUE, 3, 1, '["20:00"]', NULL);
+            ('beta', 'youtube', TRUE, 3, 1, '["20:00"]', NULL),
+            ('beta', 'tiktok', FALSE, 4, 1, '["18:00"]', NULL);
         INSERT INTO social_media_category_settings (streamer_login, category_key, auto_post, twitch_user_id) VALUES
             ('alpha', 'deadlock', TRUE, '100'), ('alpha', 'other', TRUE, '100');
         INSERT INTO social_media_autopilot_settings (twitch_user_id, enabled, timezone, schedule_slots, target_platforms)
@@ -251,6 +252,26 @@ async fn legacy_zustand_wird_verlustfrei_und_idempotent_abgebildet() {
     let (disposition, reason, _) = mapping(&pool, SCHEDULES, "beta:youtube").await;
     assert_eq!(disposition, "unresolved");
     assert_eq!(reason.as_deref(), Some("conflicts_with_canonical_schedule"));
+    let (disposition, reason, _) = mapping(&pool, SCHEDULES, "beta:tiktok").await;
+    assert_eq!(disposition, "mapped");
+    assert_eq!(reason, None);
+    let beta: String = sqlx::query_scalar(
+        "SELECT reconciliation::text FROM social_pipeline_cutover WHERE twitch_user_id = '200'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Umstellung beta");
+    let beta: Value = serde_json::from_str(&beta).expect("JSON");
+    let beta_proposal = &beta["proposed_policy"];
+    assert_eq!(
+        beta_proposal["target_platforms"],
+        serde_json::json!(["youtube"])
+    );
+    assert_eq!(
+        beta_proposal["schedule_slots"],
+        serde_json::json!([{"weekday": 1, "local_time": "09:00"}])
+    );
+    assert_eq!(beta["ready"], false);
     let (disposition, _, _) = mapping(&pool, "social_media_category_settings", "alpha:other").await;
     assert_eq!(disposition, "history");
 
