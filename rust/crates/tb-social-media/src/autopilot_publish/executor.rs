@@ -48,8 +48,10 @@ const RETENTION_OVER: &str = "v.metadata #> '{artifact_retention,unresolved_sinc
         < clock_timestamp() - make_interval(days => $3)";
 const AUTOMATIC: &str = "CASE WHEN s.review_policy = 'veto_until_deadline'
     THEN v.policy_snapshot ->> 'review_policy' = 'veto_until_deadline'
-        AND jsonb_typeof(v.metadata -> 'veto_deadline') = 'string'
-        AND (v.metadata ->> 'veto_deadline')::timestamptz <= clock_timestamp()
+        AND CASE WHEN jsonb_typeof(v.metadata -> 'veto_deadline') = 'string'
+            AND v.metadata ->> 'veto_deadline' ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$'
+            THEN (v.metadata ->> 'veto_deadline')::timestamptz <= clock_timestamp()
+            ELSE FALSE END
     ELSE s.publish_mode = 'full_auto' END";
 const NOT_DEFERRED: &str = "NOT COALESCE(v.autopilot_deferred_stage = $1
     AND v.autopilot_deferred_until > clock_timestamp(), FALSE)";

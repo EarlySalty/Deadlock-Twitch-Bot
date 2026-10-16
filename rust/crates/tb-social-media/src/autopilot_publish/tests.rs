@@ -2556,6 +2556,14 @@ async fn veto_publishes_only_after_the_deadline_and_never_a_vetoed_video() {
     .execute(&pool)
     .await
     .expect("no deadline");
+    let malformed = veto_video(&pool, "malformed", "veto_until_deadline", -1).await;
+    sqlx::query(
+        "UPDATE social_produced_videos SET metadata = metadata || '{\"veto_deadline\": \"soon\"}' WHERE id = $1",
+    )
+    .bind(malformed)
+    .execute(&pool)
+    .await
+    .expect("malformed deadline");
     let frozen = veto_video(&pool, "frozen", "required", -1).await;
     let view = snapshot(&pool, "owner").await.expect("snapshot");
     assert_eq!(view.settings.review_mode, ReviewMode::VetoUntilDeadline);
@@ -2581,7 +2589,7 @@ async fn veto_publishes_only_after_the_deadline_and_never_a_vetoed_video() {
     assert_eq!(video_status(&pool, waiting).await, "review");
     assert_eq!(approval_count(&pool, waiting).await, 0);
     assert_eq!(video_status(&pool, vetoed).await, "rejected");
-    for id in [vetoed, declined, undated, frozen] {
+    for id in [vetoed, declined, undated, malformed, frozen] {
         let automatic: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM social_media_clip_approval WHERE produced_video_id = $1 AND approver_user_id = 'autopilot'",
         )

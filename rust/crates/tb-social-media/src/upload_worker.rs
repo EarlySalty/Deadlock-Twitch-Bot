@@ -1026,7 +1026,13 @@ impl UploadWorker {
             .ok_or(UploadError::NotAuthenticated)?;
         let uploader = crate::uploaders::tiktok::direct_post_uploader(&credentials, &options)
             .map_err(|error| match error {
-                UploadError::NotStarted(cause) => *cause,
+                UploadError::NotStarted(cause) => match *cause {
+                    UploadError::NotAuthenticated => UploadError::Validation(
+                        "Bitte verbinde TikTok erneut, damit Clips direkt veröffentlicht werden können."
+                            .into(),
+                    ),
+                    cause => cause,
+                },
                 other => other,
             })?;
         Ok(Arc::new(uploader))
