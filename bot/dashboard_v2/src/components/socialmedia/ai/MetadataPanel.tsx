@@ -3,7 +3,7 @@ import { editorErrorExplanation } from './failure';
 import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AiCopyPlatform, AiPlatformCopy, AiVersionMetadata } from './api';
-import { AI_COPY_PLATFORMS, fetchAiVersionMetadata, saveAiVersionMetadata } from './api';
+import { fetchAiVersionMetadata, saveAiVersionMetadata } from './api';
 
 type Draft = Record<AiCopyPlatform, { title: string; description: string; hashtags: string }>;
 
@@ -84,9 +84,11 @@ export function MetadataPanel({ channel, videoId, disabled = false, onEditingCha
   if (metadata.isError) return <div className="social-ai-alert" role="alert"><div><p>{t("Titel und Beschreibungen konnten nicht geladen werden.")}</p><button type="button" className="studio-button" onClick={() => { void metadata.refetch(); }}>{t("Erneut laden")}</button></div></div>;
   const stored = toDraft(metadata.data);
   const current = draft ?? stored;
-  const shared = mode?.videoId === videoId && mode.channel === channel ? mode.shared : AI_COPY_PLATFORMS.every((platform) => JSON.stringify(stored[platform]) === JSON.stringify(stored.youtube));
+  const targets = metadata.data.targets;
+  const lead = targets[0];
+  const shared = mode?.videoId === videoId && mode.channel === channel ? mode.shared : targets.every((platform) => JSON.stringify(stored[platform]) === JSON.stringify(stored[lead]));
   const copy = toCopy(current);
-  const issues = AI_COPY_PLATFORMS.map((platform) => ({ platform, list: copyIssues(platform, copy[platform]) }));
+  const issues = targets.map((platform) => ({ platform, list: copyIssues(platform, copy[platform]) }));
   const valid = issues.every((entry) => entry.list.length === 0);
   const editable = metadata.data.editable && !save.isPending && !save.isError && !metadata.isFetching && !disabled;
   const update = (platform: AiCopyPlatform, field: keyof Draft[AiCopyPlatform], value: string) => {
@@ -101,13 +103,13 @@ export function MetadataPanel({ channel, videoId, disabled = false, onEditingCha
       <legend>{t("Texte für die Plattformen")}</legend>
       <label><input type="radio" name={`${formId}-mode`} checked={shared} onChange={() => {
         setMode({ videoId, channel, shared: true });
-        setDraft({ youtube: { ...current.youtube }, tiktok: { ...current.youtube }, instagram: { ...current.youtube } });
+        setDraft({ youtube: { ...current[lead] }, tiktok: { ...current[lead] }, instagram: { ...current[lead] } });
         save.reset();
       }} />{t("Für alle Plattformen gleich")}</label>
       <label><input type="radio" name={`${formId}-mode`} checked={!shared} onChange={() => { setMode({ videoId, channel, shared: false }); }} />{t("Je Plattform getrennt")}</label>
-      {!shared && <p>{t("Beim Zusammenführen werden die YouTube-Texte für alle Plattformen übernommen.")}</p>}
+      {!shared && <p>{lead === 'youtube' ? t("Beim Zusammenführen werden die YouTube-Texte für alle Plattformen übernommen.") : t("Beim Zusammenführen werden die Texte von {platform} für alle Plattformen übernommen.", { platform: labels[lead] })}</p>}
     </fieldset>
-    {(shared ? ['youtube'] as const : AI_COPY_PLATFORMS).map((platform) => {
+    {(shared ? [lead] : targets).map((platform) => {
       const id = `${formId}-${platform}`;
       const platformIssues = shared ? [...new Set(issues.flatMap((entry) => entry.list))] : issues.find((entry) => entry.platform === platform)?.list ?? [];
       return <fieldset key={platform} disabled={!editable}>
@@ -117,8 +119,8 @@ export function MetadataPanel({ channel, videoId, disabled = false, onEditingCha
         <textarea id={`${id}-description`} rows={3} value={current[platform].description} onChange={(event) => update(platform, 'description', event.target.value)} />
         <label htmlFor={`${id}-hashtags`}>{t("Hashtags")}</label>
         <input id={`${id}-hashtags`} type="text" value={current[platform].hashtags} onChange={(event) => update(platform, 'hashtags', event.target.value)} placeholder="#deadlock #clips" />
-        {(shared ? AI_COPY_PLATFORMS : [platform]).map((target) => <small key={target} style={{ display: 'block' }}>{labels[target]}: {usage(target, copy[target], t)}</small>)}
-        {(shared || platform === 'youtube') && <small>{t("YouTube: Beschreibung und Hashtags einschließlich #Shorts höchstens 5000 Bytes.")}</small>}
+        {(shared ? targets : [platform]).map((target) => <small key={target} style={{ display: 'block' }}>{labels[target]}: {usage(target, copy[target], t)}</small>)}
+        {(shared ? targets.includes('youtube') : platform === 'youtube') && <small>{t("YouTube: Beschreibung und Hashtags einschließlich #Shorts höchstens 5000 Bytes.")}</small>}
         {platformIssues.map((issue) => <p key={issue} className="social-ai-caution" role="alert">{t(issue)}</p>)}
       </fieldset>;
     })}

@@ -89,6 +89,7 @@ test('D12 metadata validation and loading states follow the dashboard language',
       const metadata: AiVersionMetadata = {
         video_id: 12,
         editable: true,
+        targets: ['youtube', 'tiktok', 'instagram'],
         platforms: {
           youtube: { title: '<invalid>', description: 'a'.repeat(5001), hashtags: ['a'.repeat(101)] },
           tiktok: { title: '', description: 'a'.repeat(2201), hashtags: Array.from({ length: 31 }, () => 'tag') },

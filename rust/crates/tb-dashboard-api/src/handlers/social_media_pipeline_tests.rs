@@ -70,7 +70,7 @@ async fn schema() -> PgPool {
         CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL,
             status TEXT DEFAULT 'pending', scheduled_at TIMESTAMPTZ, title TEXT, description TEXT, hashtags TEXT, priority INTEGER DEFAULT 0,
             attempts INTEGER DEFAULT 0, quota_deferrals INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ DEFAULT NOW(), completed_at TIMESTAMPTZ)")
+            created_at TIMESTAMPTZ DEFAULT NOW(), completed_at TIMESTAMPTZ, produced_video_id BIGINT)")
         .execute(&pool).await.unwrap();
     for migration in [
         include_str!("../../../../migrations/20261011100000_social_autopilot_contracts.sql"),

@@ -7,9 +7,9 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 async fn fixture() -> (crate::test_database::Database, DashboardAuthState, Router) {
-    let database = crate::test_database::Database::new().await;
+    let database = crate::guild_onboarding::tests::fixture().await;
     let pool = &database.pool;
-    sqlx::raw_sql("CREATE TABLE public.twitch_streamers(twitch_user_id TEXT PRIMARY KEY); INSERT INTO public.twitch_streamers VALUES ('101'); CREATE TABLE public.twitch_clips_social_media(id BIGINT PRIMARY KEY); CREATE TABLE public.social_produced_videos(id BIGSERIAL PRIMARY KEY,twitch_user_id TEXT NOT NULL,mode TEXT NOT NULL,metadata JSONB NOT NULL DEFAULT '{}'); CREATE TABLE public.llm_usage(id BIGSERIAL PRIMARY KEY,ts TEXT NOT NULL,purpose TEXT,provider TEXT,model TEXT,attempt_state TEXT,tokens_in BIGINT,tokens_out BIGINT,latency_ms BIGINT); CREATE TABLE public.dashboard_sessions(session_id TEXT PRIMARY KEY,session_type TEXT NOT NULL,payload_enc BYTEA NOT NULL,created_at DOUBLE PRECISION NOT NULL,expires_at DOUBLE PRECISION NOT NULL); CREATE TABLE public.twitch_partners(id BIGINT PRIMARY KEY,twitch_login TEXT NOT NULL,twitch_user_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active',technical_pause_reason TEXT,admin_archived_at TEXT,departnered_at TEXT,partnered_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+    sqlx::raw_sql("CREATE TABLE public.twitch_streamers(twitch_user_id TEXT PRIMARY KEY); INSERT INTO public.twitch_streamers VALUES ('101'); CREATE TABLE public.twitch_clips_social_media(id BIGINT PRIMARY KEY); CREATE TABLE public.social_produced_videos(id BIGSERIAL PRIMARY KEY,twitch_user_id TEXT NOT NULL,mode TEXT NOT NULL,metadata JSONB NOT NULL DEFAULT '{}'); CREATE TABLE public.llm_usage(id BIGSERIAL PRIMARY KEY,ts TEXT NOT NULL,purpose TEXT,provider TEXT,model TEXT,attempt_state TEXT,tokens_in BIGINT,tokens_out BIGINT,latency_ms BIGINT); CREATE TABLE public.dashboard_sessions(session_id TEXT PRIMARY KEY,session_type TEXT NOT NULL,payload_enc BYTEA NOT NULL,created_at DOUBLE PRECISION NOT NULL,expires_at DOUBLE PRECISION NOT NULL)")
         .execute(pool).await.expect("isolated schema");
     for migration in [
         include_str!("../../../../migrations/20261011200001_social_ai_provider_usage.sql"),
@@ -93,9 +93,8 @@ async fn m4_registered_routes_enforce_real_admin_session_and_csrf() {
             .status(),
         StatusCode::UNAUTHORIZED
     );
-    sqlx::query("INSERT INTO public.twitch_partners(id,twitch_login,twitch_user_id) VALUES(101,'fixture','101')").execute(&database.pool).await.expect("actual partner");
     let partner = state
-        .create_partner_session("fixture", "101", "Fixture")
+        .create_partner_session("existing", "42", "Fixture")
         .await
         .expect("partner session");
     let partner_cookie = format!(
@@ -313,9 +312,8 @@ async fn external_consent_requires_admin_csrf_and_records_actor() {
         .status(),
         StatusCode::UNAUTHORIZED
     );
-    sqlx::query("INSERT INTO public.twitch_partners(id,twitch_login,twitch_user_id) VALUES(101,'fixture','101')").execute(&database.pool).await.expect("partner");
     let partner = state
-        .create_partner_session("fixture", "101", "Fixture")
+        .create_partner_session("existing", "42", "Fixture")
         .await
         .expect("partner session");
     let cookie = format!(

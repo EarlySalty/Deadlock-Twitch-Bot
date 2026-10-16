@@ -172,7 +172,7 @@ pub(crate) async fn queue_upload_on(
     } else {
         false
     };
-    sqlx::query("UPDATE twitch_clips_upload_queue SET status = CASE WHEN $3 OR (platform = 'tiktok' AND status = 'waiting_tiktok_approval') THEN 'waiting_tiktok_approval' WHEN $2::text IS NULL THEN 'pending' ELSE 'waiting_connection' END, last_error = $2, last_attempt_at = CASE WHEN $2::text IS NULL THEN NULL ELSE NOW() END WHERE id = $1 AND (status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval') OR (status = 'waiting_schedule' AND (scheduled_at > NOW() OR $4)))")
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = CASE WHEN $3 OR (platform = 'tiktok' AND status = 'waiting_tiktok_approval') THEN 'waiting_tiktok_approval' WHEN $2::text IS NULL THEN 'pending' ELSE 'waiting_connection' END, last_error = $2, last_attempt_at = CASE WHEN $2::text IS NULL THEN NULL ELSE NOW() END WHERE id = $1 AND produced_video_id IS NULL AND (status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval') OR (status = 'waiting_schedule' AND (scheduled_at > NOW() OR $4)))")
         .bind(queue_id).bind(reason).bind(awaiting_choice).bind(explicit_schedule).execute(connection).await?;
     Ok(queue_id)
 }
@@ -343,7 +343,7 @@ async fn queue_upload_record_on(
         if let Some(id) = sqlx::query_scalar::<_, i64>(
             "SELECT id::bigint FROM twitch_clips_upload_queue \
              WHERE clip_id = $1 AND platform = 'tiktok' AND status IN ('inbox', 'inbox_pending') \
-             ORDER BY id DESC LIMIT 1",
+             AND produced_video_id IS NULL ORDER BY id DESC LIMIT 1",
         )
         .bind(clip_db_id)
         .fetch_optional(&mut *connection)
@@ -356,7 +356,7 @@ async fn queue_upload_record_on(
     if let Some(id) = sqlx::query_scalar::<_, i64>(
         "SELECT id::bigint FROM twitch_clips_upload_queue \
          WHERE clip_id = $1 AND platform = $2 AND status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule') \
-         ORDER BY priority DESC, created_at ASC, id ASC LIMIT 1",
+         AND produced_video_id IS NULL ORDER BY priority DESC, created_at ASC, id ASC LIMIT 1",
     )
     .bind(clip_db_id)
     .bind(platform)
@@ -369,7 +369,7 @@ async fn queue_upload_record_on(
              scheduled_at = CASE WHEN platform = 'tiktok' AND scheduled_at > NOW() AND NOT $7 \
                  THEN scheduled_at ELSE COALESCE($4::text::timestamptz, scheduled_at) END, \
              priority = GREATEST(twitch_clips_upload_queue.priority, $5), last_error = NULL \
-             WHERE id = $6",
+             WHERE id = $6 AND produced_video_id IS NULL",
         )
         .bind(title)
         .bind(description)
@@ -390,7 +390,7 @@ async fn queue_upload_record_on(
                  AND COALESCE(last_attempt_at, created_at) >= $3::text::timestamptz) \
          FROM twitch_clips_upload_queue \
          WHERE clip_id = $1 AND platform = $2 AND status = 'processing' \
-         ORDER BY COALESCE(last_attempt_at, created_at) DESC, id DESC LIMIT 1",
+         AND produced_video_id IS NULL ORDER BY COALESCE(last_attempt_at, created_at) DESC, id DESC LIMIT 1",
     )
     .bind(clip_db_id)
     .bind(platform)
@@ -404,7 +404,7 @@ async fn queue_upload_record_on(
         sqlx::query!(
             "UPDATE twitch_clips_upload_queue SET status = 'pending', title = $1, description = $2, \
              hashtags = $3, scheduled_at = $4::text::timestamptz, priority = $5, last_error = NULL, \
-             last_attempt_at = NULL, completed_at = NULL WHERE id = $6",
+             last_attempt_at = NULL, completed_at = NULL WHERE id = $6 AND produced_video_id IS NULL",
             title,
             description,
             tags.as_deref(),
@@ -744,12 +744,77 @@ mod tests {
             .unwrap();
         sqlx::query("CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, twitch_user_id TEXT, enabled INTEGER DEFAULT 1)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT DEFAULT '42', local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, youtube_visibility TEXT, tiktok_publish_id TEXT, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, youtube_visibility TEXT, tiktok_publish_id TEXT, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ, produced_video_id BIGINT)").execute(&pool).await.unwrap();
         Some(pool)
     }
 
     async fn seed_clip(pool: &PgPool) -> i64 {
         sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, clip_title) VALUES ('c1', 'https://clips.test/c1', 'nani', 'T') RETURNING id").fetch_one(pool).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn legacy_queue_upload_never_overwrites_produced_version_rows() {
+        let pool = make_pool("t_sm_queue_produced_guard")
+            .await
+            .expect("isolated database");
+        let clip = seed_clip(&pool).await;
+        let produced: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, title, description, priority, produced_video_id) \
+             VALUES ($1, 'youtube', 'pending', 'Produziert', 'Version', 1, 7) RETURNING id",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .expect("produced version row");
+        let legacy = queue_upload(
+            &pool,
+            clip,
+            "youtube",
+            Some("Legacy"),
+            Some("Alt"),
+            None,
+            None,
+            5,
+        )
+        .await
+        .expect("legacy queue row");
+        assert_ne!(legacy, produced);
+        sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'processing', last_attempt_at = '2000-01-01'::timestamptz WHERE id = $1")
+            .bind(produced).execute(&pool).await.expect("stale produced processing row");
+        sqlx::query("DELETE FROM twitch_clips_upload_queue WHERE id = $1")
+            .bind(legacy)
+            .execute(&pool)
+            .await
+            .expect("drop legacy row");
+        let reinserted = queue_upload(
+            &pool,
+            clip,
+            "youtube",
+            Some("Legacy"),
+            Some("Alt"),
+            None,
+            None,
+            5,
+        )
+        .await
+        .expect("legacy row beside stale produced row");
+        assert_ne!(reinserted, produced);
+        let row: (String, String, String, i32) = sqlx::query_as(
+            "SELECT status, title, description, priority FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(produced)
+        .fetch_one(&pool)
+        .await
+        .expect("produced row");
+        assert_eq!(
+            row,
+            (
+                "processing".into(),
+                "Produziert".into(),
+                "Version".into(),
+                1
+            )
+        );
     }
 
     #[tokio::test]

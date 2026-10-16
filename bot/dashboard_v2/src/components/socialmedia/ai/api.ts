@@ -366,6 +366,7 @@ export interface AiPlatformCopy {
 export interface AiVersionMetadata {
   video_id: number;
   editable: boolean;
+  targets: AiCopyPlatform[];
   platforms: Record<AiCopyPlatform, AiPlatformCopy>;
 }
 
@@ -374,6 +375,18 @@ export const AI_COPY_PLATFORMS: AiCopyPlatform[] = ['youtube', 'tiktok', 'instag
 function plainText(value: unknown): string {
   if (typeof value !== 'string') invalidResponse();
   return value;
+}
+
+function copyPlatform(value: unknown): AiCopyPlatform {
+  const platform = AI_COPY_PLATFORMS.find((entry) => entry === value);
+  if (!platform) invalidResponse();
+  return platform;
+}
+
+function decodeTargets(value: unknown): AiCopyPlatform[] {
+  const targets = list(value, copyPlatform);
+  if (targets.length === 0 || new Set(targets).size !== targets.length) invalidResponse();
+  return AI_COPY_PLATFORMS.filter((platform) => targets.includes(platform));
 }
 
 function decodePlatformCopy(value: unknown): AiPlatformCopy {
@@ -387,6 +400,7 @@ export function decodeAiVersionMetadata(value: unknown): AiVersionMetadata {
   return {
     video_id: number(item.video_id, true),
     editable: flag(item.editable),
+    targets: decodeTargets(item.targets),
     platforms: { youtube: decodePlatformCopy(platforms.youtube), tiktok: decodePlatformCopy(platforms.tiktok), instagram: decodePlatformCopy(platforms.instagram) },
   };
 }
