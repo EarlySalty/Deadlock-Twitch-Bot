@@ -49,6 +49,13 @@ const RETENTION_OVER: &str = "v.metadata #> '{artifact_retention,unresolved_sinc
 const VETO_DEADLINE: &str = "CASE WHEN jsonb_typeof(v.metadata -> 'veto_deadline') = 'string'
     THEN v.metadata ->> 'veto_deadline' END";
 const PROMOTION_BATCH: usize = 20;
+const PROMOTABLE: &str = "NOT s.paused AND v.status = 'review'
+    AND EXISTS (SELECT 1 FROM social_production_jobs j WHERE j.id = v.job_id AND j.source = 'autopilot')
+    AND NOT v.needs_review AND v.review_reasons = '[]'::jsonb
+    AND v.expires_at > clock_timestamp() AND v.publication_executed_at IS NULL
+    AND v.artifact_deleted_at IS NULL AND v.file_path IS NOT NULL
+    AND NOT (v.metadata ? 'manual_review') AND NOT (v.metadata ? 'manual_ai_job_id')
+    AND NOT EXISTS (SELECT 1 FROM social_media_clip_approval a WHERE a.produced_video_id = v.id)";
 const NOT_DEFERRED: &str = "NOT COALESCE(v.autopilot_deferred_stage = $1
     AND v.autopilot_deferred_until > clock_timestamp(), FALSE)";
 
@@ -313,14 +320,8 @@ impl PublishExecutor {
         let candidates: Vec<PromotionRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT v.id, v.twitch_user_id, {EFFECTIVE_REVIEW} = 'veto_until_deadline',
                 {VETO_DEADLINE}, clock_timestamp() FROM social_produced_videos v
-             JOIN social_production_jobs j ON j.id = v.job_id AND j.source = 'autopilot'
              JOIN social_media_autopilot_settings s ON s.twitch_user_id = v.twitch_user_id
-             WHERE {automatic} AND NOT s.paused AND v.status = 'review'
-             AND NOT v.needs_review AND v.review_reasons = '[]'::jsonb
-             AND v.expires_at > clock_timestamp() AND v.publication_executed_at IS NULL
-             AND v.artifact_deleted_at IS NULL AND v.file_path IS NOT NULL
-             AND NOT (v.metadata ? 'manual_review') AND NOT (v.metadata ? 'manual_ai_job_id')
-             AND NOT EXISTS (SELECT 1 FROM social_media_clip_approval a WHERE a.produced_video_id = v.id)
+             WHERE {automatic} AND {PROMOTABLE}
              AND {NOT_DEFERRED} ORDER BY v.created_at, v.id"
         )))
         .bind(Stage::Promote.name())
@@ -394,9 +395,7 @@ impl PublishExecutor {
                 "SELECT {EFFECTIVE_REVIEW} = 'veto_until_deadline', {VETO_DEADLINE}, clock_timestamp()
                  FROM social_produced_videos v
                  JOIN social_media_autopilot_settings s ON s.twitch_user_id = v.twitch_user_id
-                 WHERE v.id = $1 AND v.status = 'review' AND NOT v.needs_review
-                 AND NOT (v.metadata ? 'manual_review') AND {automatic}
-                 AND NOT EXISTS (SELECT 1 FROM social_media_clip_approval a WHERE a.produced_video_id = v.id)"
+                 WHERE v.id = $1 AND {automatic} AND {PROMOTABLE}"
             )))
             .bind(id)
             .fetch_optional(&mut *tx)

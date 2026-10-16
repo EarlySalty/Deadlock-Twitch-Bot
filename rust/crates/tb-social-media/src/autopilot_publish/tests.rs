@@ -2749,6 +2749,30 @@ async fn veto_deadline_passing_during_the_tick_publishes_in_that_tick() {
 }
 
 #[tokio::test]
+async fn due_veto_slot_never_auto_approves_a_manual_revision() {
+    let pool = pool().await;
+    configure(&pool, &["youtube"], &[("youtube", "yt-1")]).await;
+    sqlx::query("UPDATE social_media_autopilot_settings SET review_policy = 'veto_until_deadline' WHERE twitch_user_id = 'owner'")
+        .execute(&pool)
+        .await
+        .expect("veto policy");
+    let id = veto_video(&pool, "revising", "veto_until_deadline", -1).await;
+    sqlx::query("UPDATE social_produced_videos SET metadata = metadata || '{\"manual_ai_job_id\": 7}' WHERE id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("manual revision");
+    let publisher = ScriptedPublisher::with(vec![published("must-not-publish")]);
+    let executor = PublishExecutor::new(pool.clone(), publisher.clone());
+    let report = executor.tick().await.expect("tick");
+    assert_eq!(report.promoted, 0);
+    assert_eq!(approval_count(&pool, id).await, 0);
+    assert_eq!(video_status(&pool, id).await, "review");
+    assert!(publisher.calls().is_empty());
+    cleanup(pool).await;
+}
+
+#[tokio::test]
 async fn unconfirmed_publish_becomes_uncertain_without_replay() {
     let pool = pool().await;
     configure(&pool, &["youtube"], &[("youtube", "yt-1")]).await;
