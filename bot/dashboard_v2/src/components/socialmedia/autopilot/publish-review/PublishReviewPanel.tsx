@@ -5,7 +5,7 @@ import { StudioSectionHeading } from '../../StudioSectionHeading';
 import { useLanguage } from '../../../../context/LanguageContext';
 import type { TranslateParams } from '../../../../i18n/dictionary';
 import { publishReviewClient } from './api';
-import type { DestinationDecision, NotificationPreferences, PendingHandling, PublishDestination, PublishPlatform, PublishReviewClient, PublishSnapshot, PublishVideo, TikTokConsentState, TikTokVersionOptions } from './api';
+import type { DestinationDecision, NotificationPreferences, PublishDestination, PublishPlatform, PublishReviewClient, PublishSnapshot, PublishVideo, ReviewMode, TikTokConsentState, TikTokVersionOptions } from './api';
 import { AiRevisionPanel } from './AiRevisionPanel';
 import { TikTokVersionForm } from '../../TikTokPostDialog';
 import { WorkspaceDialog } from '../../WorkspaceDialog';
@@ -72,10 +72,7 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<PanelError | null>(null);
   const [message, setMessage] = useState<PanelMessage | null>(null);
-  const [modeDialog, setModeDialog] = useState(false);
-  const [pending, setPending] = useState<PendingHandling | null>(null);
   const [preferences, setPreferences] = useState<NotificationPreferences | null>(null);
-  const dialog = useRef<HTMLDialogElement>(null);
   const mounted = useRef(false);
   const saving = useRef(false);
   const [retry, setRetry] = useState(0);
@@ -102,11 +99,6 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
     return () => controller.abort();
   }, [client, twitchUserId, reloadKey, retry]);
 
-  useEffect(() => {
-    if (modeDialog && !dialog.current?.open) dialog.current?.showModal();
-    if (!modeDialog && dialog.current?.open) dialog.current?.close();
-  }, [modeDialog]);
-
   async function act(action: () => Promise<void>, success: PanelMessage, savePreferences = false) {
     if (saving.current) return false;
     saving.current = true;
@@ -130,20 +122,16 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
     }
   }
 
-  return <section className="publish-review" aria-label={t('Freigabe und Veröffentlichung')} aria-busy={busy} data-unsaved={preferencesDirty || pending !== null || busy ? 'true' : undefined} data-saving={busy ? 'true' : undefined}>
-    <StudioSectionHeading title={t(section === 'videos' ? 'Fertige Videos' : section === 'mode' ? 'Veröffentlichungsmodus' : section === 'notifications' ? 'Benachrichtigungen' : 'Freigabe & Veröffentlichung')} icon={ShieldCheck}
-      description={t('Prüfe die fertige Videoversion. Eine Kontoverbindung ist noch keine Freigabe.')} />
+  return <section className="publish-review" aria-label={t('Freigabe und Veröffentlichung')} aria-busy={busy} data-unsaved={preferencesDirty || busy ? 'true' : undefined} data-saving={busy ? 'true' : undefined}>
+    <StudioSectionHeading title={t(section === 'videos' ? 'Fertige Videos' : section === 'mode' ? 'Aktuell wirksam' : section === 'notifications' ? 'Benachrichtigungen' : 'Freigabe & Veröffentlichung')} icon={ShieldCheck}
+      description={section === 'mode' ? undefined : t('Prüfe die fertige Videoversion. Eine Kontoverbindung ist noch keine Freigabe.')} />
     {error && <p role="alert" className="publish-error">{'raw' in error ? error.raw : t(error.key, error.params)}</p>}
     {error && !snapshot && <button type="button" disabled={busy} onClick={() => setRetry((value) => value + 1)}>{t('Erneut laden')}</button>}
     {message && <p role="status" className="publish-message">{t(message.key, message.params)}</p>}
     {!snapshot && !error && <p role="status">{t('Veröffentlichungsdaten werden geladen.')}</p>}
     {snapshot && <>
       {(section === 'all' || section === 'mode') && <div className="publish-mode-row">
-        <div><strong>{t(snapshot.settings.publish_mode === 'review' ? 'Prüfung vor Veröffentlichung' : 'Fertige Videos ohne Prüfung veröffentlichen')}</strong><p>{t(snapshot.settings.publish_mode === 'review' ? 'Ohne deine Videofreigabe wird nichts veröffentlicht.' : 'Automatische Videos werden ohne regelmäßige Freigabe veröffentlicht. Qualitätsbedenken bleiben zur Prüfung.')}</p></div>
-        <div className="publish-actions">
-          <button type="button" disabled={busy} onClick={() => { setPending(null); setModeDialog(true); }}>{t(snapshot.settings.publish_mode === 'review' ? 'Fertige Videos ohne Prüfung veröffentlichen' : 'Zur Prüfung wechseln')}</button>
-          <button type="button" disabled={busy} onClick={() => void act(() => client.pause(twitchUserId, !snapshot.settings.paused), { key: snapshot.settings.paused ? 'Auto-Pilot fortgesetzt. Verpasste Termine werden nicht gesammelt nachgeholt.' : 'Auto-Pilot pausiert. Laufende Verarbeitung kann fertig werden.' })}>{t(snapshot.settings.paused ? 'Fortsetzen' : 'Pausieren')}</button>
-        </div>
+        <div><strong>{t(reviewModeLabels[reviewMode(snapshot)].title)}</strong><p>{t(reviewModeLabels[reviewMode(snapshot)].text)}</p></div>
       </div>}
       {snapshot.settings.paused && <p className="publish-note" role="status">{t('Pausiert. Keine neuen geplanten Veröffentlichungen. Deine Warteschlange bleibt erhalten.')}</p>}
       {editorVideo !== null && <AiRevisionPanel key={editorVideo} owner={twitchUserId} videoId={editorVideo} onBusyChange={setEditorBusy} onClose={() => setEditorVideo(null)} onRefresh={() => act(async () => {}, { key: 'Stand aktualisiert.' })} />}
@@ -167,24 +155,41 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
       </details>}
       {(section === 'all' || section === 'notifications') && snapshot.notifications.length > 0 && <section className="publish-notifications" aria-label={t('Hinweise')}><h3>{t('Deine Hinweise')}</h3>{snapshot.notifications.map((notification) => <p key={notification.id}>{notification.content}</p>)}</section>}
     </>}
-    {modeDialog && <dialog ref={dialog} className="publish-mode-dialog" aria-labelledby="publish-mode-title" onCancel={(event) => { if (busy) event.preventDefault(); else { setPending(null); setModeDialog(false); } }} onClose={() => { if (!busy) { setPending(null); setModeDialog(false); } }}>
-      <h3 id="publish-mode-title">{t(snapshot?.settings.publish_mode === 'review' ? 'Vollautomatik aktivieren?' : 'Zur manuellen Prüfung wechseln?')}</h3>
-      {snapshot?.settings.publish_mode === 'review' ? <>
-        <p>{t('Die Vollautomatik darf geeignete automatische Videos ohne weitere Freigabe veröffentlichen. Manuelle Testvideos und Videos mit Qualitätsbedenken werden nicht automatisch übernommen.')}</p>
-        <fieldset disabled={busy}><legend>{t('Was passiert mit bereits wartenden Videos?')}</legend>
-          <label><input type="radio" name="pending" checked={pending === 'keep_review'} onChange={() => setPending('keep_review')} />{t('Zur manuellen Prüfung behalten')}</label>
-          <label><input type="radio" name="pending" checked={pending === 'transfer_eligible'} onChange={() => setPending('transfer_eligible')} />{t('Geeignete automatische Videos ausdrücklich übernehmen')}</label>
-        </fieldset>
-      </> : <p>{t('Noch nicht veröffentlichte Ziele benötigen wieder deine ausdrückliche Freigabe. Bereits veröffentlichte Beiträge bleiben unverändert.')}</p>}
-      <div className="publish-actions"><button type="button" disabled={busy} onClick={() => { setPending(null); setModeDialog(false); }}>{t('Abbrechen')}</button><button type="button" className="publish-primary" disabled={busy || (snapshot?.settings.publish_mode === 'review' && pending === null)} onClick={() => {
-        const mode = snapshot?.settings.publish_mode === 'review' ? 'full_auto' : 'review';
-        void act(() => client.transition(twitchUserId, { mode, confirmed: true, ...(mode === 'full_auto' && pending ? { pending } : {}) }), { key: 'Veröffentlichungsmodus gespeichert.' }).then((saved) => { if (saved && mounted.current) { setPending(null); setModeDialog(false); } });
-      }}>{t('Bewusst bestätigen')}</button></div>
-    </dialog>}
   </section>;
 }
 
-const RETRY_BLOCKED = ['account_changed', 'account_missing', 'exact_file_changed', 'tiktok_effect_boundary_pending', 'tiktok_consent_missing', 'tiktok_caption_changed', 'tiktok_options_invalid', 'tiktok_music_consent_missing'];
+const reviewModeLabels: Record<ReviewMode, { title: string; text: string }> = {
+  review: { title: 'Prüfung vor Veröffentlichung', text: 'Ohne deine Videofreigabe wird nichts veröffentlicht.' },
+  full_auto: { title: 'Fertige Videos ohne Prüfung veröffentlichen', text: 'Automatische Videos werden ohne regelmäßige Freigabe veröffentlicht. Qualitätsbedenken bleiben zur Prüfung.' },
+  veto_until_deadline: { title: 'Einspruch bis zum Termin', text: 'Fertige Videos gehen zum geplanten Termin raus, solange du vorher nicht widersprichst.' },
+};
+
+function reviewMode(snapshot: PublishSnapshot): ReviewMode {
+  return snapshot.settings.review_mode ?? (snapshot.settings.publish_mode === 'full_auto' ? 'full_auto' : 'review');
+}
+
+const RETRY_BLOCKED = ['account_changed', 'account_missing', 'exact_file_changed', 'tiktok_effect_boundary_pending', 'tiktok_consent_missing', 'tiktok_caption_changed', 'tiktok_options_invalid', 'tiktok_file_invalid', 'tiktok_music_consent_missing', 'tiktok_already_published', 'tiktok_transfer_active'];
+const reasonLabels: Record<string, string> = {
+  account_changed: 'Das verbundene Konto hat sich geändert. Bitte gib das Video erneut frei.',
+  account_missing: 'Das Konto ist nicht mehr verbunden. Bitte verbinde es neu und gib das Video erneut frei.',
+  exact_file_changed: 'Die Videodatei hat sich seit der Freigabe geändert. Bitte gib sie erneut frei.',
+  review_required: 'Dieses Ziel braucht deine Freigabe.',
+  tiktok_effect_boundary_pending: 'TikTok wartet noch auf den sicheren Veröffentlichungsweg.',
+  tiktok_consent_missing: 'Die TikTok-Einwilligung für diese Fassung fehlt.',
+  tiktok_caption_changed: 'Der TikTok-Text hat sich geändert. Bitte bestätige ihn erneut.',
+  tiktok_options_invalid: 'Die TikTok-Einstellungen passen nicht mehr. Bitte prüfe sie erneut.',
+  tiktok_file_invalid: 'TikTok hat die Videodatei nicht angenommen. Ein erneuter Versuch mit derselben Datei hilft nicht.',
+  tiktok_music_consent_missing: 'Die Zustimmung zur TikTok-Musiknutzung fehlt.',
+  tiktok_already_published: 'Dieses Video ist auf TikTok bereits veröffentlicht. Es wird kein zweites Mal hochgeladen.',
+  tiktok_transfer_active: 'Bei TikTok läuft für dieses Video schon eine Übertragung. Bitte warte, bis sie abgeschlossen ist.',
+  tiktok_init_unconfirmed: 'TikTok hat den Start der Übertragung nicht bestätigt. Wir laden nicht doppelt hoch.',
+  tiktok_init_uncertain: 'TikTok hat den Start der Übertragung nicht bestätigt. Wir laden nicht doppelt hoch.',
+  tiktok_transfer_uncertain: 'Ob die Übertragung zu TikTok vollständig war, ist unklar. Wir laden nicht doppelt hoch.',
+  tiktok_status_unconfirmed: 'TikTok hat den Status der Veröffentlichung nicht bestätigt. Bitte prüfe dein TikTok-Profil.',
+  tiktok_inbox_only: 'TikTok hat das Video nur in dein TikTok-Postfach gelegt. Es wurde nicht veröffentlicht.',
+  tiktok_rejected: 'TikTok hat die Veröffentlichung abgelehnt.',
+  tiktok_published_without_post_id: 'TikTok meldet die Veröffentlichung, aber ohne Link zum Beitrag.',
+};
 const consentLabels: Record<TikTokConsentState, string> = {
   bound: 'Für genau diese Fassung erteilt',
   missing: 'Fehlt noch für diese Fassung',
@@ -261,6 +266,7 @@ function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onCo
           <dl><div><dt>{t('Verbindung')}</dt><dd>{t(connection?.connected ? 'Verbunden' : 'Nicht verbunden')}</dd></div><div><dt>{t('Videofreigabe')}</dt><dd>{t(approval?.state === 'approved' ? 'Für dieses Video freigegeben' : 'Nicht freigegeben')}</dd></div>{platform === 'tiktok' && video.tiktok_consent && <div><dt>{t('TikTok-Einwilligung')}</dt><dd>{t(consentLabels[video.tiktok_consent])}</dd></div>}<div><dt>{t('Veröffentlichung')}</dt><dd>{destination ? t(states[destination.state]) : t('Noch nicht eingeplant')}</dd></div></dl>
           {platform === 'tiktok' && !snapshot.capabilities.tiktok_effect_boundary && <p className="publish-note">{t('Diese Videoversion bleibt für TikTok zur Prüfung, bis der sichere Veröffentlichungsweg verfügbar ist.')}</p>}
           {platform === 'tiktok' && inlineTikTok && selected.includes('tiktok') && <TikTokVersionForm clipDbId={inlineTikTok.clipDbId} videoId={video.id} revision={inlineTikTok.revision} disabled={busy} onChange={setTikTokOptions} />}
+          {destination?.reason && reasonLabels[destination.reason] && <p className="publish-note">{t(reasonLabels[destination.reason])}</p>}
           {destination?.state === 'retry' && <p>{t('Nächster Versuch: {date}', { date: date(destination.next_retry_at) })}</p>}
           {destination && ['retry', 'held'].includes(destination.state) && !RETRY_BLOCKED.includes(destination.reason ?? '') && <button type="button" disabled={busy} onClick={() => void act(() => client.retry(owner, video.id, platform), { key: '{platform} wird mit derselben Datei erneut geprüft.', params: { platform: names[platform] } })}>{t('Nur {platform} erneut versuchen', { platform: names[platform] })}</button>}
         </section>;

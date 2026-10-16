@@ -107,15 +107,15 @@ export function StudioStatusStrip({ data, onNavigate }: {
       ...jobsWithStatus(schedule, 'running').map(job => job.scheduled_at)]
       .filter((value): value is string => Boolean(value))
       .map(at => ({ at, timezone: schedule?.settings.timezone ?? data.timezone, view: 'planen' as const })),
-    ...scheduledVideos(publish).map(video => ({ at: video.event!.scheduled_at, timezone: schedule?.settings.timezone ?? data.timezone, view: 'freigabe' as const })),
-    ...(data.clipsFailed ? [] : data.clips ?? []).flatMap(clip => queuedPostings(clip).map(({ at }) => ({ at, timezone: data.timezone, view: 'freigabe' as const }))),
+    ...scheduledVideos(publish).map(video => ({ at: video.event!.scheduled_at, timezone: schedule?.settings.timezone ?? data.timezone, view: 'clips' as const })),
+    ...(data.clipsFailed ? [] : data.clips ?? []).flatMap(clip => queuedPostings(clip).map(({ at }) => ({ at, timezone: data.timezone, view: 'clips' as const }))),
   ].filter(term => Number.isFinite(Date.parse(term.at))).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const nextKnown = Boolean(schedule) && Boolean(publish) && Boolean(data.clips) && !data.clipsFailed;
   const nextUnavailable = unavailable(data.scheduleFailed || data.publishFailed || data.clipsFailed);
   const uploads = uploadPlatforms(platforms);
   const attention = platformsNeedingAttention(platforms);
   return <section className="studio-status-strip" aria-label={t('Stand auf einen Blick')}>
-    <StatusItem icon={Power} label={t('Auto-Pilot')} {...autopilot} onClick={() => onNavigate('plan')} />
+    <StatusItem icon={Power} label={t('Auto-Pilot')} {...autopilot} onClick={() => onNavigate('planen')} />
     <StatusItem icon={CalendarClock} label={t('Nächster Termin')}
       value={!nextKnown ? nextUnavailable.value : terms[0] ? formatTerminInZone(terms[0].at, locale, terms[0].timezone) : t('Keiner')}
       detail={!nextKnown ? nextUnavailable.detail : terms[0] ? terms[0].timezone : t('Lege Termine im Zeitplan fest')}
@@ -123,16 +123,16 @@ export function StudioStatusStrip({ data, onNavigate }: {
     <StatusItem icon={ListOrdered} label={t('Warteschlange')}
       value={!schedule ? unavailable(data.scheduleFailed).value : String(running + queued)}
       detail={!schedule ? unavailable(data.scheduleFailed).detail : running > 0 ? t('{count} in Produktion', { count: running }) : t('Keine Produktion aktiv')}
-      tone={running > 0 ? 'gold' : 'neutral'} onClick={() => onNavigate('plan')} />
+      tone={running > 0 ? 'gold' : 'neutral'} onClick={() => onNavigate('clips', 'planned')} />
     <StatusItem icon={AlertTriangle} label={t('Prüfungen offen')}
       value={reviewsKnown ? String(productionReviews + clipReviews) : reviews.value}
       detail={reviewsKnown ? t('{productions} Produktionen & Videos · {clips} Clip-Freigaben', { productions: productionReviews, clips: clipReviews }) : reviews.detail}
       tone={reviewsKnown && productionReviews + clipReviews > 0 ? 'warning' : 'neutral'}
-      onClick={() => jobsWithStatus(schedule, 'review').length > 0 ? onNavigate('planen') : productionReviews > 0 || clipReviews === 0 ? onNavigate('freigabe') : onNavigate('freigabe', 'review')} />
+      onClick={() => onNavigate('clips', 'review')} />
     <StatusItem icon={Plug} label={t('Plattformen')}
       value={!platforms ? unavailable(data.platformsFailed).value : `${uploads.length - attention.length} / ${uploads.length}`}
       detail={!platforms ? unavailable(data.platformsFailed).detail : attention.length === 0 ? t('Alle verbunden') : t('{count} brauchen Aufmerksamkeit', { count: attention.length })}
-      tone={!platforms ? 'neutral' : attention.length === 0 ? 'success' : 'warning'} onClick={() => onNavigate('konten')} />
+      tone={!platforms ? 'neutral' : attention.length === 0 ? 'success' : 'warning'} onClick={() => onNavigate('einstellungen')} />
   </section>;
 }
 
@@ -200,9 +200,9 @@ export function PipelineOverview({ data, now, onNavigate, activity }: {
   const clipTitle = (job: QueueJob) => job.clip_title || t('Clip {id}', { id: job.clip_id });
   const videoTitle = (video: PublishVideo) => clips?.find(clip => clip.clip_db_id === video.clip_id)?.title || t('Video {id}', { id: video.id });
   const nowRows: OverviewRow[] = [
-    ...jobsWithStatus(schedule, 'running').map(job => ({ key: `job-${job.id}`, title: clipTitle(job), meta: job.mode === 'ai' ? t('KI-Bearbeitung läuft') : t('Produktion läuft'), tone: 'gold' as Tone, onClick: () => onNavigate('plan') })),
-    ...(clips ?? []).filter(clip => clip.status === 'publishing').map(clip => ({ key: `publish-${clip.clip_db_id}`, title: clip.title || clip.clip_id, meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('pool', queueStage(clip)) })),
-    ...(publish?.videos ?? []).filter(video => video.event?.destinations.some(destination => ['preparing', 'effect_started', 'processing'].includes(destination.state))).map(video => ({ key: `video-${video.id}`, title: videoTitle(video), meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('freigabe') })),
+    ...jobsWithStatus(schedule, 'running').map(job => ({ key: `job-${job.id}`, title: clipTitle(job), meta: job.mode === 'ai' ? t('KI-Bearbeitung läuft') : t('Produktion läuft'), tone: 'gold' as Tone, onClick: () => onNavigate('clips', 'planned') })),
+    ...(clips ?? []).filter(clip => clip.status === 'publishing').map(clip => ({ key: `publish-${clip.clip_db_id}`, title: clip.title || clip.clip_id, meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('clips', queueStage(clip)) })),
+    ...(publish?.videos ?? []).filter(video => video.event?.destinations.some(destination => ['preparing', 'effect_started', 'processing'].includes(destination.state))).map(video => ({ key: `video-${video.id}`, title: videoTitle(video), meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('clips', 'planned') })),
   ];
   const allActions: OverviewRow[] = studioActions(data, now, t).map(action => ({ ...action, platform: rowPlatform(action.key), onClick: () => onNavigate(action.view, action.stage) }));
   const holdRow = allActions.find(row => row.key === 'hold');
@@ -217,7 +217,7 @@ export function PipelineOverview({ data, now, onNavigate, activity }: {
       key: term.key,
       title: video ? videoTitle(video) : job ? clipTitle(job) : post ? post.title : t('Nächster freier Auto-Pilot-Termin'),
       meta: post ? `${PLATFORM_LABELS[post.platform]} · ${when(term.at, term.timezone)}` : when(term.at, term.timezone),
-      onClick: () => post ? onNavigate('freigabe', post.stage) : onNavigate(upcomingTermView(term.key)),
+      onClick: () => post ? onNavigate('clips', post.stage) : onNavigate(upcomingTermView(term.key)),
     };
   });
 
@@ -232,7 +232,7 @@ export function PipelineOverview({ data, now, onNavigate, activity }: {
       <div className="studio-overview-side">
         <OverviewColumn variant="now" icon={CircleDot} title={t('Läuft gerade')} count={null} rows={nowRows} empty={activity ? '' : unavailable ?? t('Gerade läuft nichts.')} footer={activity} />
         <OverviewColumn variant="next" icon={Clock3} title={t('Als Nächstes')} count={null} rows={nextRows} empty={unavailable ?? t('Noch nichts eingeplant.')}
-          footer={<button type="button" className="studio-overview-link" onClick={() => onNavigate('plan')}>{t('Zeitplan öffnen')}<ArrowRight className="h-4 w-4" aria-hidden /></button>} />
+          footer={<button type="button" className="studio-overview-link" onClick={() => onNavigate('planen')}>{t('Zeitplan öffnen')}<ArrowRight className="h-4 w-4" aria-hidden /></button>} />
       </div>
     </div>
   </div>;

@@ -24,7 +24,7 @@ export function createScheduleQueueFixture(): ScheduleQueueFixture {
   };
   const policy: PipelinePolicy = {
     pipeline_mode: 'upload', review_policy: 'required', metadata_scope: 'shared',
-    text_defaults: { shared: { description: '', hashtags: [] }, per_platform: {} },
+    text_defaults: { shared: { title: '', description: '', hashtags: [] }, per_platform: {} },
     schedule_scope: 'shared', platform_schedule_slots: {}, distribution_policy: 'same_clip', policy_revision: 1,
   };
   const copy = () => structuredClone(state);

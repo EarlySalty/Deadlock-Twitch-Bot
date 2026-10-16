@@ -22,6 +22,7 @@ export type PolicyScope = 'shared' | 'per_platform';
 export type DistributionPolicy = 'same_clip' | 'independent_clips';
 
 export interface TextDefaults {
+  title: string;
   description: string;
   hashtags: string[];
 }

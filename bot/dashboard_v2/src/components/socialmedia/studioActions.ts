@@ -21,10 +21,10 @@ export function studioActions(data: StudioOverviewData, now: number, t: Translat
   const clipReviews = clips.filter(clip => queueStage(clip) === 'review').length;
   if (clipReviews) rows.push({ key: 'clips', title: t(clipReviews === 1 ? '{count} Clip freigeben' : '{count} Clips freigeben', { count: clipReviews }), meta: t('Freigabe aus der bisherigen Pipeline'), tone: 'warning', view: 'freigabe', stage: 'review' });
   const failedJobs = schedule?.jobs.filter(job => job.status === 'failed').length ?? 0;
-  if (failedJobs) rows.push({ key: 'jobs', title: t('{count} Produktionen fehlgeschlagen', { count: failedJobs }), meta: t('Auftrag prüfen oder entfernen'), tone: 'danger', view: 'planen' });
+  if (failedJobs) rows.push({ key: 'jobs', title: t('{count} Produktionen fehlgeschlagen', { count: failedJobs }), meta: t('Auftrag prüfen oder entfernen'), tone: 'danger', view: 'clips', stage: 'failed' });
   const failedClips = clips.filter(clip => queueStage(clip) === 'failed').length;
   if (failedClips) rows.push({ key: 'failed', title: t('{count} Clips mit Fehler', { count: failedClips }), meta: t('Veröffentlichung erneut prüfen'), tone: 'danger', view: 'veroeffentlicht', stage: 'failed' });
-  for (const video of publish?.videos ?? []) if (video.event?.destinations.some(destination => ['retry', 'held', 'uncertain', 'failed'].includes(destination.state))) rows.push({ key: `publish-${video.id}`, title: clips.find(clip => clip.clip_db_id === video.clip_id)?.title || t('Video {id}', { id: video.id }), meta: t('Veröffentlichung erneut prüfen'), tone: 'warning', view: 'freigabe' });
+  for (const video of publish?.videos ?? []) if (video.event?.destinations.some(destination => ['retry', 'held', 'uncertain', 'failed'].includes(destination.state))) rows.push({ key: `publish-${video.id}`, title: clips.find(clip => clip.clip_db_id === video.clip_id)?.title || t('Video {id}', { id: video.id }), meta: t('Veröffentlichung erneut prüfen'), tone: 'warning', view: 'clips', stage: 'failed' });
   for (const status of platforms.filter(platform => platform.capabilities?.upload)) {
     const expiry = status.platform === 'instagram' || !status.automatically_renewed ? status.expires_at : status.refresh_expires_at;
     const expiring = status.reauth_soon || Boolean(expiry && Date.parse(expiry) <= now + 7 * 86400000);

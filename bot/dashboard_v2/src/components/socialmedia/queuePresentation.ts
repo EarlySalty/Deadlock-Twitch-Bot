@@ -105,8 +105,9 @@ export async function loadQueueSnapshot(
   throw new Error('queue_too_large');
 }
 
-const ACTIVE_DESTINATIONS = ['pending', 'processing', 'waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule', 'waiting_exact_file', 'inbox_pending'];
+const ACTIVE_DESTINATIONS = ['pending', 'processing', 'waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule', 'waiting_exact_file', 'inbox_pending', 'autopilot_preparing', 'autopilot_effect_started', 'autopilot_processing', 'autopilot_retry'];
 const DONE_DESTINATIONS = ['completed', 'inbox'];
+const FAILED_DESTINATIONS = ['failed', 'autopilot_failed', 'autopilot_uncertain'];
 
 export function publishedPlatforms(source: PipelineSource): string[] {
   return [...new Set([
@@ -118,7 +119,7 @@ export function publishedPlatforms(source: PipelineSource): string[] {
 export function failedPlatforms(source: PipelineSource): string[] {
   const done = publishedPlatforms(source);
   return [...new Set(source.destinations
-    .filter((destination) => destination.status === 'failed' && !done.includes(destination.platform))
+    .filter((destination) => FAILED_DESTINATIONS.includes(destination.status ?? '') && !done.includes(destination.platform))
     .map((destination) => destination.platform))];
 }
 
@@ -141,7 +142,8 @@ function sourceActive(source: PipelineSource): boolean {
 }
 
 function sourceInReview(source: PipelineSource): boolean {
-  return source.jobs.some((job) => job.status === 'review') || source.versions.some((version) => version.status === 'review');
+  return source.jobs.some((job) => job.status === 'review') || source.versions.some((version) => version.status === 'review')
+    || source.destinations.some((destination) => destination.status === 'autopilot_held');
 }
 
 export function sourceStage(source: PipelineSource): Exclude<QueueStage, 'all'> {

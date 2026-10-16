@@ -11,6 +11,7 @@ import { PipelineClips } from "../../PipelineClips";
 import { loadSourceCollection, poolBackedSources } from "../../pipelineApi";
 import { ImportProgress } from "./ImportProgress";
 import type { ImportJob, ImportPoolApi, ImportPoolPanelProps, PoolPreferences } from "./types";
+import type { QueueStage } from "../../queuePresentation";
 import "./ImportPoolPanel.css";
 
 const POLL_INTERVAL = 5000;
@@ -22,6 +23,7 @@ export function ImportPoolPanel({
   api = importPoolApi,
   onChanged,
   reloadKey = 0,
+  initialStage,
 }: ImportPoolPanelProps) {
   const t = useT();
   if (!twitchUserId || !/^\d+$/.test(twitchUserId)) {
@@ -42,6 +44,7 @@ export function ImportPoolPanel({
       api={api}
       onChanged={onChanged}
       reloadKey={reloadKey}
+      initialStage={initialStage}
     />
   );
 }
@@ -51,11 +54,13 @@ function OwnerImportPool({
   api,
   onChanged,
   reloadKey,
+  initialStage,
 }: {
   owner: string;
   api: ImportPoolApi;
   onChanged?: () => void;
   reloadKey: number;
+  initialStage?: QueueStage;
 }) {
   const { t, locale } = useLanguage();
   const queryClient = useQueryClient();
@@ -588,6 +593,7 @@ function OwnerImportPool({
           <PipelineClips
             page={page}
             owner={owner}
+            initialStage={initialStage}
             selectionLocked={selectionLocked}
             onSelect={(clipId, selected) => {
               if (selectionLocked) return;

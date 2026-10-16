@@ -4,6 +4,7 @@ import type { TikTokDraft } from '@/api/socialMedia';
 
 export type PublishPlatform = 'youtube' | 'tiktok' | 'instagram';
 export type PublishMode = 'review' | 'full_auto';
+export type ReviewMode = 'review' | 'full_auto' | 'veto_until_deadline';
 export type TikTokConsentState = 'missing' | 'bound' | 'stale';
 export type PendingHandling = 'keep_review' | 'transfer_eligible';
 export type DestinationStatus = 'pending' | 'preparing' | 'effect_started' | 'processing' | 'published' | 'retry' | 'held' | 'uncertain' | 'discarded' | 'failed';
@@ -108,7 +109,7 @@ export function fetchTikTokVersion(clipDbId: number, videoId: number, signal?: A
 }
 
 export interface PublishSnapshot {
-  settings: { publish_mode: PublishMode; paused: boolean; notifications: NotificationPreferences };
+  settings: { publish_mode: PublishMode; review_mode?: ReviewMode; paused: boolean; notifications: NotificationPreferences };
   target_platforms: PublishPlatform[];
   connections: { platform: PublishPlatform; connected: boolean; account_id: string | null }[];
   videos: PublishVideo[];

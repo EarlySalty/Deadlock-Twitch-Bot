@@ -31,7 +31,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { dictionaryFor, translate } from '../src/i18n/dictionary';
 import { LanguageProvider } from '../src/context/LanguageContext';
 import { resolveSocialMediaChannel } from '../src/utils/socialMediaChannel';
-import { socialViewFromSearch, socialWorkspaceDepartureAllowed } from '../src/components/socialmedia/studioNavigation';
+import { socialStageFromSearch, socialViewFromSearch, socialWorkspaceDepartureAllowed } from '../src/components/socialmedia/studioNavigation';
 import {
   clipFehler,
   istGesperrt,
@@ -76,7 +76,6 @@ const OBERFLAECHE = [
   'src/pages/SocialMedia.tsx',
   'src/components/socialmedia/ClipCard.tsx',
   'src/components/socialmedia/StudioHero.tsx',
-  'src/components/socialmedia/PostingPlanDraft.tsx',
   'src/components/socialmedia/WorkspaceDialog.tsx',
   'src/components/socialmedia/TikTokPostDialog.tsx',
   'src/pages/SocialMediaManager.tsx',
@@ -205,8 +204,6 @@ test('der Regex findet ueberhaupt Schluessel', () => {
  * deshalb dieselbe Uebersetzung bekommen. Alles andere ist ein Befund.
  */
 const BEWUSST_GETEILT: Record<string, string> = {
-  Freigabe: 'Clip state and workspace both identify the approval stage.',
-  Veröffentlicht: 'Clip state and workspace both identify published content.',
   Fehler: 'Clip-Status und Enrichment-Status meinen beide "fehlgeschlagen".',
   'Clip freigegeben': 'Clip-Status und Approval-Zustand meinen dieselbe Entscheidung.',
   Übersprungen: 'Clip-Status und Approval-Zustand meinen dasselbe Ueberspringen.',
@@ -654,35 +651,6 @@ test('Verbindungsdatum nutzt das Access-Ende nur ohne automatische Erneuerung', 
   assert.equal(datum('instagram', { expires_at: access, refresh_expires_at: refresh, automatically_renewed: true }), access);
 });
 
-test('Befund 6: die drei Zeitplan-Karten sperren nach gescheitertem GET', () => {
-  const quelle = lies(SEITE);
-  for (const karte of ['ApprovalModeCard', 'CategoryCard', 'PostingScheduleCard']) {
-    assert.match(
-      elementAttribute(quelle, karte),
-      /ladeFehler=\{postingPlanQuery\.error\}/,
-      `${karte} bekommt den Fehler von GET posting-plan nicht.`,
-    );
-    const rumpf = komponentenRumpf(quelle, karte);
-    assert.match(rumpf, /LadeFehlerHinweis fehler=\{ladeFehler\}/, `${karte} zeigt den Fehler nicht.`);
-    const ausdruecke = disabledAusdruecke(rumpf);
-    assert.ok(ausdruecke.length > 0, `${karte} hat kein einziges gesperrtes Bedienelement.`);
-    for (const ausdruck of ausdruecke) {
-      assert.ok(
-        ausdruck.includes('gesperrt') || ausdruck.includes('Gesperrt'),
-        `${karte}: disabled={${ausdruck}} ignoriert die Sperre.`,
-      );
-    }
-  }
-
-  // Ein Kanal auf full_auto darf nicht "Nur nach Freigabe" markiert sehen.
-  const approval = komponentenRumpf(quelle, 'ApprovalModeCard');
-  assert.match(
-    approval,
-    /istStandUnbekannt\(ladeFehler\) \? null : 'manual'/,
-    'Ohne Plan wird weiterhin manual als aktiver Modus markiert.',
-  );
-});
-
 test('Befund 7: ein gescheitertes Verwerfen landet an der Clip-Karte', () => {
   const clipDbId = 42;
   const verwerfen = new Error('discard');
@@ -705,14 +673,6 @@ test('Befund 7: ein gescheitertes Verwerfen landet an der Clip-Karte', () => {
   // Ein Fehler an einem anderen Clip gehoert nicht auf diese Karte.
   assert.equal(clipFehler(clipDbId, [{ clipDbId: 7, error: verwerfen }]), null);
   assert.equal(clipFehler(clipDbId, []), null);
-
-  // Und die Seite reicht das Verwerfen ueberhaupt durch.
-  const quelle = lies(SEITE);
-  assert.match(
-    quelle,
-    /fehler=\{clipFehler\(clip\.clip_db_id, \[[\s\S]*?discardMutation\.error[\s\S]*?\]\)\}/,
-    'discardMutation.error kommt nicht an der Clip-Karte an.',
-  );
 });
 
 /**
@@ -793,24 +753,25 @@ test('Kanalwahl hält URL, sichtbaren Kanal und Uploadziel gemeinsam an derselbe
 test('metadata departure preserves rejected drafts and blocks pending saves before confirmation', () => {
   const studio = lies(SEITE);
   const start = studio.indexOf('  const changeView = ');
-  const end = studio.indexOf('  const statusClip = ', start);
+  const end = studio.indexOf('  const overviewData', start);
   assert.ok(start >= 0 && end > start);
-  const createGuard = new Function('document', 'window', 't', 'activeView', 'selectedAiClipId', 'setActiveView', 'setSelectedAiClipId', 'socialViewSearch', 'socialWorkspaceDepartureAllowed', 'socialViewFromSearch', `${studio.slice(start, end).replace('target: SocialMediaViewTarget', 'target')} return changeView;`);
+  const createGuard = new Function('document', 'window', 't', 'activeView', 'clipStage', 'setActiveView', 'setClipStage', 'socialViewSearch', 'socialWorkspaceDepartureAllowed', 'socialViewFromSearch', 'socialStageFromSearch', `${studio.slice(start, end).replace('target: SocialMediaViewTarget, stage?: QueueStage', 'target, stage')} return changeView;`);
   for (const [saving, dirty, accepted, expected] of [[true, true, true, false], [false, true, false, false], [false, true, true, true], [false, false, false, true]]) {
     const updates: unknown[] = [];
     let prompts = 0;
     const guard = createGuard(
       { querySelector: (selector: string) => selector.includes('data-saving') ? saving : dirty },
       { confirm: () => { prompts++; return accepted; }, location: { search: '', pathname: '/social-media', hash: '' }, history: { replaceState: (...args: unknown[]) => updates.push(args) } },
-      (text: string) => text, 'pool', undefined,
-      (view: string) => updates.push(view), (id: number) => updates.push(id),
-      (_search: string, view: string, id: number) => `view=${view}&clip_db_id=${id}`,
+      (text: string) => text, 'planen', undefined,
+      (view: string) => updates.push(view), (stage: string) => updates.push(stage),
+      (_search: string, view: string, stage: string) => `view=${view}&stage=${stage}`,
       socialWorkspaceDepartureAllowed,
       socialViewFromSearch,
+      socialStageFromSearch,
     );
-    assert.equal(guard('ai', 42), expected);
+    assert.equal(guard('freigabe'), expected);
     assert.equal(prompts, !saving && dirty ? 1 : 0);
-    assert.deepEqual(updates, expected ? ['freigabe', 42, [{}, '', '/social-media?view=freigabe&clip_db_id=42']] : []);
+    assert.deepEqual(updates, expected ? ['clips', 'review', [{}, '', '/social-media?view=clips&stage=review']] : []);
   }
   assert.match(lies('src/components/socialmedia/LayoutEditor.tsx'), /<div\b[^>]*data-unsaved=\{isDirty \|\| isSaving \? 'true' : undefined\}[^>]*data-saving=\{isSaving \? 'true' : undefined\}/);
   const panel = lies('src/components/socialmedia/EnrichmentPanel.tsx');
@@ -818,8 +779,6 @@ test('metadata departure preserves rejected drafts and blocks pending saves befo
   assert.match(panel, /data-saving=\{saveMutation\.isPending/);
   assert.match(panel, /onSavingChange\?\.\(saveMutation\.isPending\)/);
   assert.match(panel, /if \(saveMutation\.isPending\) return;/);
-  assert.match(studio, /const busy = isSaving \|\| enrichmentSaving/);
-  assert.match(studio, /onSavingChange=\{setEnrichmentSaving\}/);
   assert.match(lies('src/components/socialmedia/WorkspaceDialog.tsx'), /if \(busy \|\| dialog\.current\?\.querySelector\('\[data-saving="true"\]'\)\) return;/);
   assert.match(lies('src/pages/SocialMediaManager.tsx'), /if \(!socialWorkspaceDepartureAllowed\(document, \(\) => window\.confirm\(t\('Ungespeicherte Änderungen verwerfen\?'\)\)\)\) return;/);
 });

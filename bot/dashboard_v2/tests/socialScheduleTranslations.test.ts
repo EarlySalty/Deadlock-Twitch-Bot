@@ -21,7 +21,7 @@ const placeholders = (value: string) => [...value.matchAll(/\{(\w+)\}/g)].map(ma
 const logicNodes = descendants(logic);
 const planDeclaration = logicNodes.find(node => ts.isVariableDeclaration(node) && node.name.getText(logic) === 'PLAN_EN');
 const englishValues = new Set(planDeclaration ? descendants(planDeclaration).filter(ts.isPropertyAssignment).map(node => node.initializer) : []);
-const untranslated = new Set(['YouTube', 'TikTok', 'Instagram', 'Server-Fehler', 'zwischenzeitlich geändert']);
+const untranslated = new Set(['YouTube', 'TikTok', 'Instagram', 'Hashtags', 'Server-Fehler', 'zwischenzeitlich geändert']);
 
 test('plan editor text has an English entry with matching placeholders', () => {
   const keys = [...nodes, ...logicNodes].filter(ts.isStringLiteral).filter(node => !englishValues.has(node)).map(node => node.text).concat('Zeitzone in Verwaltung ändern')
@@ -41,18 +41,9 @@ test('plan editor text has an English entry with matching placeholders', () => {
   assert.equal(english('{day} {time} ist doppelt.', { day: 'Montag', time: '08:00' }), 'Montag 08:00 is listed twice.');
 });
 
-test('production queue text next to the plan editor is covered by the shared dictionary', () => {
-  const dictionary = dictionaryFor('en');
-  const panelTree = ts.createSourceFile('ScheduleQueuePanel.tsx', panel, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const keys = descendants(panelTree).filter(ts.isStringLiteral).map(node => node.text)
-    .filter(text => /[äöüß]|^[A-Z][a-z]|\{(?:number|title)\}/.test(text) && !text.includes('/') && text !== 'Server-Fehler');
-  assert.ok(keys.length > 25);
-  for (const key of ['Produktionswarteschlange & Veröffentlichungsmodus', 'Als Nächstes', 'Auftrag entfernen', 'Prüfung nötig']) assert.ok(keys.includes(key), key);
-  for (const key of keys) {
-    assert.ok(Object.hasOwn(dictionary, key), key);
-    assert.equal(translate('de', key), key);
-    assert.deepEqual(placeholders(dictionary[key]), placeholders(key), key);
-  }
+test('schedule panel mounts only the plan editor without the old queue card', () => {
+  assert.ok(panel.includes('<PipelinePlanControls'));
+  for (const legacy of ['Produktionswarteschlange', 'Als Nächstes', 'Auftrag entfernen', 'QueueCard', 'modeSlot']) assert.ok(!panel.includes(legacy), legacy);
 });
 
 test('production queue failure messages are covered by the selected-language dictionary', () => {

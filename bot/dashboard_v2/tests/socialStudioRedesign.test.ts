@@ -14,7 +14,7 @@ import type { SocialClipMitPosting } from '../src/api/socialMedia';
 import { upcomingTerms, upcomingTermView } from '../src/components/socialmedia/upcomingTerms';
 import { DEFAULT_LAYOUT } from '../src/types/socialMedia';
 import { approvalFact, authorizationFact, clipPlatformPresentation, connectionFact, publicationFact, transferFact } from '../src/components/socialmedia/platformPresentation';
-import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceView } from '../src/components/socialmedia/studioNavigation';
+import { socialStageFromSearch, socialViewFromSearch, socialViewSearch } from '../src/components/socialmedia/studioNavigation';
 import { getPreviewSocialResponse, SOCIAL_CLIPS_FIXTURE, SOCIAL_PLATFORMS_FIXTURE } from '../src/preview/fixtures';
 
 const clip = (id: number, overrides: Partial<SocialClipMitPosting> = {}): SocialClipMitPosting => ({
@@ -166,12 +166,11 @@ test('Übertragung, Postfach und private YouTube-Sichtbarkeit bedeuten keine öf
 });
 
 test('alte Studio-Adressen und OAuth-Rückkehr bleiben erreichbar', () => {
-  assert.equal(socialViewFromSearch('?view=pool'), 'freigabe');
-  for (const view of ['clips', 'unrecognized']) assert.equal(socialViewFromSearch(`?view=${view}`), 'heute');
-  for (const [alias, view] of [['schedule', 'planen'], ['settings', 'einstellungen'], ['vod', 'veroeffentlicht'], ['layout', 'einstellungen'], ['ai', 'freigabe']]) {
+  assert.equal(socialViewFromSearch('?view=pool'), 'clips');
+  assert.equal(socialViewFromSearch('?view=unrecognized'), 'heute');
+  for (const [alias, view] of [['schedule', 'planen'], ['settings', 'einstellungen'], ['archiv', 'vod'], ['layout', 'einstellungen'], ['ai', 'clips'], ['veroeffentlicht', 'clips']]) {
     assert.equal(socialViewFromSearch(`?view=${alias}`), view);
   }
-  assert.equal(socialWorkspaceView('layout'), 'konten');
   for (const callback of ['oauth_success=youtube', 'oauth_error=provider_error']) assert.equal(socialViewFromSearch(`?view=pool&${callback}`), 'einstellungen');
   const search = socialViewSearch('?twitch_user_id=1&streamer=alpha&oauth_success=youtube', 'plan');
   assert.equal(socialViewFromSearch(`?${search}`), 'planen');
@@ -203,10 +202,10 @@ test('upcoming terms exclude past and invalid dates while preserving legacy time
 
 test('five canonical views resolve every historical workspace without dropping OAuth', () => {
   const groups = {
-    freigabe: ['pool', 'ai', 'review'],
-    planen: ['plan', 'schedule', 'autopilot', 'library', 'import'],
+    clips: ['freigabe', 'pool', 'ai', 'review', 'veroeffentlicht', 'library', 'import'],
+    planen: ['plan', 'schedule', 'autopilot'],
     einstellungen: ['konten', 'settings', 'layout'],
-    veroeffentlicht: ['archiv', 'vod'],
+    vod: ['archiv'],
     heute: [],
   } as const;
   for (const [view, aliases] of Object.entries(groups)) {
@@ -216,11 +215,16 @@ test('five canonical views resolve every historical workspace without dropping O
   assert.equal(socialViewFromSearch(''), 'heute');
 });
 
-test('KI-Einstieg bewahrt Clipkontext beim Neuladen und entfernt ihn außerhalb der KI-Ansicht', () => {
-  const search = socialViewSearch('?twitch_user_id=1', 'ai', 42);
-  assert.equal(socialAiClipFromSearch(`?${search}`), 42);
-  assert.equal(socialAiClipFromSearch(`?${socialViewSearch(search, 'pool')}`), undefined);
-  for (const value of ['0', '-1', '1.5', 'NaN', '9007199254740992']) assert.equal(socialAiClipFromSearch(`?clip_db_id=${value}`), undefined);
+test('clip stage survives reload and leaves the address outside the clip collection', () => {
+  const search = socialViewSearch('?twitch_user_id=1&clip_db_id=42', 'freigabe');
+  assert.equal(socialViewFromSearch(`?${search}`), 'clips');
+  assert.equal(socialStageFromSearch(`?${search}`), 'review');
+  assert.equal(new URLSearchParams(search).get('clip_db_id'), null);
+  assert.equal(socialStageFromSearch('?view=veroeffentlicht'), 'posted');
+  assert.equal(socialStageFromSearch('?view=clips&stage=failed'), 'failed');
+  assert.equal(socialStageFromSearch('?view=clips&stage=bogus'), undefined);
+  assert.equal(socialStageFromSearch(`?${socialViewSearch(search, 'planen')}`), undefined);
+  assert.equal(new URLSearchParams(socialViewSearch(search, 'clips', 'all')).get('stage'), null);
 });
 
 test('lokale Social-Vorschau sperrt schreibende Aufrufe und simuliert keine Speicherung', async () => {
@@ -292,7 +296,6 @@ test('timezone links and the editor preserve the selected channel instead of the
   assert.equal(globalTimezoneOwner(new URL(globalTimezoneUrl(undefined), 'https://example.test').search, '999'), undefined);
   const source = (path: string) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
   for (const [path, owner] of [
-    ['pages/SocialMedia.tsx', 'twitchUserId'],
     ['components/socialmedia/autopilot/schedule-queue/ScheduleQueuePanel.tsx', 'twitchUserId'],
     ['components/socialmedia/autopilot/import-pool/ImportPoolPanel.tsx', 'owner'],
   ]) {
@@ -306,7 +309,7 @@ test('timezone links and the editor preserve the selected channel instead of the
 
 test('upcoming produced videos open video review while production jobs keep their queue target', () => {
   const source = readFileSync(new URL('../src/components/socialmedia/StudioOverview.tsx', import.meta.url), 'utf8');
-  assert.ok(source.includes("post ? onNavigate('freigabe', post.stage) : onNavigate(upcomingTermView(term.key))"));
+  assert.ok(source.includes("post ? onNavigate('clips', post.stage) : onNavigate(upcomingTermView(term.key))"));
   assert.equal(upcomingTermView('video-42'), 'freigabe');
   assert.equal(upcomingTermView('42-youtube'), 'freigabe');
   assert.equal(upcomingTermView('job-42'), 'planen');

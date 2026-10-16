@@ -1,6 +1,6 @@
 import type {
   DistributionPolicy, PipelineMode, PipelinePolicy, PolicyScope, ProductionHold, ReviewPolicy,
-  SchedulePatch, ScheduleQueueApi, ScheduleQueueSnapshot, WeeklySlot,
+  SchedulePatch, ScheduleQueueApi, ScheduleQueueSnapshot, TextDefaults, WeeklySlot,
 } from './autopilot/schedule-queue/api';
 export const PLAN_PLATFORMS = [
   { id: 'youtube', label: 'YouTube' },
@@ -26,6 +26,11 @@ export const REVIEWS: { id: ReviewPolicy; title: string; text: string }[] = [
 export const SCOPES: { id: PolicyScope; title: string; text: string }[] = [
   { id: 'shared', title: 'Gemeinsam', text: 'Alle Plattformen posten zu denselben Zeiten.' },
   { id: 'per_platform', title: 'Je Plattform', text: 'Jede Plattform bekommt eigene Zeiten.' },
+];
+
+export const TEXT_SCOPES: { id: PolicyScope; title: string; text: string }[] = [
+  { id: 'shared', title: 'Gleich für alle', text: 'Alle Plattformen bekommen dieselben Standardtexte.' },
+  { id: 'per_platform', title: 'Je Plattform', text: 'Jede Plattform bekommt eigene Standardtexte. Leere Felder nutzen die gemeinsamen Texte.' },
 ];
 
 export const DISTRIBUTIONS: { id: DistributionPolicy; title: string; text: string }[] = [
@@ -120,6 +125,16 @@ export const PLAN_EN: Record<string, string> = {
   'Keine passenden Clips verfügbar. Prüfe deine Clips oder den Zeitraum.': 'No matching clips available. Check your clips or the date range.',
   'Füge mindestens eine Zeit hinzu.': 'Add at least one time.',
   'Der nächste freie Termin liegt noch außerhalb des Vorlaufs.': 'The next free time is still outside the lead time.',
+  'Standardtexte': 'Default text',
+  'Werden genutzt, wenn ein Clip keinen eigenen Titel, keine Beschreibung oder keine Hashtags hat.': 'Used when a clip has no title, description or hashtags of its own.',
+  'Gleich für alle': 'Same for all',
+  'Alle Plattformen bekommen dieselben Standardtexte.': 'All platforms get the same default text.',
+  'Jede Plattform bekommt eigene Standardtexte. Leere Felder nutzen die gemeinsamen Texte.': 'Each platform gets its own default text. Empty fields use the shared text.',
+  'Für alle Plattformen': 'For all platforms',
+  'Titel': 'Title',
+  'Beschreibung': 'Description',
+  'Hashtags': 'Hashtags',
+  'Mit Leerzeichen trennen, zum Beispiel #deadlock #clips': 'Separate with spaces, for example #deadlock #clips',
   'Montag': 'Monday',
   'Dienstag': 'Tuesday',
   'Mittwoch': 'Wednesday',
@@ -147,8 +162,52 @@ export interface PlanDraft {
   review_policy: ReviewPolicy;
   schedule_scope: PolicyScope;
   distribution_policy: DistributionPolicy;
+  metadata_scope: PolicyScope;
+  texts: Record<string, TextDraft>;
   shared: WeeklySlot[];
   per_platform: Record<string, WeeklySlot[]>;
+}
+
+export interface TextDraft {
+  title: string;
+  description: string;
+  hashtags: string;
+}
+
+export const SHARED_TEXT = 'shared';
+
+function textDraft(text: TextDefaults): TextDraft {
+  return { title: text.title ?? '', description: text.description ?? '', hashtags: (text.hashtags ?? []).map(tag => `#${tag}`).join(' ') };
+}
+
+export function parseHashtags(value: string): string[] {
+  return [...new Set(value.split(/[\s,]+/).map(tag => tag.replace(/^#+/, '').trim()).filter(Boolean))];
+}
+
+function textDefaults(text: TextDraft): TextDefaults {
+  return { title: text.title.trim(), description: text.description.trim(), hashtags: parseHashtags(text.hashtags) };
+}
+
+function emptyText(text: TextDefaults): boolean {
+  return !text.title && !text.description && text.hashtags.length === 0;
+}
+
+function textsFromPolicy(policy: PipelinePolicy): Record<string, TextDraft> {
+  const defaults = policy.text_defaults ?? { shared: { title: '', description: '', hashtags: [] }, per_platform: {} };
+  return {
+    [SHARED_TEXT]: textDraft(defaults.shared),
+    ...Object.fromEntries(Object.entries(defaults.per_platform ?? {}).map(([platform, text]) => [platform, textDraft(text)])),
+  };
+}
+
+function policyTexts(texts: Record<string, TextDraft>): PipelinePolicy['text_defaults'] {
+  const shared = textDefaults(texts[SHARED_TEXT] ?? { title: '', description: '', hashtags: '' });
+  const per_platform = Object.fromEntries(Object.entries(texts)
+    .filter(([platform]) => platform !== SHARED_TEXT)
+    .map(([platform, text]) => [platform, textDefaults(text)] as const)
+    .filter(([, text]) => !emptyText(text))
+    .sort(([a], [b]) => a.localeCompare(b)));
+  return { shared, per_platform };
 }
 
 export interface PlanState {
@@ -175,6 +234,8 @@ export function planDraft({ snapshot, policy }: PlanState): PlanDraft {
     review_policy: policy.review_policy,
     schedule_scope: policy.schedule_scope,
     distribution_policy: policy.distribution_policy,
+    metadata_scope: policy.metadata_scope,
+    texts: textsFromPolicy(policy),
     shared: structuredClone(snapshot.settings.schedule_slots),
     per_platform: structuredClone(policy.platform_schedule_slots),
   };
@@ -203,9 +264,11 @@ export function schedulePatch(base: PlanState, draft: PlanDraft): SchedulePatch 
 export function policyChange(base: PlanState, draft: PlanDraft): PipelinePolicy | null {
   const policy = base.policy;
   const perPlatform = normalizePerPlatform(draft.per_platform);
+  const texts = policyTexts(draft.texts);
   const unchanged = draft.pipeline_mode === policy.pipeline_mode && draft.review_policy === policy.review_policy
     && draft.schedule_scope === policy.schedule_scope && draft.distribution_policy === policy.distribution_policy
-    && sameJson(perPlatform, normalizePerPlatform(policy.platform_schedule_slots));
+    && sameJson(perPlatform, normalizePerPlatform(policy.platform_schedule_slots))
+    && draft.metadata_scope === policy.metadata_scope && sameJson(texts, policyTexts(textsFromPolicy(policy)));
   if (unchanged) return null;
   return {
     ...policy,
@@ -214,6 +277,8 @@ export function policyChange(base: PlanState, draft: PlanDraft): PipelinePolicy 
     schedule_scope: draft.schedule_scope,
     distribution_policy: draft.distribution_policy,
     platform_schedule_slots: perPlatform,
+    metadata_scope: draft.metadata_scope,
+    text_defaults: texts,
   };
 }
 

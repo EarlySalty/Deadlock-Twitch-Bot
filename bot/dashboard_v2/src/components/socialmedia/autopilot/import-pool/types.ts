@@ -1,3 +1,4 @@
+import type { QueueStage } from '../../queuePresentation';
 import type { LoadSourcesPage } from "../../pipelineApi";
 
 export type ClipDateFilter =
@@ -116,4 +117,5 @@ export interface ImportPoolPanelProps {
   api?: ImportPoolApi;
   onChanged?: () => void;
   reloadKey?: number;
+  initialStage?: QueueStage;
 }

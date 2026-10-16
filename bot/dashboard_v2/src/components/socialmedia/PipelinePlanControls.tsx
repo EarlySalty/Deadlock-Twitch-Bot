@@ -4,8 +4,8 @@ import { useLanguage } from '@/context/LanguageContext';
 import { platformIconUrl } from './platformIcon';
 import type { PolicyScope, ScheduleQueueApi, WeeklySlot } from './autopilot/schedule-queue/api';
 import {
-  DISTRIBUTIONS, HOLDS, MODES, PLAN_PLATFORMS, REVIEWS, SCOPES, WEEKDAYS, addTime, failureText, isDirty, loadPlan, planDraft, planText,
-  savePlan, switchScope, validateDraft, type PlanDraft, type PlanState, type PlanText, type ScopeSwitch,
+  DISTRIBUTIONS, HOLDS, MODES, PLAN_PLATFORMS, REVIEWS, SCOPES, SHARED_TEXT, TEXT_SCOPES, WEEKDAYS, addTime, failureText, isDirty, loadPlan, planDraft, planText,
+  savePlan, switchScope, validateDraft, type PlanDraft, type PlanState, type PlanText, type ScopeSwitch, type TextDraft,
 } from './pipelinePlan';
 
 function slotLabel(value: string | undefined, timezone: string, locale: string, text: PlanText): string {
@@ -121,6 +121,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
           <ChoiceGroup legend={text('Vor Veröffentlichung prüfen')} name={`${id}-review`} options={REVIEWS} value={draft.review_policy} text={text} onChange={review_policy => edit({ review_policy })}
             hint={base.policy.review_policy !== 'off' && draft.review_policy !== base.policy.review_policy ? text('Clips, die schon auf deine Freigabe warten, bleiben dort, bis du entscheidest.') : undefined} />
           <Targets draft={draft} connected={base.snapshot.connected_platforms} text={text} onChange={target_platforms => edit({ target_platforms })} />
+          <TextDefaultsEditor id={id} draft={draft} text={text} onChange={edit} />
           <fieldset className="pp-group">
             <legend>{text('Auto-Pilot')}</legend>
             <div className="sq-toggles">
@@ -184,6 +185,35 @@ function ChoiceGroup<T extends string>({ legend, name, options, value, text, onC
     </div>
     {hint && <p className="sq-help">{hint}</p>}
   </fieldset>;
+}
+
+const EMPTY_TEXT: TextDraft = { title: '', description: '', hashtags: '' };
+
+function TextDefaultsEditor({ id, draft, text, onChange }: { id: string; draft: PlanDraft; text: PlanText; onChange: (change: Partial<PlanDraft>) => void }) {
+  const keys = draft.metadata_scope === 'shared' ? [SHARED_TEXT] : [SHARED_TEXT, ...draft.target_platforms];
+  const update = (key: string, value: TextDraft) => onChange({ texts: { ...draft.texts, [key]: value } });
+  return <fieldset className="pp-group pp-texts">
+    <legend>{text('Standardtexte')}</legend>
+    <p className="sq-help">{text('Werden genutzt, wenn ein Clip keinen eigenen Titel, keine Beschreibung oder keine Hashtags hat.')}</p>
+    <div className="pp-choices pp-compact">
+      {TEXT_SCOPES.map(option => <label className="pp-choice" key={option.id}>
+        <input type="radio" name={`${id}-texts`} value={option.id} checked={draft.metadata_scope === option.id} onChange={() => onChange({ metadata_scope: option.id })} />
+        <span><strong>{text(option.title)}</strong><small>{text(option.text)}</small></span>
+      </label>)}
+    </div>
+    {keys.map(key => <TextFields key={key} id={`${id}-text-${key}`} label={key === SHARED_TEXT ? text('Für alle Plattformen') : PLAN_PLATFORMS.find(item => item.id === key)?.label ?? key}
+      platform={key === SHARED_TEXT ? undefined : key} value={draft.texts[key] ?? EMPTY_TEXT} text={text} onChange={value => update(key, value)} />)}
+  </fieldset>;
+}
+
+function TextFields({ id, label, platform, value, text, onChange }: { id: string; label: string; platform?: string; value: TextDraft; text: PlanText; onChange: (value: TextDraft) => void }) {
+  return <div className="pp-text" role="group" aria-label={label}>
+    <h3 className="sq-platform-label">{platform && <img src={platformIconUrl(platform)} width="16" height="16" alt="" aria-hidden="true" />}{label}</h3>
+    <label htmlFor={`${id}-title`}>{text('Titel')}<input id={`${id}-title`} type="text" maxLength={100} value={value.title} onChange={event => onChange({ ...value, title: event.target.value })} /></label>
+    <label htmlFor={`${id}-description`}>{text('Beschreibung')}<textarea id={`${id}-description`} rows={3} maxLength={2200} value={value.description} onChange={event => onChange({ ...value, description: event.target.value })} /></label>
+    <label htmlFor={`${id}-hashtags`}>{text('Hashtags')}<input id={`${id}-hashtags`} type="text" value={value.hashtags} placeholder="#deadlock #clips" onChange={event => onChange({ ...value, hashtags: event.target.value })} /></label>
+    <small className="sq-help">{text('Mit Leerzeichen trennen, zum Beispiel #deadlock #clips')}</small>
+  </div>;
 }
 
 function Targets({ draft, connected, text, onChange }: { draft: PlanDraft; connected: string[]; text: PlanText; onChange: (targets: string[]) => void }) {

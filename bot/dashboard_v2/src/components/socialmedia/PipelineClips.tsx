@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, Clapperboard, Crop, ExternalLink, Film, Pencil, Trophy } from 'lucide-react';
+import { Archive, Clapperboard, Crop, ExternalLink, Film, ListX, Pencil, Trophy } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { discardClip, getPreviewStatus, previewFileUrl, requestPreview, submitClipToContest } from '@/api/socialMedia';
 import { PLATFORM_LABELS } from '@/components/socialmedia/labels';
@@ -8,6 +8,9 @@ import type { SocialPlatform } from '@/types/socialMedia';
 import { CLIP_MENU_ITEM, ClipActionMenu } from './ClipCard';
 import { PIPELINE_DETAIL_CUTOVER, type PipelinePage, type PipelineSource } from './pipelineApi';
 import { ClipReviewDetail } from './autopilot/publish-review/PublishReviewPanel';
+import { scheduleQueueApi, type QueueJob, type ReviewDecision } from './autopilot/schedule-queue/api';
+import { ReviewJobActions } from './autopilot/schedule-queue/ReviewJobActions';
+import './autopilot/schedule-queue/schedule-queue.css';
 import { QUEUE_FILTERS, filterSources, partialResult, publishedPlatforms, sourceStage, type EligibilityFilter, type QueueStage } from './queuePresentation';
 import { clipDuration, clipThumbnail, insideWindow, localTimestamp, sourceMetadata } from './autopilot/import-pool/presentation';
 import type { PoolPreferences } from './autopilot/import-pool/types';
@@ -29,6 +32,14 @@ const ELIGIBILITY_FILTERS: Array<{ id: EligibilityFilter; label: string }> = [
   { id: 'legacy_non_deadlock_visible', label: 'Andere Spiele' },
 ];
 
+const HOLD_REASONS: Record<string, string> = {
+  ai_editor_unavailable: 'Der KI-Editor ist noch nicht verfügbar. Es wird kein statisches Ersatzvideo erstellt.',
+  external_ai_consent_required: 'Die Zustimmung zur externen KI-Verarbeitung fehlt.',
+  attempts_exhausted: 'Das Versuchslimit ist erreicht. Bitte prüfe den Auftrag.',
+  production_interrupted: 'Die Produktion wurde unterbrochen und wird fortgesetzt.',
+  unsuitable_clip: 'Die KI hält diesen Clip möglicherweise für ungeeignet. Entscheide, ob er trotzdem verarbeitet werden soll.',
+};
+
 export type DetailMode = 'ai' | 'layout' | 'enrichment';
 
 type Translate = (text: string, params?: Record<string, string | number>) => string;
@@ -42,6 +53,7 @@ export interface PipelineClipsProps {
   onArchived?: () => void;
   onOpenDetail?: (source: PipelineSource, mode: DetailMode) => void;
   owner?: string;
+  initialStage?: QueueStage;
 }
 
 function sourceUrl(source: PipelineSource): string | null {
@@ -64,15 +76,30 @@ function eligibilityNote(source: PipelineSource, t: Translate): string | null {
   return null;
 }
 
-export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, bulkPending, onArchived, onOpenDetail, owner }: PipelineClipsProps) {
+export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, bulkPending, onArchived, onOpenDetail, owner, initialStage = 'all' }: PipelineClipsProps) {
   const { t, locale } = useLanguage();
   const [detail, setDetail] = useState<{ source: PipelineSource; mode: DetailMode } | null>(null);
   const openDetail = onOpenDetail ?? (owner ? (source: PipelineSource, mode: DetailMode) => setDetail({ source, mode }) : undefined);
   const [eligibility, setEligibility] = useState<EligibilityFilter>('all');
-  const [stage, setStage] = useState<QueueStage>('all');
+  const [stage, setStage] = useState<QueueStage>(initialStage);
+  const [appliedStage, setAppliedStage] = useState<QueueStage>(initialStage);
   const [search, setSearch] = useState('');
   const [platform, setPlatform] = useState<SocialPlatform | 'all'>('all');
   const [pageIndex, setPageIndex] = useState(0);
+  if (appliedStage !== initialStage) {
+    setAppliedStage(initialStage);
+    setStage(initialStage);
+    setPageIndex(0);
+  }
+  const held = page.sources.some((source) => source.jobs.some((job) => job.status === 'review'));
+  const queue = useQuery({
+    queryKey: ['social-media', 'autopilot', 'schedule-queue', owner],
+    queryFn: ({ signal }) => scheduleQueueApi.load(owner, signal),
+    enabled: Boolean(owner) && held,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+  const queueJobs = useMemo(() => new Map((queue.data?.jobs ?? []).map((job) => [job.id, job])), [queue.data]);
   const filtered = useMemo(
     () => filterSources(page.sources, { eligibility, stage, search, platform }, (source) => sourceMetadata(source).title),
     [page.sources, eligibility, stage, search, platform],
@@ -158,6 +185,9 @@ export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, b
               onSelect={onSelect}
               onArchived={onArchived}
               onOpenDetail={openDetail}
+              owner={owner}
+              queueJobs={queueJobs}
+              onQueueChanged={() => { void queue.refetch(); onArchived?.(); }}
             />
           ))}
         </ul>
@@ -196,6 +226,9 @@ function PipelineClip({
   onSelect,
   onArchived,
   onOpenDetail,
+  owner,
+  queueJobs,
+  onQueueChanged,
 }: {
   source: PipelineSource;
   timezone: string;
@@ -205,6 +238,9 @@ function PipelineClip({
   onSelect: (clipId: string, selected: boolean) => void;
   onArchived?: () => void;
   onOpenDetail?: (source: PipelineSource, mode: DetailMode) => void;
+  owner?: string;
+  queueJobs: Map<number, QueueJob>;
+  onQueueChanged: () => void;
 }) {
   const { t, locale } = useLanguage();
   const queryClient = useQueryClient();
@@ -239,6 +275,17 @@ function PipelineClip({
       onArchived?.();
     },
   });
+  const heldJob = owner ? source.jobs.find((job) => job.status === 'review') : undefined;
+  const queuedJob = owner ? source.jobs.find((job) => job.status === 'queued') : undefined;
+  const resolve = useMutation({
+    mutationFn: ({ id, action, note }: { id: number; action: ReviewDecision; note: string }) => scheduleQueueApi.resolve(id, action, note, owner),
+    onSuccess: onQueueChanged,
+  });
+  const cancel = useMutation({
+    mutationFn: (id: number) => scheduleQueueApi.cancel(id, owner),
+    onSuccess: onQueueChanged,
+  });
+  const holdDetails = heldJob ? queueJobs.get(heldJob.id) : undefined;
   const ready = preview.data?.status === 'ready';
   const rendering = render.isPending || ['pending', 'rendering'].includes(preview.data?.status ?? '');
   const archived = stage === 'archive';
@@ -362,6 +409,19 @@ function PipelineClip({
                       {t('Für Clip-Contest einreichen')}
                     </button>
                   )}
+                  {queuedJob && (
+                    <button
+                      type="button"
+                      disabled={cancel.isPending}
+                      onClick={() => run(() => {
+                        if (window.confirm(t('Diesen Auftrag entfernen? Der Clip wird nicht automatisch erneut ausgewählt.'))) cancel.mutate(queuedJob.id);
+                      })}
+                      className={CLIP_MENU_ITEM}
+                    >
+                      <ListX className="h-4 w-4" />
+                      {t('Aus der Warteschlange entfernen')}
+                    </button>
+                  )}
                   {url && (
                     <a href={url} target="_blank" rel="noopener noreferrer" className={CLIP_MENU_ITEM}>
                       <ExternalLink className="h-4 w-4" />
@@ -377,6 +437,22 @@ function PipelineClip({
           <ul className="import-pool-notes">
             {notes.map((note) => <li key={note}>{note}</li>)}
           </ul>
+        )}
+        {heldJob && (
+          <div className="schedule-queue pipeline-clips-hold">
+            {(holdDetails?.review_reasons.length ? holdDetails.review_reasons : ['']).map((reason) => (
+              <p key={reason} className="import-pool-help">{t(HOLD_REASONS[reason] ?? 'Die Produktion benötigt eine Prüfung.')}</p>
+            ))}
+            {holdDetails?.review_explanation && <p className="import-pool-help">{holdDetails.review_explanation}</p>}
+            <ReviewJobActions
+              busy={resolve.isPending}
+              clipTitle={metadata.title}
+              onResolve={(action, note) => resolve.mutate({ id: heldJob.id, action, note })}
+            />
+          </div>
+        )}
+        {(resolve.isError || cancel.isError) && (
+          <p role="alert" className="import-pool-error-text">{t('Die Änderung konnte nicht gespeichert werden. Bitte versuche es erneut.')}</p>
         )}
         {previewActive && preview.data?.status === null && (
           <p role="status" className="import-pool-help">{t('Noch keine Vorschau vorhanden. Über „Weitere Aktionen“ kannst du sie rendern.')}</p>
