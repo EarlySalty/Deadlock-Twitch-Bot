@@ -2799,3 +2799,6 @@ async fn unified_ai_mode_follows_the_frozen_review_policy_instead_of_legacy_full
         );
     }
 }
+
+#[path = "acceptance_tests.rs"]
+mod acceptance;

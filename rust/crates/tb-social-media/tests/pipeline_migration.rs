@@ -720,3 +720,46 @@ async fn umstellung_schliesst_altschreiber_und_pausiert_ohne_nachholen() {
             .expect("Status");
     assert_eq!(status, "failed");
 }
+
+#[tokio::test]
+async fn owner_without_targets_cuts_over_unified_with_autopilot_off() {
+    let (_db, pool) = database().await;
+    sqlx::raw_sql(
+        r#"
+        INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('zeta', '600');
+        INSERT INTO social_media_streamer_settings (streamer_login, approval_mode, timezone, twitch_user_id)
+            VALUES ('zeta', 'full_auto', 'Europe/Berlin', '600');
+        INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login, twitch_user_id, category_key)
+            VALUES (60, 'c60', 'https://clips/c60', 'zeta', '600', 'deadlock');
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("Owner without targets");
+    let report = pipeline_migration::run_command(&pool, &CutoverCommand::Apply)
+        .await
+        .expect("Cutover");
+    let zeta = report["cutover"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["twitch_user_id"] == "600"))
+        .expect("zeta");
+    assert_eq!(zeta["outcome"], "activated");
+    assert_eq!(zeta["autopilot_enabled"], false);
+    assert_eq!(cutover_state(&pool, "600").await, "unified");
+    let (enabled, targets): (bool, String) = sqlx::query_as(
+        "SELECT enabled, target_platforms::text FROM social_media_autopilot_settings WHERE twitch_user_id = '600'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Autopilot");
+    assert!(!enabled);
+    assert_eq!(targets, "[]");
+    let queued: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_clips_upload_queue q JOIN twitch_clips_social_media c ON c.id = q.clip_id
+         WHERE c.twitch_user_id = '600'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Queue");
+    assert_eq!(queued, 0);
+}
