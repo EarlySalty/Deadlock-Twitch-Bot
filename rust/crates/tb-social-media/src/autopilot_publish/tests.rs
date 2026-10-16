@@ -2642,3 +2642,138 @@ async fn veto_approvals_lapse_when_the_channel_returns_to_review() {
     assert_eq!(video_status(&pool, id).await, "review");
     cleanup(pool).await;
 }
+
+#[tokio::test]
+async fn unified_review_policy_off_publishes_despite_legacy_review_mode() {
+    let pool = pool().await;
+    configure(&pool, &["youtube"], &[("youtube", "yt-1")]).await;
+    sqlx::query("UPDATE social_media_autopilot_settings SET pipeline_mode = 'ai_edit', review_policy = 'off', publish_mode = 'review' WHERE twitch_user_id = 'owner'")
+        .execute(&pool)
+        .await
+        .expect("unified off policy");
+    let automatic = veto_video(&pool, "off", "off", 30).await;
+    let held = veto_video(&pool, "held", "off", 30).await;
+    sqlx::query("UPDATE social_produced_videos SET needs_review = TRUE WHERE id = $1")
+        .bind(held)
+        .execute(&pool)
+        .await
+        .expect("quality hold");
+    let revised = veto_video(&pool, "revised", "off", 30).await;
+    sqlx::query("UPDATE social_produced_videos SET metadata = metadata || '{\"manual_ai_job_id\": 1}' WHERE id = $1")
+        .bind(revised)
+        .execute(&pool)
+        .await
+        .expect("manual revision");
+    assert_eq!(
+        snapshot(&pool, "owner")
+            .await
+            .expect("snapshot")
+            .settings
+            .review_mode,
+        ReviewMode::FullAuto
+    );
+    let publisher = ScriptedPublisher::with(vec![published("yt-off")]);
+    let executor = PublishExecutor::new(pool.clone(), publisher.clone());
+    executor.tick().await.expect("promotion tick");
+    assert_ne!(video_status(&pool, automatic).await, "review");
+    make_due(&pool, automatic).await;
+    executor.tick().await.expect("due tick");
+    assert_eq!(video_status(&pool, automatic).await, "published");
+    assert_eq!(publisher.calls().len(), 1);
+    for id in [held, revised] {
+        assert_eq!(video_status(&pool, id).await, "review");
+        assert_eq!(approval_count(&pool, id).await, 0);
+    }
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn impossible_veto_deadline_holds_only_its_own_row() {
+    let pool = pool().await;
+    configure(&pool, &["youtube"], &[("youtube", "yt-1")]).await;
+    sqlx::query("UPDATE social_media_autopilot_settings SET review_policy = 'veto_until_deadline' WHERE twitch_user_id = 'owner'")
+        .execute(&pool)
+        .await
+        .expect("veto policy");
+    let due = veto_video(&pool, "due", "veto_until_deadline", -1).await;
+    let broken = veto_video(&pool, "broken", "veto_until_deadline", -1).await;
+    sqlx::query("UPDATE social_produced_videos SET metadata = metadata || '{\"veto_deadline\": \"2026-13-01T00:00:00Z\"}' WHERE id = $1")
+        .bind(broken)
+        .execute(&pool)
+        .await
+        .expect("impossible deadline");
+    let publisher = ScriptedPublisher::with(vec![published("yt-due")]);
+    let executor = PublishExecutor::new(pool.clone(), publisher.clone());
+    executor.tick().await.expect("tick survives the broken row");
+    executor.tick().await.expect("second tick");
+    assert_eq!(video_status(&pool, due).await, "published");
+    assert_eq!(approval_count(&pool, broken).await, 0);
+    assert_eq!(publisher.calls().len(), 1);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn veto_deadline_passing_during_the_tick_publishes_in_that_tick() {
+    let pool = pool().await;
+    configure(&pool, &["youtube"], &[("youtube", "yt-1")]).await;
+    sqlx::query("UPDATE social_media_autopilot_settings SET review_policy = 'veto_until_deadline' WHERE twitch_user_id = 'owner'")
+        .execute(&pool)
+        .await
+        .expect("veto policy");
+    let id = veto_video(&pool, "late", "veto_until_deadline", -1).await;
+    sqlx::query("UPDATE social_produced_videos SET autopilot_deferred_stage = 'promote', autopilot_deferred_until = clock_timestamp() + INTERVAL '1 hour' WHERE id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("missed by the promotion stage");
+    let slot: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT scheduled_at FROM social_produced_videos WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("slot");
+    let publisher = ScriptedPublisher::with(vec![published("yt-late")]);
+    let executor = PublishExecutor::new(pool.clone(), publisher.clone());
+    let report = executor.tick().await.expect("tick");
+    assert_eq!(report.promoted, 1);
+    assert_eq!(report.released, 0);
+    assert_eq!(video_status(&pool, id).await, "published");
+    let event: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT scheduled_at FROM social_produced_videos WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("event slot");
+    assert_eq!(event, slot);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn unconfirmed_publish_becomes_uncertain_without_replay() {
+    let pool = pool().await;
+    configure(&pool, &["youtube"], &[("youtube", "yt-1")]).await;
+    let (id, _) = video(&pool, "unconfirmed").await;
+    approve(&pool, "owner", id, &decisions(&["youtube"]))
+        .await
+        .expect("approve");
+    make_due(&pool, id).await;
+    let publisher = ScriptedPublisher::with(vec![
+        Err(UploadError::PublishUnconfirmed(
+            "No media ID in response".into(),
+        )),
+        published("must-not-replay"),
+    ]);
+    let executor = PublishExecutor::new(pool.clone(), publisher.clone());
+    executor.tick().await.expect("first tick");
+    executor.tick().await.expect("second tick");
+    assert_eq!(
+        destinations(&pool, id).await,
+        vec![(
+            "youtube".into(),
+            queue_status::UNCERTAIN.into(),
+            Some("publish_unconfirmed".into())
+        )]
+    );
+    assert_eq!(publisher.calls().len(), 1);
+    cleanup(pool).await;
+}

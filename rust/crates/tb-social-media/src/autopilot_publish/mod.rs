@@ -22,6 +22,11 @@ pub use executor::{
 pub use notify::{AutopilotNotifier, DiscordDelivery};
 
 pub const AUTOPILOT_APPROVER: &str = "autopilot";
+pub(crate) const EFFECTIVE_REVIEW: &str = "(CASE WHEN s.review_policy = 'veto_until_deadline'
+        THEN 'veto_until_deadline'
+    WHEN s.pipeline_mode IS NOT NULL THEN s.review_policy
+    WHEN s.publish_mode = 'full_auto' THEN 'off'
+    ELSE 'required' END)";
 pub const DASHBOARD_LINK: &str =
     "https://deutsche-deadlock-community.de/twitch/social-media?view=plan";
 const RECENT_FINISHED_VIDEOS: i64 = 50;
@@ -464,16 +469,15 @@ pub(crate) async fn review_mode_on(
     connection: &mut PgConnection,
     owner: &str,
 ) -> Result<ReviewMode, sqlx::Error> {
-    let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT COALESCE(publish_mode, 'review'), COALESCE(review_policy, 'required')
-         FROM social_media_autopilot_settings WHERE twitch_user_id = $1",
-    )
+    let policy: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT {EFFECTIVE_REVIEW} FROM social_media_autopilot_settings s WHERE s.twitch_user_id = $1"
+    )))
     .bind(owner)
     .fetch_optional(connection)
     .await?;
-    Ok(match row {
-        Some((_, policy)) if policy == "veto_until_deadline" => ReviewMode::VetoUntilDeadline,
-        Some((mode, _)) if mode == "full_auto" => ReviewMode::FullAuto,
+    Ok(match policy.as_deref() {
+        Some("veto_until_deadline") => ReviewMode::VetoUntilDeadline,
+        Some("off") => ReviewMode::FullAuto,
         _ => ReviewMode::Review,
     })
 }

@@ -11,7 +11,7 @@ use sqlx::{PgConnection, PgPool, Row};
 use super::{
     bind_on, binding, connections_on, notify, now_on, queue_status, release_slot, review_mode_on,
     tiktok_delivery, valid_approvals_on, AutopilotNotifier, PublishError, ReviewMode,
-    AUTOPILOT_APPROVER,
+    AUTOPILOT_APPROVER, EFFECTIVE_REVIEW,
 };
 use crate::autopilot_settings::{self, AutopilotSettings};
 use crate::credentials::CredentialManager;
@@ -46,13 +46,9 @@ const RETENTION_OVER: &str = "v.metadata #> '{artifact_retention,unresolved_sinc
             q.completed_at, q.next_retry_at))
          FROM twitch_clips_upload_queue q WHERE q.produced_video_id = v.id))
         < clock_timestamp() - make_interval(days => $3)";
-const AUTOMATIC: &str = "CASE WHEN s.review_policy = 'veto_until_deadline'
-    THEN v.policy_snapshot ->> 'review_policy' = 'veto_until_deadline'
-        AND CASE WHEN jsonb_typeof(v.metadata -> 'veto_deadline') = 'string'
-            AND v.metadata ->> 'veto_deadline' ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$'
-            THEN (v.metadata ->> 'veto_deadline')::timestamptz <= clock_timestamp()
-            ELSE FALSE END
-    ELSE s.publish_mode = 'full_auto' END";
+const VETO_DEADLINE: &str = "CASE WHEN jsonb_typeof(v.metadata -> 'veto_deadline') = 'string'
+    THEN v.metadata ->> 'veto_deadline' END";
+const PROMOTION_BATCH: usize = 20;
 const NOT_DEFERRED: &str = "NOT COALESCE(v.autopilot_deferred_stage = $1
     AND v.autopilot_deferred_until > clock_timestamp(), FALSE)";
 
@@ -313,23 +309,39 @@ impl PublishExecutor {
     }
 
     async fn promote(&self) -> Result<usize, PublishError> {
-        let candidates: Vec<(i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT v.id, v.twitch_user_id FROM social_produced_videos v
+        let automatic = automatic();
+        let candidates: Vec<PromotionRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT v.id, v.twitch_user_id, {EFFECTIVE_REVIEW} = 'veto_until_deadline',
+                {VETO_DEADLINE}, clock_timestamp() FROM social_produced_videos v
              JOIN social_production_jobs j ON j.id = v.job_id AND j.source = 'autopilot'
              JOIN social_media_autopilot_settings s ON s.twitch_user_id = v.twitch_user_id
-             WHERE {AUTOMATIC} AND NOT s.paused AND v.status = 'review'
+             WHERE {automatic} AND NOT s.paused AND v.status = 'review'
              AND NOT v.needs_review AND v.review_reasons = '[]'::jsonb
              AND v.expires_at > clock_timestamp() AND v.publication_executed_at IS NULL
              AND v.artifact_deleted_at IS NULL AND v.file_path IS NOT NULL
              AND NOT (v.metadata ? 'manual_review') AND NOT (v.metadata ? 'manual_ai_job_id')
              AND NOT EXISTS (SELECT 1 FROM social_media_clip_approval a WHERE a.produced_video_id = v.id)
-             AND {NOT_DEFERRED} ORDER BY v.created_at, v.id LIMIT 20"
+             AND {NOT_DEFERRED} ORDER BY v.created_at, v.id"
         )))
         .bind(Stage::Promote.name())
         .fetch_all(&self.pool)
         .await?;
+        let mut due = Vec::new();
+        for (id, owner, veto, deadline, now) in candidates {
+            if due.len() >= PROMOTION_BATCH {
+                break;
+            }
+            match veto_state(veto, deadline.as_deref(), now) {
+                VetoState::Due => due.push((id, owner)),
+                VetoState::Waiting => {}
+                VetoState::Invalid => {
+                    tracing::warn!(video = id, "Auto-Pilot veto deadline is invalid");
+                    self.defer(id, Stage::Promote).await?;
+                }
+            }
+        }
         let mut promoted = 0;
-        for (id, owner) in candidates {
+        for (id, owner) in due {
             match self.promote_video(id, &owner).await {
                 Ok(true) => promoted += 1,
                 Ok(false) => self.defer(id, Stage::Promote).await?,
@@ -376,16 +388,22 @@ impl PublishExecutor {
         let binding = binding(&self.pool, owner, id).await?;
         let mut tx = self.pool.begin().await?;
         autopilot_settings::lock_owner(&mut tx, owner).await?;
-        let still_eligible: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT EXISTS(SELECT 1 FROM social_produced_videos v
-             JOIN social_media_autopilot_settings s ON s.twitch_user_id = v.twitch_user_id
-             WHERE v.id = $1 AND v.status = 'review' AND NOT v.needs_review
-             AND NOT (v.metadata ? 'manual_review') AND {AUTOMATIC}
-             AND NOT EXISTS (SELECT 1 FROM social_media_clip_approval a WHERE a.produced_video_id = v.id))"
-        )))
-        .bind(id)
-        .fetch_one(&mut *tx)
-        .await?;
+        let automatic = automatic();
+        let eligible: Option<(bool, Option<String>, DateTime<Utc>)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "SELECT {EFFECTIVE_REVIEW} = 'veto_until_deadline', {VETO_DEADLINE}, clock_timestamp()
+                 FROM social_produced_videos v
+                 JOIN social_media_autopilot_settings s ON s.twitch_user_id = v.twitch_user_id
+                 WHERE v.id = $1 AND v.status = 'review' AND NOT v.needs_review
+                 AND NOT (v.metadata ? 'manual_review') AND {automatic}
+                 AND NOT EXISTS (SELECT 1 FROM social_media_clip_approval a WHERE a.produced_video_id = v.id)"
+            )))
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let still_eligible = eligible.is_some_and(|(veto, deadline, now)| {
+            veto_state(veto, deadline.as_deref(), now) == VetoState::Due
+        });
         if !still_eligible {
             return Ok(false);
         }
@@ -470,10 +488,25 @@ impl PublishExecutor {
         .fetch_all(&self.pool)
         .await?;
         for (id, owner) in due {
-            if let Err(error) = self.execute_video(id, &owner, report).await {
+            if let Err(error) = self.execute_or_promote(id, &owner, report).await {
                 tracing::warn!(%error, video = id, "Auto-Pilot publication event failed");
                 self.defer(id, Stage::Execute).await?;
             }
+        }
+        Ok(())
+    }
+
+    async fn execute_or_promote(
+        &self,
+        id: i64,
+        owner: &str,
+        report: &mut TickReport,
+    ) -> Result<(), PublishError> {
+        if self.execute_video(id, owner, report, true).await? == Execution::VetoDue {
+            if self.promote_video(id, owner).await? {
+                report.promoted += 1;
+            }
+            self.execute_video(id, owner, report, false).await?;
         }
         Ok(())
     }
@@ -483,7 +516,8 @@ impl PublishExecutor {
         id: i64,
         owner: &str,
         report: &mut TickReport,
-    ) -> Result<(), PublishError> {
+        promote_veto: bool,
+    ) -> Result<Execution, PublishError> {
         let mut tx = self.pool.begin().await?;
         autopilot_settings::lock_owner(&mut tx, owner).await?;
         let settings = autopilot_settings::load_on(&mut tx, owner).await?;
@@ -496,15 +530,18 @@ impl PublishExecutor {
         .fetch_optional(&mut *tx)
         .await?;
         let Some((Some(slot), status, clip_id, job)) = row else {
-            return Ok(());
+            return Ok(Execution::Done);
         };
         let now = now_on(&mut tx).await?;
         if slot > now || settings.paused {
-            return Ok(());
+            return Ok(Execution::Done);
         }
         let mode = review_mode_on(&mut tx, owner).await?;
         let approved = valid_approvals_on(&mut tx, id, owner, mode).await?;
         if approved.is_empty() {
+            if promote_veto && mode == ReviewMode::VetoUntilDeadline && status == "review" {
+                return Ok(Execution::VetoDue);
+            }
             release_slot(&mut tx, id).await?;
             if status != "review" {
                 sqlx::query("UPDATE social_produced_videos SET status = 'review' WHERE id = $1 AND status = 'approved'")
@@ -514,7 +551,7 @@ impl PublishExecutor {
             }
             tx.commit().await?;
             report.released += 1;
-            return Ok(());
+            return Ok(Execution::Done);
         }
         if !on_time(&settings, slot, now) {
             let mut platforms: BTreeSet<String> = approved.iter().cloned().collect();
@@ -533,7 +570,7 @@ impl PublishExecutor {
             }
             tx.commit().await?;
             report.rescheduled += 1;
-            return Ok(());
+            return Ok(Execution::Done);
         }
         let existing: Vec<String> = sqlx::query_scalar(
             "SELECT platform FROM twitch_clips_upload_queue WHERE produced_video_id = $1",
@@ -609,7 +646,7 @@ impl PublishExecutor {
         .await?;
         tx.commit().await?;
         report.executed += 1;
-        Ok(())
+        Ok(Execution::Done)
     }
 
     async fn upload_due(&self) -> Result<usize, PublishError> {
@@ -765,6 +802,15 @@ impl PublishExecutor {
                     &claim,
                     queue_status::UNCERTAIN,
                     Some("request_uncertain"),
+                    None,
+                )
+                .await
+            }
+            Err(UploadError::PublishUnconfirmed(_)) => {
+                self.settle(
+                    &claim,
+                    queue_status::UNCERTAIN,
+                    Some("publish_unconfirmed"),
                     None,
                 )
                 .await
@@ -1170,6 +1216,41 @@ fn on_time(settings: &AutopilotSettings, slot: DateTime<Utc>, now: DateTime<Utc>
 }
 
 type ExecutionRow = (Option<DateTime<Utc>>, String, i64, Option<i64>);
+type PromotionRow = (i64, String, bool, Option<String>, DateTime<Utc>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Execution {
+    Done,
+    VetoDue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VetoState {
+    Due,
+    Waiting,
+    Invalid,
+}
+
+fn automatic() -> String {
+    format!(
+        "({EFFECTIVE_REVIEW} = 'off' OR ({EFFECTIVE_REVIEW} = 'veto_until_deadline'
+            AND v.policy_snapshot ->> 'review_policy' = 'veto_until_deadline'))"
+    )
+}
+
+fn veto_state(veto: bool, deadline: Option<&str>, now: DateTime<Utc>) -> VetoState {
+    if !veto {
+        return VetoState::Due;
+    }
+    let Some(deadline) = deadline else {
+        return VetoState::Waiting;
+    };
+    match DateTime::parse_from_rfc3339(deadline) {
+        Ok(deadline) if deadline.with_timezone(&Utc) <= now => VetoState::Due,
+        Ok(_) => VetoState::Waiting,
+        Err(_) => VetoState::Invalid,
+    }
+}
 
 struct EventRef<'a> {
     clip_id: i64,
