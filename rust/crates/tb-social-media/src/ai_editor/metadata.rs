@@ -5,8 +5,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 use crate::{
-    autopilot_settings, posting_plan::PLATFORMS, produced_video, production_jobs::ProductionMode,
-    video_processor::format_hashtags,
+    autopilot_settings, posting_plan::PLATFORMS, produced_video, video_processor::format_hashtags,
 };
 
 use super::AiEditorError;
@@ -29,6 +28,7 @@ pub struct PlatformCopy {
 pub struct VersionMetadata {
     pub video_id: i64,
     pub editable: bool,
+    pub targets: Vec<String>,
     pub platforms: BTreeMap<String, PlatformCopy>,
 }
 
@@ -51,8 +51,43 @@ impl From<AiEditorError> for MetadataError {
     }
 }
 
+const UNCOMMITTED: &str = "v.publication_executed_at IS NULL AND NOT EXISTS (
+    SELECT 1 FROM twitch_clips_upload_queue q WHERE q.produced_video_id = v.id
+    AND (q.effect_started_at IS NOT NULL OR q.external_id IS NOT NULL
+    OR q.status NOT IN ('waiting_exact_file', 'autopilot_held', 'autopilot_discarded')))";
+
 pub fn normalize_hashtag(tag: &str) -> String {
     tag.trim().trim_start_matches('#').to_string()
+}
+
+pub fn normalize_copy(copy: PlatformCopy) -> PlatformCopy {
+    PlatformCopy {
+        title: copy.title.trim().to_string(),
+        description: copy.description.trim().to_string(),
+        hashtags: copy
+            .hashtags
+            .iter()
+            .map(|tag| normalize_hashtag(tag))
+            .filter(|tag| !tag.is_empty())
+            .collect(),
+    }
+}
+
+pub fn targets(metadata: &Value) -> Vec<String> {
+    let stored = metadata.get("platforms").and_then(Value::as_object);
+    let targets: Vec<String> = PLATFORMS
+        .iter()
+        .filter(|platform| stored.is_some_and(|copies| copies.contains_key(**platform)))
+        .map(|platform| (*platform).to_string())
+        .collect();
+    if targets.is_empty() {
+        PLATFORMS
+            .iter()
+            .map(|platform| (*platform).to_string())
+            .collect()
+    } else {
+        targets
+    }
 }
 
 fn stored_copy(value: Option<&Value>) -> PlatformCopy {
@@ -81,24 +116,34 @@ fn stored_copy(value: Option<&Value>) -> PlatformCopy {
     }
 }
 
-fn view(video: &produced_video::ProducedVideo) -> VersionMetadata {
+fn view(video: &produced_video::ProducedVideo, uncommitted: bool) -> VersionMetadata {
     let stored = video.metadata.get("platforms");
+    let targets = targets(&video.metadata);
+    let copy_of = |platform: &str| stored_copy(stored.and_then(|value| value.get(platform)));
+    let mirror = targets
+        .first()
+        .map(|platform| copy_of(platform))
+        .unwrap_or_default();
     let platforms = PLATFORMS
         .iter()
         .map(|platform| {
-            (
-                (*platform).to_string(),
-                stored_copy(stored.and_then(|value| value.get(*platform))),
-            )
+            let copy = if targets.iter().any(|target| target == platform) {
+                copy_of(platform)
+            } else {
+                mirror.clone()
+            };
+            ((*platform).to_string(), copy)
         })
         .collect();
     VersionMetadata {
         video_id: video.id,
-        editable: video.status == "review"
+        editable: uncommitted
+            && video.status == "review"
             && video.file_path.is_some()
             && video
                 .expires_at
                 .is_some_and(|expiry| expiry > chrono::Utc::now()),
+        targets,
         platforms,
     }
 }
@@ -111,12 +156,25 @@ async fn owned_video(
     produced_video::get(pool, owner, id)
         .await
         .map_err(|_| AiEditorError::Storage)?
-        .filter(|video| video.mode == ProductionMode::Ai && video.status != "expired")
+        .filter(|video| video.status != "expired")
         .ok_or(AiEditorError::NotFound)
 }
 
+async fn uncommitted(pool: &PgPool, id: i64) -> Result<bool, AiEditorError> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT {UNCOMMITTED} FROM social_produced_videos v WHERE v.id = $1"
+    )))
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| AiEditorError::Storage)?
+    .ok_or(AiEditorError::NotFound)
+}
+
 pub async fn load(pool: &PgPool, owner: &str, id: i64) -> Result<VersionMetadata, AiEditorError> {
-    Ok(view(&owned_video(pool, owner, id).await?))
+    let video = owned_video(pool, owner, id).await?;
+    let uncommitted = uncommitted(pool, video.id).await?;
+    Ok(view(&video, uncommitted))
 }
 
 pub async fn save(
@@ -125,22 +183,27 @@ pub async fn save(
     id: i64,
     platforms: BTreeMap<String, PlatformCopy>,
 ) -> Result<VersionMetadata, MetadataError> {
+    let video = owned_video(pool, owner, id).await?;
+    let targets = targets(&video.metadata);
     let platforms = normalized(platforms);
-    let issues = validate(&platforms);
+    let issues = validate_targets(&platforms, &targets);
     if !issues.is_empty() {
         return Err(MetadataError::Invalid(issues));
     }
-    let payload = serde_json::to_string(&platforms).map_err(|_| AiEditorError::Storage)?;
+    let selected: BTreeMap<String, PlatformCopy> = platforms
+        .into_iter()
+        .filter(|(platform, _)| targets.contains(platform))
+        .collect();
+    let payload = serde_json::to_string(&selected).map_err(|_| AiEditorError::Storage)?;
     let mut tx = pool.begin().await.map_err(|_| AiEditorError::Storage)?;
     autopilot_settings::lock_owner(&mut tx, owner)
         .await
         .map_err(|_| AiEditorError::Storage)?;
-    let changed = sqlx::query(
-        "UPDATE social_produced_videos SET metadata = jsonb_set(metadata, '{platforms}', $3::text::jsonb)
-         WHERE id = $1 AND twitch_user_id = $2 AND status = 'review' AND file_path IS NOT NULL
-         AND mode='ai' AND expires_at>NOW() AND artifact_deleted_at IS NULL
-         AND publication_executed_at IS NULL",
-    )
+    let changed = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE social_produced_videos v SET metadata = jsonb_set(v.metadata, '{{platforms}}', $3::text::jsonb)
+         WHERE v.id = $1 AND v.twitch_user_id = $2 AND v.status = 'review' AND v.file_path IS NOT NULL
+         AND v.expires_at > NOW() AND v.artifact_deleted_at IS NULL AND {UNCOMMITTED}"
+    )))
     .bind(id)
     .bind(owner)
     .bind(payload)
@@ -161,25 +224,22 @@ pub async fn save(
 fn normalized(platforms: BTreeMap<String, PlatformCopy>) -> BTreeMap<String, PlatformCopy> {
     platforms
         .into_iter()
-        .map(|(platform, copy)| {
-            (
-                platform,
-                PlatformCopy {
-                    title: copy.title.trim().to_string(),
-                    description: copy.description.trim().to_string(),
-                    hashtags: copy
-                        .hashtags
-                        .iter()
-                        .map(|tag| normalize_hashtag(tag))
-                        .filter(|tag| !tag.is_empty())
-                        .collect(),
-                },
-            )
-        })
+        .map(|(platform, copy)| (platform, normalize_copy(copy)))
         .collect()
 }
 
 pub fn validate(platforms: &BTreeMap<String, PlatformCopy>) -> Vec<CopyIssue> {
+    let all: Vec<String> = PLATFORMS
+        .iter()
+        .map(|platform| (*platform).to_string())
+        .collect();
+    validate_targets(platforms, &all)
+}
+
+fn validate_targets(
+    platforms: &BTreeMap<String, PlatformCopy>,
+    targets: &[String],
+) -> Vec<CopyIssue> {
     let mut issues = Vec::new();
     for platform in platforms.keys() {
         if !PLATFORMS.contains(&platform.as_str()) {
@@ -190,7 +250,7 @@ pub fn validate(platforms: &BTreeMap<String, PlatformCopy>) -> Vec<CopyIssue> {
             ));
         }
     }
-    for platform in PLATFORMS {
+    for platform in targets {
         match platforms.get(platform) {
             Some(copy) => issues.extend(platform_issues(platform, copy)),
             None => issues.push(issue(
