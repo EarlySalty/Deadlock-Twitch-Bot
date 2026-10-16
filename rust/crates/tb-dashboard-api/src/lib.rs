@@ -401,6 +401,10 @@ fn build_authed_router_with_analysis_store(
             get(social_media::autopilot::pool_handler),
         )
         .route(
+            "/social-media/api/pipeline/sources",
+            get(handlers::social_media_pipeline::sources_handler),
+        )
+        .route(
             "/social-media/api/autopilot/preferences",
             get(social_media::autopilot::preferences_get_handler)
                 .put(social_media::autopilot::preferences_put_handler),
