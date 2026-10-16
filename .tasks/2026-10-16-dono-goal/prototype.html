@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Spendenziel</title>
+  <style>
+    :root {
+      --accent: #d6b56c;
+      --accent-hi: #f3d999;
+      --bg: rgba(13, 15, 20, 0.88);
+      --fg: #f4f7fb;
+      --muted: #9aa6b6;
+      --border: rgba(214, 181, 108, 0.55);
+      --track: rgba(255, 255, 255, 0.07);
+      --win: #34d399;
+    }
+
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .goal {
+      position: absolute;
+      left: 16px;
+      top: 16px;
+      width: 860px;
+      box-sizing: border-box;
+      display: grid;
+      grid-template-columns: 64px 1fr auto;
+      align-items: center;
+      gap: 22px;
+      padding: 20px 26px 22px;
+      color: var(--fg);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: inset 0 0 0 1px #ffffff0a, 0 12px 32px #0008;
+      backdrop-filter: blur(12px) saturate(140%);
+      overflow: hidden;
+      animation: enter 420ms cubic-bezier(.2, .8, .2, 1);
+    }
+
+    .goal::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 4px;
+      background: var(--accent);
+    }
+
+    .mark { width: 64px; height: 64px; }
+    .mark .outer { animation: spin 14s linear infinite; transform-origin: 32px 32px; }
+
+    .label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .title {
+      margin: 4px 0 12px;
+      font-size: 24px;
+      font-weight: 800;
+      line-height: 1.1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .bar {
+      position: relative;
+      height: 18px;
+      border-radius: 999px;
+      background: var(--track);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      overflow: hidden;
+    }
+
+    .fill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #9c7c3c, var(--accent) 60%, var(--accent-hi));
+      box-shadow: 0 0 18px rgba(214, 181, 108, 0.55);
+      transition: width 1200ms cubic-bezier(.2, .8, .2, 1);
+      overflow: hidden;
+    }
+
+    .fill::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.45) 50%, transparent 70%);
+      transform: translateX(-100%);
+      animation: shine 3.2s ease-in-out infinite;
+    }
+
+    .tick {
+      position: absolute;
+      top: 3px;
+      bottom: 3px;
+      width: 2px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.18);
+      z-index: 1;
+    }
+
+    .amount { text-align: right; min-width: 150px; }
+    .now { font-size: 34px; font-weight: 800; line-height: 1; color: var(--accent-hi); }
+    .of { margin-top: 6px; font-size: 13px; color: var(--muted); }
+    .pct { margin-top: 2px; font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--accent); }
+
+    .toast {
+      position: absolute;
+      right: 26px;
+      top: 10px;
+      padding: 4px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      color: #0d0f14;
+      background: var(--accent);
+      border-radius: 999px;
+      opacity: 0;
+      transform: translateY(-8px);
+      pointer-events: none;
+    }
+
+    .toast.show { animation: toast 4200ms cubic-bezier(.2, .8, .2, 1); }
+    .goal.bump .now { animation: bump 600ms cubic-bezier(.2, .8, .2, 1); }
+
+    .goal.done { border-color: var(--accent-hi); animation: glow 2.4s ease-in-out infinite; }
+    .goal.done .fill { background: linear-gradient(90deg, var(--accent), var(--accent-hi), var(--accent)); }
+    .goal.done .label { color: var(--win); }
+
+    @keyframes enter { from { opacity: 0; transform: translateY(12px); } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes shine { 60%, 100% { transform: translateX(100%); } }
+    @keyframes bump { 40% { transform: scale(1.14); } }
+    @keyframes toast {
+      12%, 80% { opacity: 1; transform: translateY(0); }
+      100% { opacity: 0; transform: translateY(-6px); }
+    }
+    @keyframes glow {
+      50% { box-shadow: inset 0 0 0 1px #ffffff0a, 0 0 34px rgba(214, 181, 108, 0.6); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="goal" id="goal">
+    <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+      <rect class="outer" x="12" y="12" width="40" height="40" fill="none" stroke="#d6b56c" stroke-width="3" transform="rotate(45 32 32)"/>
+      <rect x="21" y="21" width="22" height="22" fill="#d6b56c" opacity="0.9" transform="rotate(45 32 32)"/>
+    </svg>
+    <div>
+      <div class="label" id="label">Spendenziel</div>
+      <div class="title" id="title"></div>
+      <div class="bar" id="bar"><div class="fill" id="fill"></div></div>
+    </div>
+    <div class="amount">
+      <div class="now" id="now">0 €</div>
+      <div class="of" id="of">von 0 €</div>
+      <div class="pct" id="pct">0 %</div>
+    </div>
+    <div class="toast" id="toast"></div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const state = {
+      title: params.get("title") || "Neues Setup für den Stream",
+      goal: Number(params.get("goal")) || 300,
+      current: Number(params.get("current")) || 0,
+      currency: params.get("currency") || "EUR",
+    };
+    const shown = { current: 0 };
+    const el = (id) => document.getElementById(id);
+    const money = (v) => new Intl.NumberFormat("de-DE", {
+      style: "currency", currency: state.currency, maximumFractionDigits: v % 1 ? 2 : 0,
+    }).format(v);
+
+    function drawTicks() {
+      for (const p of [25, 50, 75]) {
+        const t = document.createElement("div");
+        t.className = "tick";
+        t.style.left = p + "%";
+        el("bar").appendChild(t);
+      }
+    }
+
+    function countTo(target) {
+      const from = shown.current;
+      const start = performance.now();
+      const step = (now) => {
+        const k = Math.min(1, (now - start) / 1200);
+        const eased = 1 - Math.pow(1 - k, 3);
+        shown.current = from + (target - from) * eased;
+        el("now").textContent = money(Math.round(shown.current * 100) / 100);
+        if (k < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
+
+    function render() {
+      const pct = Math.min(100, (state.current / state.goal) * 100);
+      el("title").textContent = state.title;
+      el("of").textContent = "von " + money(state.goal);
+      el("pct").textContent = Math.floor(pct) + " %";
+      el("fill").style.width = pct + "%";
+      const done = state.current >= state.goal;
+      el("goal").classList.toggle("done", done);
+      el("label").textContent = done ? "Ziel erreicht, danke!" : "Spendenziel";
+      countTo(state.current);
+    }
+
+    function celebrate(text) {
+      const goal = el("goal");
+      const toast = el("toast");
+      toast.textContent = text;
+      toast.classList.remove("show");
+      goal.classList.remove("bump");
+      void toast.offsetWidth;
+      toast.classList.add("show");
+      goal.classList.add("bump");
+    }
+
+    function apply(data) {
+      const before = state.current;
+      if (data.title) state.title = data.title;
+      if (Number(data.goal) > 0) state.goal = Number(data.goal);
+      if (data.current !== undefined) state.current = Number(data.current);
+      if (state.current > before) {
+        const who = data.last && data.last.name ? " von " + data.last.name : "";
+        celebrate("+" + money(state.current - before) + who);
+      }
+      render();
+    }
+
+    async function poll(url) {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (res.ok) apply(await res.json());
+      } catch (e) {
+        console.warn("Spendenziel: Quelle nicht erreichbar", e);
+      }
+    }
+
+    window.addEventListener("message", (e) => {
+      if (e.data && e.data.type === "dono-goal") apply(e.data);
+    });
+
+    drawTicks();
+    render();
+
+    const src = params.get("src");
+    if (src) {
+      poll(src);
+      setInterval(() => poll(src), (Number(params.get("every")) || 10) * 1000);
+    }
+
+    if (params.has("demo")) {
+      const names = ["Yoshi", "Nani", "Lurker42", "HazeMain", "Paradox"];
+      setInterval(() => {
+        const amount = [2, 5, 5, 10, 20][Math.floor(Math.random() * 5)];
+        apply({
+          current: state.current >= state.goal ? 0 : state.current + amount,
+          last: { name: names[Math.floor(Math.random() * names.length)] },
+        });
+      }, 4000);
+    }
+  </script>
+</body>
