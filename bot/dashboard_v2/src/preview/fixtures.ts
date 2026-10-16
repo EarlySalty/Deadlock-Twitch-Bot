@@ -679,7 +679,19 @@ const ENGAGEMENT_SETTINGS_FIXTURE = {
  * Bestaetigung waere schlimmer als keine: sie zeigte einen Zustand, den es
  * nirgends gibt.
  */
+const DONO_GOAL_FIXTURE = {
+  login: 'preview',
+  configured: true,
+  title: 'Neues Setup für den Stream',
+  goal: 300,
+  currency: 'EUR',
+  count_from: '2026-10-01T00:00:00+00:00',
+  se_channel_id: '5b2e2007760aeb3b1c7a3f4d',
+  connected: true,
+};
+
 export function getPreviewPathFixture(pathname: string): unknown | undefined {
+  if (pathname === '/twitch/api/v2/streamer/dono-goal') return DONO_GOAL_FIXTURE;
   if (pathname === '/twitch/api/v2/streamer/ad-manager') return AD_MANAGER_FIXTURE;
   if (pathname === '/twitch/api/v2/engagement/settings') return ENGAGEMENT_SETTINGS_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/me') return UPLINK_ME_FIXTURE;

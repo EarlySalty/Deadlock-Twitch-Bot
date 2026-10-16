@@ -154,6 +154,10 @@ pub fn build_public_router_with_brain(
             "/twitch/api/v2/public/caster-overlay",
             get(crate::handlers::caster_overlay::public_handler),
         )
+        .route(
+            "/twitch/api/v2/public/dono-goal",
+            get(crate::handlers::dono_goal::public_api_handler),
+        )
         // Roadmap (public GET + admin CRUD) liegt im eigenen build_roadmap_router,
         // damit der Admin-Write den ExpectedToken-Extractor sieht (axum erlaubt
         // denselben Pfad nicht in zwei gemergten Routern).
@@ -177,6 +181,10 @@ pub fn build_public_router_with_brain(
             get(handlers::partner_profiles::css_handler),
         )
         .route("/twitch/overlay", get(overlay::overlay_html_handler))
+        .route(
+            "/twitch/dono-goal",
+            get(crate::handlers::dono_goal::html_handler),
+        )
         .route(
             "/twitch/caster-overlay",
             get(crate::handlers::caster_overlay::html_handler),
@@ -717,6 +725,18 @@ fn build_authed_router_with_analysis_store(
         .route(
             "/twitch/api/v2/streamer/greeting-settings",
             get(greeting_settings::get_handler).post(greeting_settings::post_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/dono-goal",
+            get(handlers::dono_goal::get_handler).post(handlers::dono_goal::post_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/dono-goal/reset",
+            post(handlers::dono_goal::reset_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/dono-goal/test",
+            post(handlers::dono_goal::test_handler),
         )
         // Streamer-Selbstbedienung: Bot bewusst vom eigenen Kanal trennen.
         // Gleiche Kette wie die Admin-Route, Login kommt aber aus der Session.

@@ -135,6 +135,7 @@ pub mod stat_command_settings;
 
 pub mod brain_lab;
 pub mod caster_overlay;
+pub mod dono_goal;
 
 pub mod challenges;
 pub mod community;

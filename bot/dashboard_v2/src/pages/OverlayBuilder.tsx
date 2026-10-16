@@ -2,6 +2,7 @@ import { translateManagementError } from '@/i18n/managementErrors';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
 import { OnboardingGuide } from '@/components/onboarding/OnboardingGuide';
+import { DonoGoalSection } from '@/components/verwaltung/DonoGoalSection';
 import { OverlayBuilderSection } from '@/components/verwaltung/OverlayBuilderSection';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { ArrowRight, Loader2 } from 'lucide-react';
@@ -53,6 +54,7 @@ export function OverlayBuilderPage() {
     <>
       <OnboardingGuide overlayBuilder />
       <OverlayBuilderSection login={twitchLogin} />
+      <DonoGoalSection login={twitchLogin} />
     </>
   );
 }
