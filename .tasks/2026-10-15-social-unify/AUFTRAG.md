@@ -148,3 +148,10 @@ Global AI switch `external_llm_consent` needs an admin UI (set to true in prod o
 - No production defect found. Test-only finding: the unoptimized test profile overflows the default 2 MB test thread stack in the AI edit and per-platform cells, so those run on a 64 MB thread.
 - Tests vs baseline: diff touches only test code in tb-social-media, so tb-dashboard-api and dashboard_v2 are unchanged. Acceptance 10/10 and pipeline_migration 5/5 locally; clippy shows only the two existing warnings (tb-raid signup_denylist.rs, test-support postgres.rs `start`). A full remote rerun was blocked by leaked `uplink-api-pg-*` test Postgres processes holding both ionos slot locks (foreign, left untouched).
 - Still open: no HTTP-level provider fake (publisher is faked above the uploaders); legacy drain covered by the existing pipeline_migration tests, not the harness; Instagram 5xx retry; the 63 s retry hold; `--apply` plan rebuild per owner; misplaced doc comments in upload_worker.rs/clip_queue.rs; real upload matrix only after explicit user go.
+
+### Cutover live (2026-10-16 23:47)
+- Live release 1c03b8078 already contained U17b; U18 is test-only, so no redeploy. Prod migrations up to 20261016210000 applied.
+- `--dry-run` and `--apply` ran in a transient unit with the bot's credentials (`systemd-run` as twitchbot, `run_tb_bot_service.sh --social-cutover ...`). 21 owners, all `mode=upload source=legacy-mapped`, 487 rows mapped, 0 unresolved. earlysalty: `review=off`, 57 open legacy rows; all 20 others `review=required` with 0 open rows.
+- `social_pipeline_cutover`: 21 unified. Bot and dashboard restarted, no warnings after restart.
+- earlysalty drain: YouTube 24 pending, first due 2026-10-17 16:00 UTC. TikTok 26 pending rows have no `tiktok_post_options` consent and 5 sit in `waiting_tiktok_approval`; the legacy claim skips them by design (TikTok needs per-post consent), they were already stuck since 2026-10-08. 2 consented TikTok rows due 2026-11-25 and 2026-12-02.
+- Next: check the 2026-10-17 16:00 UTC YouTube upload; user decides on the 31 unconsented TikTok rows; real upload matrix only after explicit user go.
