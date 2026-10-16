@@ -141,9 +141,16 @@ function sourceActive(source: PipelineSource): boolean {
     || source.versions.some((version) => ['rendering', 'approved', 'scheduled'].includes(version.status));
 }
 
+export function legacyUncertainPlatforms(source: PipelineSource): string[] {
+  return source.destinations
+    .filter((destination) => destination.produced_video_id === null && destination.status === 'uncertain')
+    .map((destination) => destination.platform);
+}
+
 function sourceInReview(source: PipelineSource): boolean {
   return source.jobs.some((job) => job.status === 'review') || source.versions.some((version) => version.status === 'review')
-    || source.destinations.some((destination) => destination.status === 'autopilot_held');
+    || source.destinations.some((destination) => destination.status === 'autopilot_held')
+    || legacyUncertainPlatforms(source).length > 0;
 }
 
 export function sourceStage(source: PipelineSource): Exclude<QueueStage, 'all'> {

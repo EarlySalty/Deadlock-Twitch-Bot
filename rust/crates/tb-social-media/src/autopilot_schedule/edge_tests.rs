@@ -10,15 +10,14 @@ fn autopilot_review_backpressure_does_not_hold_full_auto() {
         ..Default::default()
     };
     assert_eq!(
-        hold(&settings, true, 2, next, now),
+        hold(&settings, true, true, 2, next, now),
         Some(ProductionHold::ReviewBacklog)
     );
-    assert_eq!(hold(&settings, true, 1, next, now), None);
-    settings.publish_mode = autopilot_settings::PublishMode::FullAuto;
-    assert_eq!(hold(&settings, true, 2, next, now), None);
+    assert_eq!(hold(&settings, true, true, 1, next, now), None);
+    assert_eq!(hold(&settings, false, true, 2, next, now), None);
     settings.paused = true;
     assert_eq!(
-        hold(&settings, true, 2, next, now),
+        hold(&settings, false, true, 2, next, now),
         Some(ProductionHold::Paused)
     );
 }

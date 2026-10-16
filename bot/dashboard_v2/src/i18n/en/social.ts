@@ -427,6 +427,8 @@ export const SOCIAL_EN: Record<string, string> = {
   'Instagram': 'Instagram',
   'Zwei automatische Produktionen warten auf deine Prüfung. Nach einer Entscheidung geht es weiter.': 'Two automatic productions are waiting for your review. Production continues once you decide.',
   'Die KI hält diesen Clip möglicherweise für ungeeignet. Entscheide, ob er trotzdem verarbeitet werden soll.': 'The AI thinks this clip may be unsuitable. Decide whether it should be processed anyway.',
+  'Die KI-Produktion ist fehlgeschlagen. Bitte prüfe den Auftrag.': 'The AI production failed. Please check the job.',
+  'Ob der Upload auf {platform} angekommen ist, ist unklar. Er wird nicht automatisch wiederholt, damit nichts doppelt erscheint. Bitte prüfe dein Konto.': 'It is unclear whether the upload to {platform} arrived. It will not be retried automatically so nothing is posted twice. Please check your account.',
   'Verbinde fehlende Plattformen unter Konten. Wähle hier, wohin die Videos veröffentlicht werden sollen.': 'Connect missing platforms under Accounts. Choose here where the videos should be published.',
   'Noch keine Zielplattform ausgewählt. Ohne Zielplattform wird kein Video veröffentlicht.': 'No target platform selected yet. Without a target platform, no video is published.',
   'Der Clip ist erneut zur Verarbeitung eingeplant.': 'The clip is scheduled for processing again.',

@@ -403,7 +403,26 @@ pub async fn finish(
     if changed != 1 {
         return Err(JobError::State);
     }
+    if matches!(completion, JobCompletion::Review) {
+        release_unfinished_slots_on(&mut tx, twitch_user_id, id).await?;
+    }
     tx.commit().await?;
+    Ok(())
+}
+
+pub(crate) async fn release_unfinished_slots_on(
+    connection: &mut PgConnection,
+    twitch_user_id: &str,
+    id: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE social_produced_videos SET scheduled_at = NULL WHERE job_id = $1
+        AND twitch_user_id = $2 AND status IN ('rendering', 'failed', 'rejected', 'expired')",
+    )
+    .bind(id)
+    .bind(twitch_user_id)
+    .execute(connection)
+    .await?;
     Ok(())
 }
 
@@ -438,6 +457,7 @@ pub async fn flag_unsuitable(
     if changed != 1 {
         return Err(JobError::State);
     }
+    release_unfinished_slots_on(&mut tx, twitch_user_id, id).await?;
     tx.commit().await?;
     Ok(())
 }

@@ -372,6 +372,37 @@ async fn seed_cutover(pool: &PgPool) {
     .expect("Umstellungsdaten");
 }
 
+#[tokio::test]
+async fn gespeicherte_pruefregel_aus_planen_bleibt_bei_der_umstellung() {
+    let (_db, pool) = database().await;
+    seed_cutover(&pool).await;
+    sqlx::query(
+        "UPDATE social_media_autopilot_settings SET pipeline_mode = 'ai_edit', review_policy = 'required',
+            policy_revision = 1 WHERE twitch_user_id = '500'",
+    )
+    .execute(&pool)
+    .await
+    .expect("Planen-Speicherung");
+    let preview = pipeline_migration::dry_run(&pool).await.expect("Probelauf");
+    assert_eq!(
+        preview.channel_policies.get("500"),
+        Some(&serde_json::json!({
+            "review_policy": {"legacy": "off", "applied": "required", "source": "planen"},
+            "pipeline_mode": {"applied": "ai_edit", "source": "planen"},
+        }))
+    );
+    pipeline_migration::run_command(&pool, &CutoverCommand::Apply)
+        .await
+        .expect("Umstellung");
+    let kept: (String, String) = sqlx::query_as(
+        "SELECT review_policy, pipeline_mode FROM social_media_autopilot_settings WHERE twitch_user_id = '500'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Prüfregel");
+    assert_eq!(kept, ("required".into(), "ai_edit".into()));
+}
+
 async fn legacy_counts(pool: &PgPool) -> (i64, i64, i64) {
     sqlx::query_as(
         "SELECT (SELECT count(*) FROM twitch_clips_upload_queue),
@@ -419,7 +450,25 @@ fn rejection(result: Result<sqlx::postgres::PgQueryResult, sqlx::Error>) -> Stri
 async fn umstellung_schliesst_altschreiber_und_pausiert_ohne_nachholen() {
     let (_db, pool) = database().await;
     seed_cutover(&pool).await;
+    sqlx::query(
+        "UPDATE social_media_autopilot_settings SET pipeline_mode = 'ai_edit' WHERE twitch_user_id = '500'",
+    )
+    .execute(&pool)
+    .await
+    .expect("Voreinstellung");
     let before = legacy_counts(&pool).await;
+    let preview = pipeline_migration::dry_run(&pool).await.expect("Probelauf");
+    assert_eq!(
+        preview.channel_policies.get("500"),
+        Some(&serde_json::json!({
+            "review_policy": {"legacy": "off", "applied": "off", "source": "legacy"},
+            "pipeline_mode": {"applied": "upload", "source": "legacy"},
+        }))
+    );
+    assert_eq!(
+        preview.channel_policies["300"]["pipeline_mode"],
+        serde_json::json!({"applied": "upload", "source": "legacy"})
+    );
 
     let first = pipeline_migration::run_command(&pool, &CutoverCommand::Apply)
         .await
@@ -430,14 +479,14 @@ async fn umstellung_schliesst_altschreiber_und_pausiert_ohne_nachholen() {
         .and_then(|items| items.iter().find(|item| item["twitch_user_id"] == "500"))
         .expect("epsilon");
     assert_eq!(epsilon["outcome"], "activated");
-    assert_eq!(epsilon["unresolved"], 1);
-    let kept: String = sqlx::query_scalar(
-        "SELECT review_policy FROM social_media_autopilot_settings WHERE twitch_user_id = '500'",
+    assert_eq!(epsilon["unresolved"], 0);
+    let mapped: (String, String, String) = sqlx::query_as(
+        "SELECT review_policy, publish_mode, pipeline_mode FROM social_media_autopilot_settings WHERE twitch_user_id = '500'",
     )
     .fetch_one(&pool)
     .await
     .expect("Prüfregel");
-    assert_eq!(kept, "required");
+    assert_eq!(mapped, ("off".into(), "full_auto".into(), "upload".into()));
     let gamma = first["cutover"]
         .as_array()
         .and_then(|items| items.iter().find(|item| item["twitch_user_id"] == "300"))
