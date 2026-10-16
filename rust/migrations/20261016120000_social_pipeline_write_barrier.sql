@@ -94,3 +94,21 @@ $$;
 CREATE TRIGGER social_pipeline_approval_barrier
 BEFORE INSERT OR UPDATE OF state, approved_platforms ON social_media_clip_approval
 FOR EACH ROW EXECUTE FUNCTION social_pipeline_approval_barrier();
+
+ALTER TABLE social_pipeline_cutover ADD COLUMN streamer_paused BOOLEAN;
+
+CREATE FUNCTION social_pipeline_hold_streamer_pause() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path FROM CURRENT AS $$
+BEGIN
+    IF social_pipeline_legacy_paused(NEW.twitch_user_id) THEN
+        UPDATE social_pipeline_cutover SET streamer_paused = NEW.paused, updated_at = NOW()
+        WHERE twitch_user_id = NEW.twitch_user_id;
+        NEW.paused := TRUE;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER social_pipeline_hold_streamer_pause
+BEFORE INSERT OR UPDATE OF paused ON social_media_autopilot_settings
+FOR EACH ROW EXECUTE FUNCTION social_pipeline_hold_streamer_pause();

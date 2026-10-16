@@ -662,6 +662,25 @@ impl UploadTask {
     /// Trennt "kaputt" von "spaeter nochmal". Frueher landete jeder Fehler auf
     /// `failed`, und `failed` holt die Warteschlange nie wieder ab: ein einziges
     /// 502 oder ein volles Tageskontingent hat den Clip endgueltig verbrannt.
+    async fn mark_uncertain(&self, item: &UploadQueueItem, text: &str, context: &'static str) {
+        for attempt in 0..6u32 {
+            match mark_upload_uncertain(&self.pool, item.id, text).await {
+                Ok(()) => return,
+                Err(db_error) => {
+                    tracing::warn!(
+                        error = %db_error,
+                        queue_id = item.id,
+                        platform = %item.platform,
+                        context,
+                        attempt,
+                        "Unbestätigter Upload konnte nicht vermerkt werden"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt))).await;
+                }
+            }
+        }
+    }
+
     async fn handle_upload_error(
         &self,
         item: &UploadQueueItem,
@@ -670,15 +689,7 @@ impl UploadTask {
     ) {
         let text = error.to_string();
         if matches!(error, UploadError::PublishUnconfirmed(_)) {
-            if let Err(db_error) = mark_upload_uncertain(&self.pool, item.id, &text).await {
-                tracing::warn!(
-                    error = %db_error,
-                    queue_id = item.id,
-                    platform = %item.platform,
-                    context,
-                    "Unbestätigter Upload konnte nicht vermerkt werden"
-                );
-            }
+            self.mark_uncertain(item, &text, context).await;
             return;
         }
         let verzoegerung = verzoegerung_fuer(error);

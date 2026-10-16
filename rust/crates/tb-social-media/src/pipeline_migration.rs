@@ -62,6 +62,8 @@ pub enum MigrationError {
     Settings(#[from] SettingsError),
     #[error("{0}")]
     Schedule(String),
+    #[error("Schreibsperre der Umstellung fehlt, Migration 20261016120000 zuerst anwenden")]
+    BarrierMissing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -193,6 +195,7 @@ pub enum CutoverCommand {
     Apply,
     Pause(String),
     Resume(String),
+    Resolve { queue_id: i64, published: bool },
 }
 
 impl CutoverCommand {
@@ -206,12 +209,25 @@ impl CutoverCommand {
             ["--social-cutover", "--resume", owner] if !owner.is_empty() => {
                 Some(Self::Resume((*owner).to_string()))
             }
+            ["--social-cutover", "--resolve", queue_id, outcome] => Some(Self::Resolve {
+                queue_id: queue_id.parse().ok()?,
+                published: match *outcome {
+                    "--published" => true,
+                    "--failed" => false,
+                    _ => return None,
+                },
+            }),
             _ => None,
         }
     }
 }
 
 pub async fn run_command(pool: &PgPool, command: &CutoverCommand) -> Result<Value, MigrationError> {
+    if *command != CutoverCommand::DryRun
+        && !write_barrier_installed(&mut *pool.acquire().await?).await?
+    {
+        return Err(MigrationError::BarrierMissing);
+    }
     Ok(match command {
         CutoverCommand::DryRun => json!({ "migration": dry_run(pool).await? }),
         CutoverCommand::Apply => {
@@ -221,7 +237,48 @@ pub async fn run_command(pool: &PgPool, command: &CutoverCommand) -> Result<Valu
         }
         CutoverCommand::Pause(owner) => json!({ "cutover": [pause(pool, owner).await?] }),
         CutoverCommand::Resume(owner) => json!({ "cutover": [resume(pool, owner).await?] }),
+        CutoverCommand::Resolve {
+            queue_id,
+            published,
+        } => json!({ "resolved": resolve_uncertain(pool, *queue_id, *published).await? }),
     })
+}
+
+pub async fn resolve_uncertain(
+    pool: &PgPool,
+    queue_id: i64,
+    published: bool,
+) -> Result<bool, MigrationError> {
+    let mut tx = pool.begin().await?;
+    let platform: Option<(i64, String)> = sqlx::query_as(
+        "UPDATE twitch_clips_upload_queue SET status = CASE WHEN $2 THEN 'completed' ELSE 'failed' END,
+             outcome_reason = 'operator_resolved', completed_at = NOW()
+         WHERE id = $1 AND status = 'uncertain' AND produced_video_id IS NULL
+         RETURNING clip_id, platform",
+    )
+    .bind(queue_id)
+    .bind(published)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((clip_id, platform)) = platform else {
+        tx.commit().await?;
+        return Ok(false);
+    };
+    if published {
+        sqlx::query(
+            "UPDATE twitch_clips_social_media SET
+                 uploaded_tiktok = uploaded_tiktok OR $2 = 'tiktok',
+                 uploaded_youtube = uploaded_youtube OR $2 = 'youtube',
+                 uploaded_instagram = uploaded_instagram OR $2 = 'instagram'
+             WHERE id = $1",
+        )
+        .bind(clip_id)
+        .bind(&platform)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(true)
 }
 
 pub async fn dry_run(pool: &PgPool) -> Result<MigrationReport, MigrationError> {
@@ -298,50 +355,62 @@ pub async fn activate_ready(pool: &PgPool) -> Result<Vec<CutoverReport>, Migrati
 }
 
 pub async fn pause(pool: &PgPool, owner: &str) -> Result<CutoverReport, MigrationError> {
-    switch(pool, owner, "unified", "paused", CutoverOutcome::Paused).await
-}
-
-pub async fn resume(pool: &PgPool, owner: &str) -> Result<CutoverReport, MigrationError> {
-    switch(pool, owner, "paused", "unified", CutoverOutcome::Resumed).await
-}
-
-async fn switch(
-    pool: &PgPool,
-    owner: &str,
-    from: &str,
-    to: &str,
-    done: CutoverOutcome,
-) -> Result<CutoverReport, MigrationError> {
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, owner).await?;
-    if cutover_state(&mut tx, owner).await?.as_deref() != Some(from) {
+    if cutover_state(&mut tx, owner).await?.as_deref() != Some("unified") {
         tx.commit().await?;
-        let refused = if from == "unified" {
-            CutoverOutcome::NotUnified
-        } else {
-            CutoverOutcome::NotPaused
-        };
-        return Ok(outcome(owner, refused, 0));
+        return Ok(outcome(owner, CutoverOutcome::NotUnified, 0));
     }
     sqlx::query(
-        "UPDATE social_pipeline_cutover SET state = $2, updated_at = NOW() WHERE twitch_user_id = $1",
+        "UPDATE social_pipeline_cutover SET state = 'paused', streamer_paused = NULL, updated_at = NOW()
+         WHERE twitch_user_id = $1",
     )
     .bind(owner)
-    .bind(to)
     .execute(&mut *tx)
     .await?;
     let enabled: Option<bool> = sqlx::query_scalar(
-        "UPDATE social_media_autopilot_settings SET paused = $2, updated_at = NOW()
+        "UPDATE social_media_autopilot_settings SET paused = paused, updated_at = NOW()
          WHERE twitch_user_id = $1 RETURNING enabled",
     )
     .bind(owner)
-    .bind(to == "paused")
     .fetch_optional(&mut *tx)
     .await?;
     tx.commit().await?;
+    Ok(switched(owner, CutoverOutcome::Paused, enabled))
+}
+
+pub async fn resume(pool: &PgPool, owner: &str) -> Result<CutoverReport, MigrationError> {
+    let mut tx = pool.begin().await?;
+    autopilot_settings::lock_owner(&mut tx, owner).await?;
+    if cutover_state(&mut tx, owner).await?.as_deref() != Some("paused") {
+        tx.commit().await?;
+        return Ok(outcome(owner, CutoverOutcome::NotPaused, 0));
+    }
+    let streamer_paused: Option<bool> = sqlx::query_scalar(
+        "UPDATE social_pipeline_cutover c SET state = 'unified', streamer_paused = NULL, updated_at = NOW()
+         FROM social_pipeline_cutover previous
+         WHERE c.twitch_user_id = $1 AND previous.twitch_user_id = c.twitch_user_id
+         RETURNING previous.streamer_paused",
+    )
+    .bind(owner)
+    .fetch_one(&mut *tx)
+    .await?;
+    let enabled: Option<bool> = sqlx::query_scalar(
+        "UPDATE social_media_autopilot_settings SET paused = COALESCE($2, paused), updated_at = NOW()
+         WHERE twitch_user_id = $1 RETURNING enabled",
+    )
+    .bind(owner)
+    .bind(streamer_paused)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(switched(owner, CutoverOutcome::Resumed, enabled))
+}
+
+fn switched(owner: &str, done: CutoverOutcome, enabled: Option<bool>) -> CutoverReport {
     let mut report = outcome(owner, done, 0);
     report.autopilot_enabled = enabled.unwrap_or(false);
-    Ok(report)
+    report
 }
 
 async fn activate_on(

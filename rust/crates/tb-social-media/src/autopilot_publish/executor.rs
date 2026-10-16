@@ -1278,8 +1278,18 @@ async fn insert_destination(
     sqlx::query(
         "INSERT INTO twitch_clips_upload_queue (clip_id, produced_video_id, platform, status, scheduled_at,
              outcome_reason, title, description, hashtags)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::text::jsonb->'platforms'->$3->>'title',
-             $7::text::jsonb->'platforms'->$3->>'description', ($7::text::jsonb->'platforms'->$3->'hashtags')::text)
+         SELECT $1, $2, $3,
+             CASE WHEN legacy.open THEN $8 ELSE $4 END,
+             $5,
+             CASE WHEN legacy.open THEN 'legacy_publication_open' ELSE $6 END,
+             $7::text::jsonb->'platforms'->$3->>'title',
+             $7::text::jsonb->'platforms'->$3->>'description', ($7::text::jsonb->'platforms'->$3->'hashtags')::text
+         FROM (SELECT EXISTS (
+             SELECT 1 FROM twitch_clips_upload_queue q
+             WHERE q.clip_id = $1 AND q.platform = $3 AND q.produced_video_id IS NULL
+             AND COALESCE(q.status, '') NOT IN
+                 ('completed', 'failed', 'cancelled', 'autopilot_discarded', 'autopilot_failed')
+         ) AS open) legacy
          ON CONFLICT DO NOTHING",
     )
     .bind(event.clip_id)
@@ -1289,6 +1299,7 @@ async fn insert_destination(
     .bind(event.at(platform))
     .bind(reason)
     .bind(event.metadata)
+    .bind(queue_status::DISCARDED)
     .execute(tx)
     .await?;
     Ok(())

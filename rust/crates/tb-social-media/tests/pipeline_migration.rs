@@ -399,6 +399,16 @@ async fn legacy_ids(pool: &PgPool) -> Vec<i64> {
         .collect()
 }
 
+async fn autopilot_paused(pool: &PgPool, owner: &str) -> bool {
+    sqlx::query_scalar(
+        "SELECT paused FROM social_media_autopilot_settings WHERE twitch_user_id = $1",
+    )
+    .bind(owner)
+    .fetch_one(pool)
+    .await
+    .expect("Pausenzustand")
+}
+
 fn rejection(result: Result<sqlx::postgres::PgQueryResult, sqlx::Error>) -> String {
     result
         .expect_err("Altschreiber muss abgewiesen werden")
@@ -527,13 +537,14 @@ async fn umstellung_schliesst_altschreiber_und_pausiert_ohne_nachholen() {
         .expect("Pause");
     assert_eq!(paused.outcome, CutoverOutcome::Paused);
     assert!(legacy_ids(&pool).await.is_empty());
-    let autopilot_paused: bool = sqlx::query_scalar(
-        "SELECT paused FROM social_media_autopilot_settings WHERE twitch_user_id = '300'",
+    assert!(autopilot_paused(&pool, "300").await);
+    sqlx::query(
+        "UPDATE social_media_autopilot_settings SET paused = FALSE WHERE twitch_user_id = '300'",
     )
-    .fetch_one(&pool)
+    .execute(&pool)
     .await
-    .expect("Pausenzustand");
-    assert!(autopilot_paused);
+    .expect("Streamer hebt eigene Pause auf");
+    assert!(autopilot_paused(&pool, "300").await);
     assert_eq!(
         pipeline_migration::pause(&pool, "300")
             .await
@@ -560,4 +571,54 @@ async fn umstellung_schliesst_altschreiber_und_pausiert_ohne_nachholen() {
     assert_eq!(legacy_ids(&pool).await, vec![20]);
     assert_eq!(map_fingerprint(&pool).await, map_before);
     assert_eq!(legacy_counts(&pool).await, before);
+    assert!(!autopilot_paused(&pool, "300").await);
+
+    sqlx::query(
+        "UPDATE social_media_autopilot_settings SET paused = TRUE WHERE twitch_user_id = '300'",
+    )
+    .execute(&pool)
+    .await
+    .expect("Streamer pausiert selbst");
+    pipeline_migration::pause(&pool, "300")
+        .await
+        .expect("Pause über Streamer-Pause");
+    pipeline_migration::resume(&pool, "300")
+        .await
+        .expect("Fortsetzen über Streamer-Pause");
+    assert!(autopilot_paused(&pool, "300").await);
+
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'uncertain' WHERE clip_id = 20")
+        .execute(&pool)
+        .await
+        .expect("Unbestätigter Beitrag");
+    let command = CutoverCommand::parse(&["--social-cutover", "--resolve", "0", "--failed"]);
+    assert_eq!(
+        command,
+        Some(CutoverCommand::Resolve {
+            queue_id: 0,
+            published: false
+        })
+    );
+    let queue_id: i64 =
+        sqlx::query_scalar("SELECT id FROM twitch_clips_upload_queue WHERE clip_id = 20")
+            .fetch_one(&pool)
+            .await
+            .expect("Zeile");
+    let resolved = pipeline_migration::run_command(
+        &pool,
+        &CutoverCommand::Resolve {
+            queue_id,
+            published: false,
+        },
+    )
+    .await
+    .expect("Auflösung");
+    assert_eq!(resolved["resolved"], true);
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM twitch_clips_upload_queue WHERE id = $1")
+            .bind(queue_id)
+            .fetch_one(&pool)
+            .await
+            .expect("Status");
+    assert_eq!(status, "failed");
 }

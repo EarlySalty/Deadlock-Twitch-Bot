@@ -557,9 +557,9 @@ async fn main() {
     }
     let supervisor = task_supervisor::TaskSupervisor::start();
 
-    // Native sqlx-Migrationen anwenden. Schema-/Migrationsfehler sind fatal:
-    // mit kaputtem oder halb migriertem Schema darf der Bot nicht starten.
-    if config.bot.run_database_migrations {
+    let dry_run =
+        social_cutover == Some(tb_social_media::pipeline_migration::CutoverCommand::DryRun);
+    if config.bot.run_database_migrations && !dry_run {
         match tb_db::run_migrations(&pool).await {
             Ok(()) => tracing::info!("DB-Migrationen angewendet (oder bereits aktuell)"),
             Err(e) => {
@@ -567,7 +567,7 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-    } else {
+    } else if !dry_run {
         tracing::warn!("DB-Migrationen laut Betriebskonfiguration deaktiviert");
     }
     if let Some(command) = social_cutover {
