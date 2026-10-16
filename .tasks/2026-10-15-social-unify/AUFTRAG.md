@@ -47,3 +47,10 @@ Global AI switch `external_llm_consent` needs an admin UI (set to true in prod o
 - U16: ScheduleQueuePanel still renders the old queue card and modeSlot below the U13 editor; remove once U15 review exists.
 - U15: KI, Layout and Texte entries in the clip "..." menu are disabled until U15 enables them; "Erstmals ausgewählt" note dropped (no first-selected date in U4 projection).
 - U4 nits: source query cost for large owners, raw DB error text to client, broken settings answers 400, counts.automatic includes non-pooled Deadlock clips.
+
+### From U8b (f05c5c9e4, 2026-10-16)
+- U10/U17: `apply_tiktok_choice` selects TikTok rows without `produced_video_id IS NULL`; guard it when touching TikTok dispatch.
+- U17: legacy queue call can add a second active row next to a pending produced row for manual_upload clips; prod count of produced manual_upload videos was 0 on 2026-10-16, recheck before cutover.
+- Rollback: `TextDefaults` denies unknown fields and now saves `title`; binaries older than f05c5c9e4 fail to load such policies.
+- U16: no UI field for the `title` text default; frontend `schedule-queue/api.ts` TextDefaults lacks `title`.
+- Title-only defaults skip the legacy default template (empty description); untested.
