@@ -103,10 +103,12 @@ BEGIN
     IF NOT social_pipeline_legacy_paused(NEW.twitch_user_id) THEN
         RETURN NEW;
     END IF;
-    IF (TG_OP = 'UPDATE' AND NEW.paused IS DISTINCT FROM OLD.paused)
-        OR (TG_OP = 'INSERT' AND NOT EXISTS (
-            SELECT 1 FROM social_media_autopilot_settings s
-            WHERE s.twitch_user_id = NEW.twitch_user_id)) THEN
+    IF TG_OP = 'INSERT' AND EXISTS (
+        SELECT 1 FROM social_media_autopilot_settings s
+        WHERE s.twitch_user_id = NEW.twitch_user_id) THEN
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' OR NEW.paused IS DISTINCT FROM OLD.paused THEN
         UPDATE social_pipeline_cutover SET streamer_paused = NEW.paused, updated_at = NOW()
         WHERE twitch_user_id = NEW.twitch_user_id;
     END IF;

@@ -554,7 +554,8 @@ async fn umstellung_schliesst_altschreiber_und_pausiert_ohne_nachholen() {
     .expect("Gesicherte Streamer-Pause");
     assert_eq!(kept, Some(false));
     sqlx::query(
-        "UPDATE social_media_autopilot_settings SET paused = FALSE WHERE twitch_user_id = '300'",
+        "INSERT INTO social_media_autopilot_settings (twitch_user_id, paused) VALUES ('300', FALSE)
+         ON CONFLICT (twitch_user_id) DO UPDATE SET paused = EXCLUDED.paused, updated_at = NOW()",
     )
     .execute(&pool)
     .await
@@ -601,6 +602,21 @@ async fn umstellung_schliesst_altschreiber_und_pausiert_ohne_nachholen() {
         .await
         .expect("Fortsetzen über Streamer-Pause");
     assert!(autopilot_paused(&pool, "300").await);
+    pipeline_migration::pause(&pool, "300")
+        .await
+        .expect("Erneute Pause");
+    sqlx::query(
+        "INSERT INTO social_media_autopilot_settings (twitch_user_id, paused) VALUES ('300', FALSE)
+         ON CONFLICT (twitch_user_id) DO UPDATE SET paused = EXCLUDED.paused, updated_at = NOW()",
+    )
+    .execute(&pool)
+    .await
+    .expect("Streamer hebt Pause über Speichern auf");
+    assert!(autopilot_paused(&pool, "300").await);
+    pipeline_migration::resume(&pool, "300")
+        .await
+        .expect("Fortsetzen nach Streamer-Wunsch");
+    assert!(!autopilot_paused(&pool, "300").await);
 
     sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'uncertain' WHERE clip_id = 20")
         .execute(&pool)
