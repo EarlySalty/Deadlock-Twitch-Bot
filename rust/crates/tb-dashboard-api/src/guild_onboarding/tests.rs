@@ -37,6 +37,12 @@ pub(crate) async fn fixture() -> crate::test_database::Database {
     .execute(&db.pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261016090000_partner_login_gate.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     db
 }
 

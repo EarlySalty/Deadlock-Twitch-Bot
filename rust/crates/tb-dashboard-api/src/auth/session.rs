@@ -1427,7 +1427,7 @@ impl DashboardAuthState {
                     COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST
                 LIMIT 1
              ) current_partner WHERE LOWER(COALESCE(technical_pause_reason, '')) <> 'blocked'
-                AND public.guild_partner_allowed(twitch_user_id)",
+                AND public.guild_partner_login_allowed(twitch_user_id)",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -3173,6 +3173,12 @@ print(f.encrypt(payload.encode()).decode(), end='')
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES ('888001', 'gatetest_user')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
             "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
              VALUES ($1, $2, 'active')
              ON CONFLICT DO NOTHING",
@@ -3244,6 +3250,69 @@ print(f.encrypt(payload.encode()).decode(), end='')
     }
 
     #[tokio::test]
+    async fn login_gate_laesst_reauthorisierung_zu_und_sperrt_banns_und_ausschluesse() {
+        let db = crate::guild_onboarding::tests::fixture().await;
+        let pool = db.pool.clone();
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        sqlx::raw_sql(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES
+                ('902001', 'former'), ('902002', 'token_err'), ('902003', 'banned'),
+                ('902004', 'former_banned'), ('902005', 'former_excluded'), ('902006', 'former_kicked');
+             INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, source, deactivated_by, deactivated_at) VALUES
+                ('902001', 1289721245281292288, false, 'migration', 'migration', now()),
+                ('902002', 1289721245281292288, false, 'migration', 'migration', now()),
+                ('902004', 1289721245281292288, false, 'migration', 'migration', now()),
+                ('902005', 1289721245281292288, false, 'migration', 'migration', now()),
+                ('902006', 1289721245281292288, false, 'migration', 'admin', now());
+             INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, technical_pause_reason) VALUES
+                ('former', '902001', 'departnered', NULL),
+                ('token_err', '902002', 'active', 'token_error'),
+                ('banned', '902003', 'active', 'bot_banned'),
+                ('former_banned', '902004', 'departnered', 'bot_banned'),
+                ('former_excluded', '902005', 'departnered', NULL),
+                ('former_kicked', '902006', 'departnered', NULL);
+             INSERT INTO twitch_exclusions (twitch_user_id) VALUES ('902005');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for (login, id) in [("former", "902001"), ("token_err", "902002")] {
+            assert!(
+                state
+                    .find_partner_for_login(login, id)
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "{login} muss sich neu autorisieren können"
+            );
+            assert!(
+                !sqlx::query_scalar::<_, bool>("SELECT guild_partner_allowed($1)")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                "{login} bleibt für den Guild-Zugang gesperrt"
+            );
+        }
+        for (login, id) in [
+            ("banned", "902003"),
+            ("former_banned", "902004"),
+            ("former_excluded", "902005"),
+            ("former_kicked", "902006"),
+        ] {
+            assert!(
+                state
+                    .find_partner_for_login(login, id)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "{login} darf sich nicht anmelden"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn is_partner_active_folgt_kanonischer_view_logik() {
         let db = crate::guild_onboarding::tests::fixture().await;
         let pool = db.pool.clone();
@@ -3277,6 +3346,14 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .await
         .ok();
 
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES
+                ('901001', 'active_raid_off'), ('901002', 'admin_archived_gate'),
+                ('901003', 'tech_pause_gate'), ('901004', 'inactive_info_gate')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO twitch_partners
                 (twitch_login, twitch_user_id, status, manual_partner_opt_out,
@@ -3864,6 +3941,8 @@ mod identity_regression_tests {
     async fn recycled_login_never_changes_authenticated_id_in_either_session_type() {
         let db = crate::guild_onboarding::tests::fixture().await;
         sqlx::raw_sql("CREATE TABLE dashboard_sessions(session_id TEXT PRIMARY KEY,session_type TEXT NOT NULL,payload_enc BYTEA NOT NULL,created_at DOUBLE PRECISION NOT NULL,expires_at DOUBLE PRECISION NOT NULL);
+            INSERT INTO twitch_streamer_identities(twitch_user_id,twitch_login) VALUES ('111','recycled'),('222','old_name'),('403','blocked_current');
+            INSERT INTO streamer_guilds(twitch_user_id,guild_id,active,source,deactivated_by,deactivated_at) VALUES ('222',1289721245281292288,false,'migration','migration',now());
             INSERT INTO twitch_partners(twitch_login,twitch_user_id,status,manual_partner_opt_out) VALUES ('recycled','111','active',0),('old_name','222','archived',0),('older_name','222','departnered',0),('former','111','archived',0);
             CREATE UNIQUE INDEX one_active_partner_per_id ON twitch_partners(twitch_user_id) WHERE status='active';
             INSERT INTO twitch_partners(twitch_login,twitch_user_id,status,technical_pause_reason) VALUES('blocked_current','403','active','blocked'),('allowed_old','403','archived',NULL);")
