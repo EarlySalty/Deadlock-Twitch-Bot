@@ -14,7 +14,7 @@ use super::{AutopilotWorker, RunnerError};
 use crate::{
     ai_editor::{self, MediaInfo},
     autopilot_settings::{
-        self, CutoverState, PipelineMode, PipelinePolicy, PolicyScope, ReviewPolicy,
+        self, CutoverState, PipelineMode, PipelinePolicy, PolicyScope, ReviewPolicy, TextDefaults,
     },
     clip_templates,
     produced_video::{self, NewProducedVideo, ProducedVideo, RenderedVideo},
@@ -284,13 +284,12 @@ impl AutopilotWorker {
         job: &ProductionJob,
         policy: &PipelinePolicy,
     ) -> Result<Value, RunnerError> {
-        let defaults_empty = policy.text_defaults.shared.description.is_empty()
-            && policy.text_defaults.shared.hashtags.is_empty()
+        let defaults_empty = text_defaults_empty(&policy.text_defaults.shared)
             && policy
                 .text_defaults
                 .per_platform
                 .values()
-                .all(|text| text.description.is_empty() && text.hashtags.is_empty());
+                .all(text_defaults_empty);
         let (mut title, mut description, mut hashtags) = self.clip_text(job).await?;
         if description.is_empty() && defaults_empty {
             self.apply_default_template(job).await?;
@@ -305,6 +304,11 @@ impl AutopilotWorker {
                     .get(&platform)
                     .unwrap_or(&policy.text_defaults.shared),
                 PolicyScope::Shared => &policy.text_defaults.shared,
+            };
+            let title = if title.is_empty() {
+                defaults.title.clone()
+            } else {
+                title.clone()
             };
             let description = if description.is_empty() {
                 defaults.description.clone()
@@ -655,6 +659,10 @@ impl AutopilotWorker {
             Err(RunnerError::Source)
         }
     }
+}
+
+fn text_defaults_empty(text: &TextDefaults) -> bool {
+    text.title.is_empty() && text.description.is_empty() && text.hashtags.is_empty()
 }
 
 fn conversion(path: &Path, probe: &Probe) -> Conversion {

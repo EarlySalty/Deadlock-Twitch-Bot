@@ -79,7 +79,7 @@ const DDL: &[&str] = &[
      platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, \
      description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, \
      last_error TEXT, last_attempt_at TIMESTAMPTZ, \
-     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ, produced_video_id BIGINT)",
     "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, \
      state TEXT NOT NULL DEFAULT 'awaiting_approval', \
      approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, \

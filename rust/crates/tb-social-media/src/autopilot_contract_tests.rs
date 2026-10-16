@@ -272,6 +272,7 @@ async fn postgres_contracts_preserve_legacy_and_exact_file_reservations() {
                 autopilot_settings::TextDefaults {
                     description: "Nur TikTok".into(),
                     hashtags: vec!["Deadlock".into()],
+                    ..Default::default()
                 },
             );
             policy.platform_schedule_slots.insert(

@@ -242,7 +242,7 @@ fn parsed_copy(
         let copy: PlatformCopy =
             serde_json::from_value(content.get(key).cloned().ok_or_else(unreadable)?)
                 .map_err(|_| unreadable())?;
-        Ok(normalized(copy))
+        Ok(metadata::normalize_copy(copy))
     };
     match scope {
         PolicyScope::Shared => {
@@ -255,19 +255,6 @@ fn parsed_copy(
         PolicyScope::PerPlatform => drafts
             .keys()
             .map(|platform| Ok((platform.clone(), copy_at(platform)?)))
-            .collect(),
-    }
-}
-
-fn normalized(copy: PlatformCopy) -> PlatformCopy {
-    PlatformCopy {
-        title: copy.title.trim().to_owned(),
-        description: copy.description.trim().to_owned(),
-        hashtags: copy
-            .hashtags
-            .iter()
-            .map(|tag| metadata::normalize_hashtag(tag))
-            .filter(|tag| !tag.is_empty())
             .collect(),
     }
 }

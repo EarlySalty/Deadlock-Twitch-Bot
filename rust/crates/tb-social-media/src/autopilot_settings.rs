@@ -363,6 +363,7 @@ pub enum DistributionPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TextDefaults {
+    pub title: String,
     pub description: String,
     pub hashtags: Vec<String>,
 }

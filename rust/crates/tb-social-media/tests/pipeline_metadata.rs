@@ -126,6 +126,7 @@ async fn defaults_survive_reload_and_version_edits_stay_explicit() {
         .expect("Policy");
     policy.metadata_scope = PolicyScope::PerPlatform;
     policy.text_defaults.shared = TextDefaults {
+        title: "Standardtitel".into(),
         description: "Für alle".into(),
         hashtags: vec!["deadlock".into()],
     };
@@ -134,6 +135,7 @@ async fn defaults_survive_reload_and_version_edits_stay_explicit() {
         TextDefaults {
             description: "Nur TikTok".into(),
             hashtags: vec!["fyp".into()],
+            ..Default::default()
         },
     );
     let saved = autopilot_settings::save_policy(&pool, OWNER, &policy)
@@ -180,6 +182,7 @@ async fn defaults_survive_reload_and_version_edits_stay_explicit() {
         TextDefaults {
             description: "Neu".into(),
             hashtags: vec![],
+            ..Default::default()
         },
     );
     autopilot_settings::save_policy(&pool, OWNER, &later)

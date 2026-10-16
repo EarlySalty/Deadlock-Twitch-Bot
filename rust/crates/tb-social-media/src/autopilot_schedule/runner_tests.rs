@@ -979,6 +979,7 @@ async fn upload_policy_fixture(
         crate::autopilot_settings::TextDefaults {
             description: "Standardtext".into(),
             hashtags: vec!["deadlock".into()],
+            ..Default::default()
         },
     );
     crate::autopilot_settings::save_policy(pool, "42", &policy)

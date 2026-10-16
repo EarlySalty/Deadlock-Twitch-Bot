@@ -530,4 +530,5 @@ export const SOCIAL_EN: Record<string, string> = {
   'Teilweise veröffentlicht': 'Partly published',
   'Kommt mit der neuen Clip-Ansicht': 'Coming with the new clip view',
   'Clip „{title}“ archivieren? Er wird danach nicht mehr automatisch gepostet.': 'Archive clip "{title}"? It will no longer be posted automatically.',
+  'Beim Zusammenführen werden die Texte von {platform} für alle Plattformen übernommen.': 'Combining uses the {platform} text for all platforms.',
 };
