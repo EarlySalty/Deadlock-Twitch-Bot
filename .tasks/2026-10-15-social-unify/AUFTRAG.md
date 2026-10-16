@@ -54,3 +54,12 @@ Global AI switch `external_llm_consent` needs an admin UI (set to true in prod o
 - Rollback: `TextDefaults` denies unknown fields and now saves `title`; binaries older than f05c5c9e4 fail to load such policies.
 - U16: no UI field for the `title` text default; frontend `schedule-queue/api.ts` TextDefaults lacks `title`.
 - Title-only defaults skip the legacy default template (empty description); untested.
+
+### From U9 (4f9935911, 2026-10-16)
+- U10: `valid_tiktok_choice` does not check choices against live creator info; validate `options.validate(&info, duration)` before init or inside `bind_tiktok_on`.
+- U10: executor still writes only `tiktok_effect_boundary_pending`; write the specific reason from `TikTokBindingIssue::reason()`.
+- U10: dispatcher must send `tiktok_options.caption` from the binding, never the queue row text (`clip_title` fallback differs).
+- U11/U15: snapshot `bound` state ignores credential id, music consent and option validity; derive from `TikTokSubject::issue`.
+- U15: `PublishReviewPanel.tsx` retry-button exclusion list lacks the new `tiktok_*` hold reasons.
+- Cross-origin approval test proves CSRF 403 only, not that the route is mounted.
+- Dashboard test noise on main f05c5c9e4: `social_media_pipeline` sources fails with "column produced_video_id already exists"; `autopilot_schedule_authenticated_composition` and `auth_login callback_mit_kontext_cookie_erfolgreich` fail on main too.
