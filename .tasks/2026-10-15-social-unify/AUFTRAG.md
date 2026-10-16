@@ -90,3 +90,8 @@ Global AI switch `external_llm_consent` needs an admin UI (set to true in prod o
 - Snapshot now has `settings.review_mode` (review / full_auto / veto_until_deadline); U16 shows it.
 - U12b (fix package, parallel to U16): sync review_policy and publish_mode (Q1: review off must auto-publish; today `off` + publish_mode review never publishes); impossible deadline values (month 13) must not break the whole publish tick; promote a veto video whose deadline passes within the same tick instead of silently moving it via schedule_slotless; Instagram "published but no media id" becomes uncertain, not retry.
 - Later: warn before grace-period file release of non-TikTok uncertain uploads; `Capabilities.tiktok_effect_boundary` static.
+
+### From U12b (9169c2ca3, 2026-10-16)
+- Shared `EFFECTIVE_REVIEW` rule: for channels with `pipeline_mode`, `review_policy` decides (off auto-publishes even with publish_mode review); legacy channels still follow publish_mode. Bad veto deadlines hold only that video (15 min, logged). A veto deadline passing within a tick promotes inline with shared `PROMOTABLE` guards. Instagram missing media id is `PublishUnconfirmed`, not retried.
+- U17: UI may still show publish_mode for unified channels; switching back to review revokes auto approvals that may be promoted again; production backlog limit (`production_jobs.rs:221`) still checks `publish_mode = 'full_auto'`; legacy channel with review off and no pipeline_mode still follows publish_mode.
+- U17/U18: broken-deadline hold has no user-visible reason; Instagram media_publish 5xx still retried (possible duplicate); old upload worker ends `PublishUnconfirmed` as failed, not uncertain; promotion query loads all veto videos then caps at 20.
