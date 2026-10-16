@@ -282,15 +282,24 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
             return Ok(None);
         }
     }
-    let mode = if job.started_at.is_some() {
-        job.mode.ok_or(JobError::State)?
+    let (mode, policy) = if job.started_at.is_some() {
+        (job.mode.ok_or(JobError::State)?, None)
     } else {
         match job.source {
-            JobSource::Manual => job.requested_mode.ok_or(JobError::State)?,
-            JobSource::Autopilot if settings.ai_editing_enabled => ProductionMode::Ai,
-            JobSource::Autopilot => ProductionMode::Static,
+            JobSource::Manual => (job.requested_mode.ok_or(JobError::State)?, None),
+            JobSource::Autopilot => automatic_mode(&mut tx, &owner, &settings).await?,
         }
     };
+    if let Some(policy) = policy {
+        sqlx::query(
+            "UPDATE social_production_jobs SET policy_snapshot = $2::text::jsonb WHERE id = $1",
+        )
+        .bind(job.id)
+        .bind(serde_json::to_string(&policy)?)
+        .execute(&mut *tx)
+        .await?;
+        job.policy_snapshot = Some(policy);
+    }
     let first_start = job.started_at.is_none();
     sqlx::query(
         "UPDATE social_production_jobs SET mode = $2, status = 'running',
@@ -316,6 +325,34 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
     job.attempts += 1;
     tx.commit().await?;
     Ok(Some(job))
+}
+
+async fn automatic_mode(
+    tx: &mut PgConnection,
+    owner: &str,
+    settings: &autopilot_settings::AutopilotSettings,
+) -> Result<(ProductionMode, Option<autopilot_settings::PipelinePolicy>), JobError> {
+    let unified: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM social_pipeline_cutover WHERE twitch_user_id = $1 AND state = 'unified')",
+    )
+    .bind(owner)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !unified {
+        return Ok(if settings.ai_editing_enabled {
+            (ProductionMode::Ai, None)
+        } else {
+            (ProductionMode::Static, None)
+        });
+    }
+    let policy = autopilot_settings::load_policy_on(tx, owner).await?;
+    Ok(
+        if policy.pipeline_mode == autopilot_settings::PipelineMode::AiEdit {
+            (ProductionMode::Ai, Some(policy))
+        } else {
+            (ProductionMode::Static, None)
+        },
+    )
 }
 
 pub async fn update_progress(

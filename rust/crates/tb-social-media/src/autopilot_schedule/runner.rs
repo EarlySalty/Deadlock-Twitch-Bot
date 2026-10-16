@@ -239,6 +239,10 @@ impl AutopilotWorker {
             .await?;
             return Ok(());
         };
+        let policy = job
+            .policy_snapshot
+            .clone()
+            .filter(|_| job.source == JobSource::Autopilot);
         let result = ai_editor::produce(
             ProductionContext {
                 pool: &self.pool,
@@ -252,6 +256,10 @@ impl AutopilotWorker {
         match result {
             Ok(outcome) => {
                 lease.ensure_held().await?;
+                if let Some(policy) = &policy {
+                    self.apply_ai_policy(job, policy, &outcome.produced_video_ids)
+                        .await?;
+                }
                 production_jobs::finish(
                     &self.pool,
                     &job.twitch_user_id,
@@ -286,6 +294,30 @@ impl AutopilotWorker {
                 }
             }
         }
+        Ok(())
+    }
+
+    async fn apply_ai_policy(
+        &self,
+        job: &ProductionJob,
+        policy: &autopilot_settings::PipelinePolicy,
+        video_ids: &[i64],
+    ) -> Result<(), RunnerError> {
+        let veto = (policy.review_policy == autopilot_settings::ReviewPolicy::VetoUntilDeadline)
+            .then_some(job.scheduled_at)
+            .flatten();
+        sqlx::query(
+            "UPDATE social_produced_videos SET policy_snapshot = COALESCE(policy_snapshot, $4::text::jsonb),
+            metadata = metadata || jsonb_build_object('veto_deadline', $5::text::jsonb)
+            WHERE id = ANY($3) AND twitch_user_id = $2 AND job_id = $1",
+        )
+        .bind(job.id)
+        .bind(&job.twitch_user_id)
+        .bind(video_ids)
+        .bind(serde_json::to_string(policy)?)
+        .bind(serde_json::to_string(&veto)?)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

@@ -1577,6 +1577,13 @@ async fn review_required(ctx: &StageContext<'_>) -> Result<bool, AiEditorError> 
     if ctx.identity.manual().is_some() {
         return Ok(true);
     }
+    if let Some(job) = ctx.identity.production() {
+        let frozen: Option<String> = sqlx::query_scalar("SELECT policy_snapshot->>'review_policy' FROM social_production_jobs WHERE id=$1 AND twitch_user_id=$2")
+            .bind(job).bind(ctx.owner).fetch_optional(ctx.pool).await.map_err(|_| AiEditorError::Storage)?.flatten();
+        if let Some(policy) = frozen {
+            return Ok(policy == "required");
+        }
+    }
     let settings = autopilot_settings::load(ctx.pool, ctx.owner)
         .await
         .map_err(|_| AiEditorError::Storage)?;

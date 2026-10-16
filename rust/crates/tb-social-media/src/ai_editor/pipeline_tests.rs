@@ -2645,3 +2645,157 @@ async fn editor_options_default_off_and_save_without_touching_other_settings() {
         .expect("other user");
     assert!(!other.multi_output_enabled && !other.experimental_ai_layout);
 }
+
+struct NoDownload;
+
+#[async_trait::async_trait]
+impl crate::clip_prep_worker::ClipDownloader for NoDownload {
+    async fn download(&self, _url: &str, _destination: &Path) -> Result<(), String> {
+        Err("local production must not download media".into())
+    }
+}
+
+async fn unified_ai_channel(
+    pool: &PgPool,
+    review_policy: autopilot_settings::ReviewPolicy,
+) -> chrono::DateTime<chrono::Utc> {
+    use chrono::Datelike;
+    let slot: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT date_trunc('minute', clock_timestamp()) + INTERVAL '5 minutes'")
+            .fetch_one(pool)
+            .await
+            .expect("future database slot");
+    production_jobs::autopilot_schedule::save_schedule(
+        pool,
+        "101",
+        &production_jobs::autopilot_schedule::SchedulePatch {
+            enabled: Some(true),
+            ai_editing_enabled: Some(false),
+            timezone: Some("UTC".into()),
+            schedule_slots: Some(vec![autopilot_settings::ScheduleSlot {
+                weekday: slot.weekday().number_from_monday() as u8,
+                local_time: slot.format("%H:%M").to_string(),
+            }]),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("automatic schedule");
+    let mut settings = autopilot_settings::load(pool, "101")
+        .await
+        .expect("settings");
+    settings.publish_mode = autopilot_settings::PublishMode::FullAuto;
+    autopilot_settings::save(pool, "101", &settings)
+        .await
+        .expect("legacy full auto");
+    let mut policy = autopilot_settings::load_policy(pool, "101")
+        .await
+        .expect("policy");
+    policy.pipeline_mode = autopilot_settings::PipelineMode::AiEdit;
+    policy.review_policy = review_policy;
+    autopilot_settings::save_policy(pool, "101", &policy)
+        .await
+        .expect("AI edit policy");
+    sqlx::query("INSERT INTO social_pipeline_cutover (twitch_user_id, state, migration_version) VALUES ('101', 'unified', 1)")
+        .execute(pool)
+        .await
+        .expect("unified owner");
+    slot
+}
+
+#[tokio::test]
+async fn unified_ai_mode_follows_the_frozen_review_policy_instead_of_legacy_full_auto() {
+    use autopilot_settings::ReviewPolicy;
+    for review_policy in [
+        ReviewPolicy::Required,
+        ReviewPolicy::Off,
+        ReviewPolicy::VetoUntilDeadline,
+    ] {
+        let db = database().await;
+        let directory = tempfile::tempdir().expect("package root");
+        let runtime = runtime(directory.path());
+        let clip = source(&db.pool, &runtime).await;
+        let slot = unified_ai_channel(&db.pool, review_policy).await;
+        let job = production_jobs::insert(
+            &db.pool,
+            &production_jobs::NewProductionJob {
+                twitch_user_id: "101".into(),
+                clip_id: clip,
+                source: production_jobs::JobSource::Autopilot,
+                requested_mode: None,
+                scheduled_at: Some(slot),
+                max_attempts: 2,
+            },
+        )
+        .await
+        .expect("automatic AI job");
+        let mut lease = super::super::store::acquire_production_lease(&db.pool)
+            .await
+            .expect("lease")
+            .expect("free");
+        let checkpoints = prepared(
+            &db.pool,
+            &runtime,
+            &mut lease,
+            clip,
+            Identity::Production(job.id),
+        )
+        .await;
+        let state = serde_json::to_value(ProductionState {
+            checkpoints,
+            attempts: BTreeMap::new(),
+        })
+        .expect("state");
+        sqlx::query("UPDATE social_production_jobs SET metadata = jsonb_build_object('ai_editor', $2::jsonb) WHERE id = $1")
+            .bind(job.id)
+            .bind(state)
+            .execute(&db.pool)
+            .await
+            .expect("provider stages already completed");
+        lease.release().await.expect("release before runner");
+        let worker = crate::autopilot_runner::AutopilotWorker::new(
+            db.pool.clone(),
+            crate::autopilot_runner::WorkerConfig::from_media_runtime(
+                runtime.media(),
+                Some(runtime.clone()),
+                None,
+            ),
+            std::sync::Arc::new(NoDownload),
+            crate::video_processor::VideoProcessor::new(
+                "unavailable-ffmpeg",
+                "unavailable-ffprobe",
+            ),
+        )
+        .expect("runner");
+        assert!(worker.run_once().await.expect("AI production"));
+        let done = production_jobs::get(&db.pool, "101", job.id)
+            .await
+            .expect("job")
+            .expect("owned job");
+        assert_eq!(done.status, "completed");
+        assert_eq!(done.mode, Some(ProductionMode::Ai));
+        assert_eq!(
+            done.policy_snapshot.map(|policy| policy.review_policy),
+            Some(review_policy)
+        );
+        let video = produced_video::find_ai_version(&db.pool, "101", clip, None, Some(job.id))
+            .await
+            .expect("version read")
+            .expect("AI version");
+        assert_eq!(video.status, "review");
+        assert_eq!(video.review_reasons, json!([]));
+        assert_eq!(video.needs_review, review_policy == ReviewPolicy::Required);
+        assert_eq!(
+            video.policy_snapshot.map(|policy| policy.review_policy),
+            Some(review_policy)
+        );
+        assert_eq!(
+            video.metadata["veto_deadline"],
+            if review_policy == ReviewPolicy::VetoUntilDeadline {
+                json!(slot)
+            } else {
+                json!(null)
+            }
+        );
+    }
+}
