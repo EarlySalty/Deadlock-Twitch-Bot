@@ -63,3 +63,11 @@ Global AI switch `external_llm_consent` needs an admin UI (set to true in prod o
 - U15: `PublishReviewPanel.tsx` retry-button exclusion list lacks the new `tiktok_*` hold reasons.
 - Cross-origin approval test proves CSRF 403 only, not that the route is mounted.
 - Dashboard test noise on main f05c5c9e4: `social_media_pipeline` sources fails with "column produced_video_id already exists"; `autopilot_schedule_authenticated_composition` and `auth_login callback_mit_kontext_cookie_erfolgreich` fail on main too.
+
+### From U10 (3fc208214, 2026-10-16)
+- U11: dispatch is off until `with_tiktok_dispatch(true)` in main.rs; before enabling, reconcile `tiktok_processing`, `tiktok_transfer_uncertain`, `tiktok_init_uncertain` to done/failed, otherwise every post triggers the "outcome unclear" Discord alert.
+- U11: `tiktok_effect_boundary_pending` is not in `REAPPROVAL_REASONS`; held rows would be stuck.
+- U11: pre-effect validation maps file problems (empty file, hash mismatch) to `tiktok_options_invalid`; split file reasons from option reasons.
+- U11: music consent not re-checked inside the effect-start transaction; file hashed twice per claim; non-TikTok start update carries a dummy `$8::text IS NULL`.
+- U11/U12: `recover_stale` overwrites TikTok reason with `interrupted`; 7-day cleanup deletes files of UNCERTAIN rows; `upload_worker::resolve_tiktok_uploader` should reuse `direct_post_uploader`.
+- U17 (decision per "one system"): a clip must never post to TikTok from both a legacy queue row and an autopilot row; the canonical writer wins, legacy writes are rejected or delegated. U11 must not enable dispatch for channels without `social_pipeline_cutover`.
