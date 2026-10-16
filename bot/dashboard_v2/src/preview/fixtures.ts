@@ -670,15 +670,6 @@ const ENGAGEMENT_SETTINGS_FIXTURE = {
   actorLogin: 'midcore_live',
 };
 
-/**
- * Fixture zu einem absoluten Pfad. `undefined` heisst: kein Fixture, der
- * Aufruf geht wie sonst ins Netz.
- *
- * Schreibende Aufrufe bekommen absichtlich die unveraenderte Zielliste
- * zurueck. Ein Preview ohne Server kann nichts speichern, und eine erfundene
- * Bestaetigung waere schlimmer als keine: sie zeigte einen Zustand, den es
- * nirgends gibt.
- */
 const DONO_GOAL_FIXTURE = {
   login: 'preview',
   configured: true,
@@ -690,6 +681,15 @@ const DONO_GOAL_FIXTURE = {
   connected: true,
 };
 
+/**
+ * Fixture zu einem absoluten Pfad. `undefined` heisst: kein Fixture, der
+ * Aufruf geht wie sonst ins Netz.
+ *
+ * Schreibende Aufrufe bekommen absichtlich die unveraenderte Zielliste
+ * zurueck. Ein Preview ohne Server kann nichts speichern, und eine erfundene
+ * Bestaetigung waere schlimmer als keine: sie zeigte einen Zustand, den es
+ * nirgends gibt.
+ */
 export function getPreviewPathFixture(pathname: string): unknown | undefined {
   if (pathname === '/twitch/api/v2/streamer/dono-goal') return DONO_GOAL_FIXTURE;
   if (pathname === '/twitch/api/v2/streamer/ad-manager') return AD_MANAGER_FIXTURE;

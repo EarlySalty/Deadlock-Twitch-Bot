@@ -340,6 +340,7 @@ export const OVERLAY_EN: Record<string, string> = {
   "Ziel": "Goal",
   "Währung": "Currency",
   "verbunden": "connected",
+  "nicht verbunden": "not connected",
   "Kanal-ID und JWT findest du bei StreamElements unter Konto, Kanäle. Der JWT wird verschlüsselt gespeichert und nie wieder angezeigt.": "You can find the channel ID and JWT in StreamElements under Account, Channels. The JWT is stored encrypted and never shown again.",
   "Kanal-ID": "Channel ID",
   "JWT-Token": "JWT token",
