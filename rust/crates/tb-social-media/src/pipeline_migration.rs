@@ -114,6 +114,7 @@ pub struct CanonicalState {
 #[derive(Debug, Clone, Default)]
 pub struct Inventory {
     pub streamers: BTreeSet<String>,
+    pub logins: BTreeMap<String, String>,
     pub cutover: BTreeMap<String, String>,
     pub canonical: BTreeMap<String, CanonicalState>,
     pub pool_clips: BTreeSet<i64>,
@@ -141,6 +142,8 @@ pub struct Plan {
     pub reconciliation: BTreeMap<String, Value>,
     pub legacy_awaiting: usize,
     pub legacy_approved: usize,
+    pub logins: BTreeMap<String, String>,
+    pub open_legacy: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -179,6 +182,31 @@ pub struct MigrationReport {
     pub orphans: BTreeMap<String, usize>,
     pub conflicts: Vec<Conflict>,
     pub channel_policies: BTreeMap<String, Value>,
+    pub channels: Vec<ChannelDecision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelDecision {
+    pub twitch_user_id: String,
+    pub login: String,
+    pub pipeline_mode: String,
+    pub review_policy: String,
+    pub source: String,
+    pub open_legacy_rows: usize,
+}
+
+impl ChannelDecision {
+    pub fn line(&self) -> String {
+        format!(
+            "owner={} login={} mode={} review={} source={} open_legacy_rows={}",
+            self.twitch_user_id,
+            self.login,
+            self.pipeline_mode,
+            self.review_policy,
+            self.source,
+            self.open_legacy_rows
+        )
+    }
 }
 
 type MapKey = (String, String, String);
@@ -231,7 +259,15 @@ pub async fn run_command(pool: &PgPool, command: &CutoverCommand) -> Result<Valu
         return Err(MigrationError::BarrierMissing);
     }
     Ok(match command {
-        CutoverCommand::DryRun => json!({ "migration": dry_run(pool).await? }),
+        CutoverCommand::DryRun => {
+            let migration = dry_run(pool).await?;
+            let lines: Vec<String> = migration
+                .channels
+                .iter()
+                .map(ChannelDecision::line)
+                .collect();
+            json!({ "channel_lines": lines, "migration": migration })
+        }
         CutoverCommand::Apply => {
             let migration = apply(pool).await?;
             let cutover = activate_ready(pool).await?;
@@ -672,6 +708,9 @@ fn report(plan: &Plan, stored: &BTreeMap<MapKey, StoredRow>, applied: bool) -> M
             "applied": proposed["policy"]["pipeline_mode"],
             "source": proposed["policy_source"],
         });
+        report
+            .channels
+            .push(channel_decision(plan, owner, proposed));
     }
     let owners: BTreeSet<&String> = plan.reconciliation.keys().collect();
     report.stale = stored
@@ -679,6 +718,27 @@ fn report(plan: &Plan, stored: &BTreeMap<MapKey, StoredRow>, applied: bool) -> M
         .filter(|key| owners.contains(&key.0) && !planned.contains(*key))
         .count();
     report
+}
+
+fn channel_decision(plan: &Plan, owner: &str, proposed: &Value) -> ChannelDecision {
+    let field = |value: &Value| value.as_str().unwrap_or("unknown").to_string();
+    ChannelDecision {
+        twitch_user_id: owner.to_string(),
+        login: plan
+            .logins
+            .get(owner)
+            .cloned()
+            .unwrap_or_else(|| "-".to_string()),
+        pipeline_mode: field(&proposed["policy"]["pipeline_mode"]),
+        review_policy: field(&proposed["policy"]["review_policy"]),
+        source: match text(proposed, "policy_source") {
+            Some("planen") => "explicit-new",
+            Some("legacy") => "legacy-mapped",
+            _ => "unknown",
+        }
+        .to_string(),
+        open_legacy_rows: plan.open_legacy.get(owner).copied().unwrap_or(0),
+    }
 }
 
 fn channel_policy<'r>(report: &'r mut MigrationReport, owner: &str) -> &'r mut Value {
@@ -813,6 +873,14 @@ pub async fn load_inventory(connection: &mut PgConnection) -> Result<Inventory, 
     let mut inventory = Inventory {
         streamers: sqlx::query_scalar(
             "SELECT twitch_user_id FROM twitch_streamers WHERE twitch_user_id IS NOT NULL",
+        )
+        .fetch_all(&mut *connection)
+        .await?
+        .into_iter()
+        .collect(),
+        logins: sqlx::query_as(
+            "SELECT twitch_user_id, twitch_login FROM twitch_streamers
+             WHERE twitch_user_id IS NOT NULL AND twitch_login IS NOT NULL",
         )
         .fetch_all(&mut *connection)
         .await?
@@ -968,7 +1036,10 @@ fn readable<T>(result: Result<T, SettingsError>) -> Result<Option<T>, MigrationE
 
 pub fn plan(inventory: &Inventory) -> Plan {
     let context = Context::new(inventory);
-    let mut plan = Plan::default();
+    let mut plan = Plan {
+        logins: inventory.logins.clone(),
+        ..Plan::default()
+    };
     let tables: [(&str, &[LegacyRow]); 8] = [
         (CLIPS, &inventory.clips),
         (APPROVALS, &inventory.approvals),
@@ -1003,6 +1074,11 @@ pub fn plan(inventory: &Inventory) -> Plan {
             ) {
                 plan.skipped_unified.insert(owner.clone());
                 continue;
+            }
+            if table == QUEUE
+                && text(&row.data, "status").is_none_or(|status| !FINAL_QUEUE.contains(&status))
+            {
+                *plan.open_legacy.entry(owner.clone()).or_default() += 1;
             }
             let occurrence = {
                 let seen = seen.entry((owner.clone(), row.key.clone())).or_default();

@@ -391,6 +391,15 @@ async fn gespeicherte_pruefregel_aus_planen_bleibt_bei_der_umstellung() {
             "pipeline_mode": {"applied": "ai_edit", "source": "planen"},
         }))
     );
+    let epsilon = preview
+        .channels
+        .iter()
+        .find(|channel| channel.twitch_user_id == "500")
+        .map(|channel| channel.line());
+    assert_eq!(
+        epsilon.as_deref(),
+        Some("owner=500 login=epsilon mode=ai_edit review=required source=explicit-new open_legacy_rows=0")
+    );
     pipeline_migration::run_command(&pool, &CutoverCommand::Apply)
         .await
         .expect("Umstellung");
@@ -468,6 +477,15 @@ async fn umstellung_schliesst_altschreiber_und_pausiert_ohne_nachholen() {
     assert_eq!(
         preview.channel_policies["300"]["pipeline_mode"],
         serde_json::json!({"applied": "upload", "source": "legacy"})
+    );
+    let lines: Vec<String> = preview.channels.iter().map(|c| c.line()).collect();
+    assert_eq!(
+        lines,
+        [
+            "owner=300 login=gamma mode=upload review=veto_until_deadline source=legacy-mapped open_legacy_rows=1",
+            "owner=400 login=delta mode=upload review=required source=legacy-mapped open_legacy_rows=1",
+            "owner=500 login=epsilon mode=upload review=off source=legacy-mapped open_legacy_rows=0",
+        ]
     );
 
     let first = pipeline_migration::run_command(&pool, &CutoverCommand::Apply)
