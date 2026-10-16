@@ -7,6 +7,7 @@ import { PLATFORM_LABELS } from '@/components/socialmedia/labels';
 import type { SocialPlatform } from '@/types/socialMedia';
 import { CLIP_MENU_ITEM, ClipActionMenu } from './ClipCard';
 import { PIPELINE_DETAIL_CUTOVER, type PipelinePage, type PipelineSource } from './pipelineApi';
+import { ClipReviewDetail } from './autopilot/publish-review/PublishReviewPanel';
 import { QUEUE_FILTERS, filterSources, partialResult, publishedPlatforms, sourceStage, type EligibilityFilter, type QueueStage } from './queuePresentation';
 import { clipDuration, clipThumbnail, insideWindow, localTimestamp, sourceMetadata } from './autopilot/import-pool/presentation';
 import type { PoolPreferences } from './autopilot/import-pool/types';
@@ -40,6 +41,7 @@ export interface PipelineClipsProps {
   bulkPending?: boolean;
   onArchived?: () => void;
   onOpenDetail?: (source: PipelineSource, mode: DetailMode) => void;
+  owner?: string;
 }
 
 function sourceUrl(source: PipelineSource): string | null {
@@ -62,8 +64,10 @@ function eligibilityNote(source: PipelineSource, t: Translate): string | null {
   return null;
 }
 
-export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, bulkPending, onArchived, onOpenDetail }: PipelineClipsProps) {
+export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, bulkPending, onArchived, onOpenDetail, owner }: PipelineClipsProps) {
   const { t, locale } = useLanguage();
+  const [detail, setDetail] = useState<{ source: PipelineSource; mode: DetailMode } | null>(null);
+  const openDetail = onOpenDetail ?? (owner ? (source: PipelineSource, mode: DetailMode) => setDetail({ source, mode }) : undefined);
   const [eligibility, setEligibility] = useState<EligibilityFilter>('all');
   const [stage, setStage] = useState<QueueStage>('all');
   const [search, setSearch] = useState('');
@@ -153,7 +157,7 @@ export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, b
               selectionLocked={selectionLocked}
               onSelect={onSelect}
               onArchived={onArchived}
-              onOpenDetail={onOpenDetail}
+              onOpenDetail={openDetail}
             />
           ))}
         </ul>
@@ -168,6 +172,16 @@ export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, b
             {t('Weiter')}
           </button>
         </nav>
+      )}
+      {detail && owner && (
+        <ClipReviewDetail
+          owner={owner}
+          source={page.sources.find((item) => item.clip_id === detail.source.clip_id) ?? detail.source}
+          mode={detail.mode}
+          title={sourceMetadata(detail.source).title}
+          onClose={() => setDetail(null)}
+          onChanged={onArchived}
+        />
       )}
     </div>
   );

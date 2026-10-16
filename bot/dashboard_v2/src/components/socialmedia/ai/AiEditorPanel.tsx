@@ -21,6 +21,7 @@ interface AiEditorPanelProps {
   streamer: string;
   clipDbId?: number;
   settingsOnly?: boolean;
+  clipOnly?: boolean;
   scheduleApi?: ScheduleQueueApi;
 }
 
@@ -174,7 +175,7 @@ export function AiEditorPanel(props: AiEditorPanelProps) {
   return <AiEditorContent key={`${props.twitchUserId}-${props.clipDbId ?? ''}`} {...props} />;
 }
 
-function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = false, scheduleApi }: AiEditorPanelProps) {
+function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = false, clipOnly = false, scheduleApi }: AiEditorPanelProps) {
   const t = useT();
   const { locale } = useLanguage();
   const client = useQueryClient();
@@ -200,15 +201,16 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = fals
   const jobsKey = ['social-ai', 'jobs', twitchUserId] as const;
   const consent = useQuery({ queryKey: consentKey, queryFn: ({ signal }) => fetchAiConsent(twitchUserId, signal), enabled: hasChannel, retry: false, refetchOnWindowFocus: false });
   const jobs = useQuery({ queryKey: jobsKey, queryFn: ({ signal }) => fetchAiJobs(twitchUserId, signal), enabled: hasChannel && !settingsOnly, retry: false, refetchOnWindowFocus: false });
-  const clips = useQuery({ queryKey: ['social-ai', 'clips', twitchUserId, page], queryFn: ({ signal }) => fetchClips({ twitch_user_id: twitchUserId, page, page_size: 30 }, signal), enabled: hasChannel && !settingsOnly, retry: false, refetchOnWindowFocus: false });
+  const clips = useQuery({ queryKey: ['social-ai', 'clips', twitchUserId, page], queryFn: ({ signal }) => fetchClips({ twitch_user_id: twitchUserId, page, page_size: 30 }, signal), enabled: hasChannel && !settingsOnly && !clipOnly, retry: false, refetchOnWindowFocus: false });
   const clipsInvalid = clips.isSuccess && (!Array.isArray(clips.data.items) || !Number.isSafeInteger(clips.data.total) || clips.data.total < 0 || clips.data.page !== page || clips.data.page_size !== 30 || clips.data.items.length > 30);
   const availableClips = !clipsInvalid && Array.isArray(clips.data?.items) ? clips.data.items.filter(isSelectableClip) : [];
   const validHandoff = Number.isSafeInteger(clipDbId) && (clipDbId ?? 0) > 0;
+  const fixedClip = clipOnly && validHandoff ? clipDbId ?? null : null;
   const handoffOnPage = availableClips.some((clip) => clip.clip_db_id === clipDbId);
   const handoff = useQuery({
     queryKey: ['social-ai', 'clip-handoff', twitchUserId, clipDbId],
     queryFn: ({ signal }) => findChannelClip(twitchUserId, clipDbId!, signal),
-    enabled: hasChannel && validHandoff && clips.isSuccess && !clipsInvalid && !handoffOnPage,
+    enabled: hasChannel && validHandoff && !clipOnly && clips.isSuccess && !clipsInvalid && !handoffOnPage,
     retry: false,
     refetchOnWindowFocus: false,
   });
@@ -216,7 +218,8 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = fals
   const handoffClip = handoff.data?.kind === 'found' ? handoff.data.clip : null;
   const selectedClip = availableClips.find((clip) => clip.clip_db_id === selectedClipId) ?? (handoffClip?.clip_db_id === selectedClipId ? handoffClip : undefined);
   const handoffOutsidePage = handoffClip && !handoffOnPage ? handoffClip : null;
-  const selectedJobId = jobSelection?.channel === twitchUserId ? jobSelection.id : jobs.data?.[0]?.id;
+  const clipJobs = fixedClip === null ? jobs.data : jobs.data?.filter((item) => item.clip_db_id === fixedClip);
+  const selectedJobId = jobSelection?.channel === twitchUserId ? jobSelection.id : clipJobs?.[0]?.id;
   const jobKey = ['social-ai', 'job', twitchUserId, selectedJobId] as const;
   const job = useQuery({
     queryKey: jobKey,
@@ -269,11 +272,12 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = fals
       focusConsentSwitch();
     }
   };
-  const currentStartAction = start.variables?.channel === twitchUserId && start.variables.clip === selectedClip?.clip_db_id && start.variables.revision === selectionRevision;
+  const startClipId = fixedClip ?? selectedClip?.clip_db_id;
+  const currentStartAction = start.variables?.channel === twitchUserId && start.variables.clip === startClipId && start.variables.revision === selectionRevision;
   const currentRetryAction = retry.variables?.channel === twitchUserId && retry.variables.id === selectedJobId && retry.variables.revision === selectionRevision;
   const clipCount = clips.data?.total ?? 0;
   return <section className="social-ai" aria-labelledby={settingsOnly ? undefined : "social-ai-title"} data-saving={savingConsent.isPending || start.isPending || retry.isPending || detailsLocked ? "true" : undefined} data-unsaved={confirmChannel !== null && confirmed ? "true" : undefined}>
-    {!settingsOnly && <header className="social-ai-header"><div><h2 id="social-ai-title"><Film aria-hidden="true" size={25} />{t("KI-Videoschnitt")}</h2><p>{t('Wähle einen Clip aus deinem Kanal')} {streamer ? <strong>{streamer}</strong> : null} {t('und starte eine einzelne Bearbeitung. Dafür muss der Auto-Pilot nicht aktiviert sein.')}</p></div><span className="social-ai-manual"><ShieldCheck aria-hidden="true" size={16} />{t("Manuelle Sichtung")}</span></header>}
+    {!settingsOnly && !clipOnly && <header className="social-ai-header"><div><h2 id="social-ai-title"><Film aria-hidden="true" size={25} />{t("KI-Videoschnitt")}</h2><p>{t('Wähle einen Clip aus deinem Kanal')} {streamer ? <strong>{streamer}</strong> : null} {t('und starte eine einzelne Bearbeitung. Dafür muss der Auto-Pilot nicht aktiviert sein.')}</p></div><span className="social-ai-manual"><ShieldCheck aria-hidden="true" size={16} />{t("Manuelle Sichtung")}</span></header>}
     {settingsOnly && <header className="studio-production-head"><h2 id="studio-production-title"><Sparkles aria-hidden="true" size={18} />{t("KI-Produktion & Bearbeitung")}</h2>{hasChannel && <ProductionSwitch owner={twitchUserId} disabled={!consent.isSuccess || !consent.data.global_allowed} api={scheduleApi} />}</header>}
     {!settingsOnly && <p className="social-ai-notice">{t("Ein fertiges Video wird hier zur Sichtung bereitgestellt. Es wird durch diesen Auftrag nicht automatisch veröffentlicht oder in den Zeitplan übernommen.")}</p>}
     {!hasChannel ? <EditorError>{t("Bitte wähle zuerst einen Kanal, um Clips und Freigaben zu laden.")}</EditorError> : <>
@@ -290,7 +294,11 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = fals
             </div>
           </>}
         </div>
-        {!settingsOnly && <div className="social-ai-pick"><div className="social-ai-section-head"><h3>{t("Clip auswählen")}</h3><p>{t("Clips aus deinem eigenen Kanal, ohne automatische Bearbeitung.")}</p></div>
+        {fixedClip !== null && <div className="social-ai-pick"><div className="social-ai-section-head"><h3>{t("KI-Bearbeitung für diesen Clip")}</h3><p>{t("Die KI schneidet genau diesen Clip. Das fertige Video landet unten zur Prüfung.")}</p></div>
+          <div className="social-ai-actions"><button type="button" className="studio-primary" disabled={detailsLocked || !canStart || start.isPending || jobs.isPending || jobs.isError} onClick={() => { if (canStart) start.mutate({ channel: twitchUserId, clip: fixedClip, revision: jobSelectionRevision.current }); }}>{start.isPending && currentStartAction ? t("Bearbeitung wird gestartet…") : t("KI-Bearbeitung manuell starten")}</button></div>
+          {start.isError && currentStartAction && <EditorError>{t("Die Bearbeitung konnte nicht gestartet werden. Es wurde kein fertiges Video bestätigt. Bitte prüfe Freigabe und Clip und versuche es erneut.")}</EditorError>}
+        </div>}
+        {!settingsOnly && fixedClip === null && <div className="social-ai-pick"><div className="social-ai-section-head"><h3>{t("Clip auswählen")}</h3><p>{t("Clips aus deinem eigenen Kanal, ohne automatische Bearbeitung.")}</p></div>
           {clips.isPending ? <p role="status">{t("Clips werden geladen…")}</p> : clips.isError || clipsInvalid ? <EditorError retry={() => clips.refetch()}>{t("Die Clips konnten nicht geladen werden. Bitte versuche es erneut.")}</EditorError> : availableClips.length === 0 && !handoffOutsidePage ? <div><p>{t("Auf dieser Seite sind keine Twitch-Clips vorhanden.")}</p><div className="social-ai-actions">{page > 1 && <button type="button" className="studio-button" onClick={() => { setPage(page - 1); setClipSelection(null); advanceSelection(); }}>{t("Zurück")}</button>}{page * 30 < clipCount && <button type="button" className="studio-button" onClick={() => { setPage(page + 1); setClipSelection(null); advanceSelection(); }}>{t("Weitere Clips ansehen")}</button>}</div></div> : <><label htmlFor="social-ai-clip">{t("Clip aus dem Kanal")}</label><select id="social-ai-clip" className="studio-select" value={selectedClip?.clip_db_id ?? ''} onChange={(event) => { advanceSelection(); setClipSelection({ channel: twitchUserId, id: Number(event.target.value) }); }}><option value="">{t("Bitte Clip wählen")}</option>{handoffOutsidePage && <option value={handoffOutsidePage.clip_db_id}>{handoffOutsidePage.title || t('Clip {id}', { id: handoffOutsidePage.clip_db_id })} · {t("Übernommener Clip")}</option>}{availableClips.map((clip) => <option key={clip.clip_db_id} value={clip.clip_db_id}>{clip.title || t('Clip {id}', { id: clip.clip_db_id })} · {new Date(clip.created_at).toLocaleDateString(locale)}</option>)}</select><div className="social-ai-pagination"><span>{t('Alle Clips: {count} · Seite {page}', { count: clipCount, page })}</span><div><button type="button" className="studio-button" disabled={page === 1} onClick={() => { setPage(page - 1); setClipSelection(null); advanceSelection(); }}>{t("Zurück")}</button><button type="button" className="studio-button" disabled={page * 30 >= clipCount} onClick={() => { setPage(page + 1); setClipSelection(null); advanceSelection(); }}>{t("Weitere Clips")}</button></div></div></>}
           {clipSelection === null && clipDbId !== undefined && !handoffOnPage && (validHandoff ? handoff.isPending && clips.isSuccess ? <p role="status">{t("Übernommener Clip wird im Kanalbestand geprüft…")}</p> : handoff.isError ? <EditorError retry={() => handoff.refetch()}>{t("Der übernommene Clip konnte nicht geprüft werden. Wähle einen Clip aus dem Kanalbestand oder versuche es erneut.")}</EditorError> : handoff.isSuccess && handoff.data.kind === 'limit_reached' ? <EditorError>{t("Der übernommene Clip wurde auf den ersten 20 Seiten des Kanalbestands nicht gefunden. Weitere Clips wurden nicht geprüft. Wähle einen Clip aus dem Kanalbestand.")}</EditorError> : handoff.isSuccess && handoff.data.kind === 'not_found' ? <EditorError>{t("Der übernommene Clip wurde im geprüften Kanalbestand nicht als Twitch-Clip gefunden. Wähle einen Clip aus dem Kanalbestand.")}</EditorError> : null : <EditorError>{t("Die übernommene Clip-ID ist ungültig. Wähle einen Clip aus dem Kanalbestand.")}</EditorError>)}
           <div className="social-ai-actions"><button type="button" className="studio-primary" disabled={detailsLocked || !canStart || !selectedClip || !clips.isSuccess || clipsInvalid || start.isPending || jobs.isError} onClick={() => { if (selectedClip && canStart && clips.isSuccess && !clipsInvalid) start.mutate({ channel: twitchUserId, clip: selectedClip.clip_db_id, revision: jobSelectionRevision.current }); }}>{start.isPending && currentStartAction ? t("Bearbeitung wird gestartet…") : t("KI-Bearbeitung manuell starten")}</button></div>
@@ -299,8 +307,8 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = fals
       </section>
       {settingsOnly && <EditorOptionsPanel key={twitchUserId} channel={twitchUserId} disabled={!consent.isSuccess || !consent.data.global_allowed} />}
       {!settingsOnly && <>
-      <div className="social-ai-history"><div><h3>{t("Bearbeitungsaufträge")}</h3><p>{t("Zuletzt gestartete Aufträge für diesen Kanal.")}</p></div>{jobs.data && jobs.data.length > 0 && <label>{t("Auftrag ansehen")}<select className="studio-select" value={selectedJobId ?? ''} disabled={detailsLocked} onChange={(event) => { advanceSelection(); setJobSelection({ channel: twitchUserId, id: Number(event.target.value) }); }}>{jobs.data.map((item) => <option key={item.id} value={item.id}>{t("Auftrag")} {item.id} · {t(statusLabels[item.status])}</option>)}</select></label>}</div>
-      {jobs.isPending ? <p role="status">{t("Aufträge werden geladen…")}</p> : jobs.isError ? <EditorError retry={() => jobs.refetch()}>{t("Die Aufträge konnten nicht geladen werden. Der Start bleibt gesperrt, bis der Stand bekannt ist.")}</EditorError> : jobs.data?.length === 0 ? <p className="social-ai-empty">{t("Noch kein Auftrag für diesen Kanal. Wähle oben einen Clip für einen manuellen Test.")}</p> : job.isPending ? <p role="status">{t("Auftrag wird geladen…")}</p> : job.isError ? <EditorError retry={() => job.refetch()}>{t("Der Auftrag konnte nicht geladen werden. Die letzte bekannte Fassung wird nicht als aktueller Stand angezeigt.")}</EditorError> : job.data && <AiJobDetails key={`${twitchUserId}-${job.data.id}`} job={job.data} channel={twitchUserId} onBusyChange={setDetailsLocked} onReload={async () => (await job.refetch()).isSuccess} onJob={(value) => {client.setQueryData(['social-ai','job',twitchUserId,value.id],value);client.invalidateQueries({queryKey:jobsKey});if (selectionRevision === jobSelectionRevision.current && value.id !== selectedJobId) setJobSelection({channel:twitchUserId,id:value.id});}} canStart={canStart} onRetry={() => { if (job.data && canRetryJob(job.data, { canStart, retryPending: retry.isPending, locked: detailsLocked })) retry.mutate({ channel: twitchUserId, id: job.data.id, revision: jobSelectionRevision.current }); }} retryPending={retry.isPending && currentRetryAction} retryError={retry.isError && currentRetryAction} />}
+      <div className="social-ai-history"><div><h3>{t("Bearbeitungsaufträge")}</h3><p>{fixedClip === null ? t("Zuletzt gestartete Aufträge für diesen Kanal.") : t("Zuletzt gestartete Aufträge für diesen Clip.")}</p></div>{clipJobs && clipJobs.length > 0 && <label>{t("Auftrag ansehen")}<select className="studio-select" value={selectedJobId ?? ''} disabled={detailsLocked} onChange={(event) => { advanceSelection(); setJobSelection({ channel: twitchUserId, id: Number(event.target.value) }); }}>{clipJobs.map((item) => <option key={item.id} value={item.id}>{t("Auftrag")} {item.id} · {t(statusLabels[item.status])}</option>)}</select></label>}</div>
+      {jobs.isPending ? <p role="status">{t("Aufträge werden geladen…")}</p> : jobs.isError ? <EditorError retry={() => jobs.refetch()}>{t("Die Aufträge konnten nicht geladen werden. Der Start bleibt gesperrt, bis der Stand bekannt ist.")}</EditorError> : clipJobs?.length === 0 ? <p className="social-ai-empty">{fixedClip === null ? t("Noch kein Auftrag für diesen Kanal. Wähle oben einen Clip für einen manuellen Test.") : t("Für diesen Clip gibt es noch keinen KI-Auftrag.")}</p> : job.isPending ? <p role="status">{t("Auftrag wird geladen…")}</p> : job.isError ? <EditorError retry={() => job.refetch()}>{t("Der Auftrag konnte nicht geladen werden. Die letzte bekannte Fassung wird nicht als aktueller Stand angezeigt.")}</EditorError> : job.data && <AiJobDetails key={`${twitchUserId}-${job.data.id}`} job={job.data} channel={twitchUserId} onBusyChange={setDetailsLocked} onReload={async () => (await job.refetch()).isSuccess} onJob={(value) => {client.setQueryData(['social-ai','job',twitchUserId,value.id],value);client.invalidateQueries({queryKey:jobsKey});if (selectionRevision === jobSelectionRevision.current && value.id !== selectedJobId) setJobSelection({channel:twitchUserId,id:value.id});}} canStart={canStart} onRetry={() => { if (job.data && canRetryJob(job.data, { canStart, retryPending: retry.isPending, locked: detailsLocked })) retry.mutate({ channel: twitchUserId, id: job.data.id, revision: jobSelectionRevision.current }); }} retryPending={retry.isPending && currentRetryAction} retryError={retry.isError && currentRetryAction} />}
       </>}
     </>}
   </section>;

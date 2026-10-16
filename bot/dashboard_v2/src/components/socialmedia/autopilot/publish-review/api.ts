@@ -1,8 +1,10 @@
 import { fetchJson, withCookieCredentials } from '@/api/core';
 import { fetchAuthStatus } from '@/api/auth';
+import type { TikTokDraft } from '@/api/socialMedia';
 
 export type PublishPlatform = 'youtube' | 'tiktok' | 'instagram';
 export type PublishMode = 'review' | 'full_auto';
+export type TikTokConsentState = 'missing' | 'bound' | 'stale';
 export type PendingHandling = 'keep_review' | 'transfer_eligible';
 export type DestinationStatus = 'pending' | 'preparing' | 'effect_started' | 'processing' | 'published' | 'retry' | 'held' | 'uncertain' | 'discarded' | 'failed';
 
@@ -72,10 +74,37 @@ export interface PublishVideo {
   expires_at: string | null;
   needs_review: boolean;
   review_reasons: string[];
+  tiktok_consent?: TikTokConsentState;
   artifact_state: 'present' | 'deleted' | 'missing' | 'error';
   cleanup_error: string | null;
   approvals: { platform: PublishPlatform; state: string; approver_user_id: string | null; decided_at: string | null }[];
   event: PublicationEvent | null;
+}
+
+export interface TikTokVersionContext {
+  creator: {
+    creator_username: string;
+    creator_nickname: string;
+    privacy_level_options: string[];
+    comment_disabled: boolean;
+    duet_disabled: boolean;
+    stitch_disabled: boolean;
+    max_video_post_duration_sec: number;
+  };
+  caption: string;
+  duration_seconds: number;
+  approved_video_sha256: string;
+  credential_id: number;
+  platform_user_id: string;
+  produced_video_id: number;
+  music_consent: boolean;
+  draft: TikTokDraft | null;
+  defaults: TikTokDraft | null;
+  bound_options: TikTokVersionOptions | null;
+}
+
+export function fetchTikTokVersion(clipDbId: number, videoId: number, signal?: AbortSignal): Promise<TikTokVersionContext> {
+  return fetchJson(`/twitch/social-media/api/clips/${clipDbId}/tiktok/creator-info?${new URLSearchParams({ produced_video_id: String(videoId) })}`, withCookieCredentials({ cache: 'no-store', signal }));
 }
 
 export interface PublishSnapshot {

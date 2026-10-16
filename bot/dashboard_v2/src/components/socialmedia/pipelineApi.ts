@@ -1,6 +1,6 @@
 import type { ImportJob, ImportPoolApi, PoolClip, PoolPreferences } from './autopilot/import-pool/types';
 
-export const PIPELINE_DETAIL_CUTOVER = false;
+export const PIPELINE_DETAIL_CUTOVER = true;
 
 export type SourceEligibility = 'automatic' | 'manual' | 'legacy_non_deadlock_visible';
 export type ProductionMode = 'static' | 'ai';

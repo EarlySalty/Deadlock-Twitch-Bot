@@ -587,6 +587,7 @@ function OwnerImportPool({
         {page && (
           <PipelineClips
             page={page}
+            owner={owner}
             selectionLocked={selectionLocked}
             onSelect={(clipId, selected) => {
               if (selectionLocked) return;

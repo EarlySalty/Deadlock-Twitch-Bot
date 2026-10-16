@@ -4,6 +4,7 @@ import { fetchTikTokCreatorInfo, fetchTikTokEditor, saveTikTokChoices, saveTikTo
 import { WorkspaceDialog } from './WorkspaceDialog';
 import { VideoFullscreenButton } from './VideoFullscreenButton';
 import { useT } from '@/context/LanguageContext';
+import { fetchTikTokVersion, type TikTokVersionContext, type TikTokVersionOptions } from './autopilot/publish-review/api';
 
 const PRIVACY_LABELS: Record<string, string> = {
   PUBLIC_TO_EVERYONE: 'Alle',
@@ -310,4 +311,152 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
       </form>
     </WorkspaceDialog>
   );
+}
+
+type VersionChoices = Pick<TikTokVersionOptions, 'privacy_level' | 'allow_comment' | 'allow_duet' | 'allow_stitch' | 'commercial_content' | 'brand_organic_toggle' | 'brand_content_toggle'>;
+
+function initialChoices(data: TikTokVersionContext): VersionChoices {
+  const bound = data.bound_options;
+  const saved = data.draft ?? data.defaults;
+  const commercial = bound ? bound.commercial_content : !!data.draft?.commercial_content;
+  const source = bound ?? saved;
+  const privacy = source?.privacy_level ?? '';
+  return {
+    privacy_level: data.creator.privacy_level_options.includes(privacy) ? privacy : '',
+    allow_comment: !!source?.allow_comment && !data.creator.comment_disabled,
+    allow_duet: !!source?.allow_duet && !data.creator.duet_disabled,
+    allow_stitch: !!source?.allow_stitch && !data.creator.stitch_disabled,
+    commercial_content: commercial,
+    brand_organic_toggle: commercial && !!(bound ?? data.draft)?.brand_organic_toggle,
+    brand_content_toggle: commercial && !!(bound ?? data.draft)?.brand_content_toggle,
+  };
+}
+
+function versionOptions(data: TikTokVersionContext, choices: VersionChoices, partnerConsent: boolean): TikTokVersionOptions | null {
+  const { privacy_level, commercial_content, brand_organic_toggle, brand_content_toggle } = choices;
+  if (!data.music_consent || !privacy_level || !data.caption.trim() || Array.from(data.caption).length > 2200) return null;
+  if (commercial_content && !brand_organic_toggle && !brand_content_toggle) return null;
+  if (brand_content_toggle && (privacy_level === 'SELF_ONLY' || !partnerConsent)) return null;
+  return {
+    caption: data.caption,
+    ...choices,
+    consent: true,
+    creator_username: data.creator.creator_username,
+    credential_id: data.credential_id,
+    platform_user_id: data.platform_user_id,
+    approved_video_sha256: data.approved_video_sha256,
+    video_path: '',
+  };
+}
+
+export function TikTokVersionForm({ clipDbId, videoId, revision, disabled, onChange }: {
+  clipDbId: number;
+  videoId: number;
+  revision: number;
+  disabled: boolean;
+  onChange: (options: TikTokVersionOptions | null) => void;
+}) {
+  const t = useT();
+  const id = useId();
+  const queryClient = useQueryClient();
+  const key = ['social-publish', 'tiktok-version', clipDbId, videoId, revision];
+  const context = useQuery({
+    queryKey: key,
+    queryFn: ({ signal }) => fetchTikTokVersion(clipDbId, videoId, signal),
+    staleTime: 0, gcTime: 0, refetchOnWindowFocus: false, retry: false,
+  });
+  const [choices, setChoices] = useState<VersionChoices | null>(null);
+  const [partnerConsent, setPartnerConsent] = useState(false);
+  const [saveMessage, setSaveMessage] = useState('');
+  const data = context.data;
+  useEffect(() => {
+    if (!data) return;
+    setChoices(initialChoices(data));
+    setPartnerConsent(false);
+  }, [data]);
+  const musicConsent = useMutation({
+    mutationFn: (account: string) => saveTikTokMusicConsent(clipDbId, account),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: key }); },
+  });
+  const saveDefaults = useMutation({
+    mutationFn: (values: VersionChoices) => saveTikTokChoices(clipDbId, 'defaults', {
+      ...values, caption: '', standard_description: data?.defaults?.standard_description ?? '', commercial_content: false, brand_organic_toggle: false, brand_content_toggle: false,
+    }),
+    onSuccess: () => setSaveMessage('Deine Standardwerte sind gespeichert.'),
+  });
+  const options = data && choices ? versionOptions(data, choices, partnerConsent) : null;
+  const serialized = JSON.stringify(options);
+  useEffect(() => {
+    onChange(serialized === 'null' ? null : JSON.parse(serialized) as TikTokVersionOptions);
+  }, [serialized, onChange]);
+  useEffect(() => () => onChange(null), [onChange]);
+  const busy = disabled || musicConsent.isPending || saveDefaults.isPending;
+  const change = (next: Partial<VersionChoices>) => {
+    setChoices((current) => current ? { ...current, ...next } : current);
+    setPartnerConsent(false);
+    setSaveMessage('');
+  };
+  if (context.isPending) return <p role="status">{t('Aktuelle TikTok-Einstellungen werden geladen.')}</p>;
+  if (context.isError || !data) return <div role="alert" className="space-y-2 text-danger">
+    <p>{context.error instanceof SocialMediaApiError ? context.error.message : t('Die TikTok-Freigabe konnte nicht geladen werden. Bitte versuche es erneut.')}</p>
+    <button type="button" className="studio-button" disabled={context.isFetching} onClick={() => void context.refetch()}>{t('Erneut laden')}</button>
+  </div>;
+  if (!data.music_consent) return <section className="space-y-3" aria-label={t('Einmalig: Musiknutzung bestätigen')}>
+    <h4 className="font-medium">{t('Einmalig: Musiknutzung bestätigen')}</h4>
+    <p>{t('Damit wir deine Clips auf TikTok veröffentlichen dürfen, musst du einmal TikToks Bestätigung zur Musiknutzung zustimmen. Wir speichern deine Zustimmung dauerhaft für dieses TikTok-Konto.')}</p>
+    <a className="text-accent underline" href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">{t('Bestätigung zur Musiknutzung')}</a>
+    {musicConsent.isError && <p role="alert" className="text-danger">{musicConsent.error instanceof SocialMediaApiError ? musicConsent.error.message : t('Speichern hat nicht geklappt. Versuch es nochmal.')}</p>}
+    <button type="button" className="studio-primary" disabled={busy || !data.platform_user_id} onClick={() => musicConsent.mutate(data.platform_user_id)}>{musicConsent.isPending ? t('Wird gespeichert…') : t('Zustimmen und speichern')}</button>
+  </section>;
+  if (!choices) return null;
+  const captionLength = Array.from(data.caption).length;
+  return <fieldset className="space-y-4 tiktok-version-form" disabled={busy}>
+    <legend className="sr-only">{t('TikTok-Veröffentlichung')}</legend>
+    <p className="text-sm">{t('Veröffentlichung auf')} <strong>{data.creator.creator_nickname}</strong> (@{data.creator.creator_username})</p>
+    <div className="space-y-1">
+      <p className="font-medium">{t('Beschreibung des Clips')}</p>
+      <p className="whitespace-pre-wrap break-words text-sm">{data.caption || t('Noch kein Text für TikTok. Ergänze ihn oben bei den Texten.')}</p>
+      <p className="text-xs text-text-secondary">{captionLength}/2200 · {t('Der Text kommt aus den Texten dieser Fassung.')}</p>
+    </div>
+    <label className="block space-y-2" htmlFor={`${id}-privacy`}>
+      <span className="font-medium">{t('Wer darf den Clip sehen?')}</span>
+      <select id={`${id}-privacy`} className="studio-input w-full" value={choices.privacy_level} required onChange={(event) => change({ privacy_level: event.target.value })}>
+        <option value="" disabled>{t('Sichtbarkeit wählen')}</option>
+        {data.creator.privacy_level_options.map((option) => <option key={option} value={option} disabled={choices.brand_content_toggle && option === 'SELF_ONLY'}>{t(PRIVACY_LABELS[option] ?? option)}</option>)}
+      </select>
+    </label>
+    <div className="space-y-2" role="group" aria-label={t('Interaktionen erlauben')}>
+      <p className="font-medium">{t('Interaktionen erlauben')}</p>
+      {([
+        ['allow_comment', 'Kommentare', data.creator.comment_disabled],
+        ['allow_duet', 'Duett', data.creator.duet_disabled],
+        ['allow_stitch', 'Stitch', data.creator.stitch_disabled],
+      ] as const).map(([field, label, off]) => <label key={field} className={`flex items-center gap-2 ${off ? 'text-text-secondary opacity-60' : ''}`}>
+        <input type="checkbox" checked={choices[field]} disabled={off} onChange={(event) => change({ [field]: event.target.checked })} />
+        {t(label)}{off && <span className="text-xs">{t('Bei TikTok ausgeschaltet')}</span>}
+      </label>)}
+    </div>
+    <div className="space-y-2">
+      <label className="flex items-center gap-2 font-medium">
+        <input type="checkbox" checked={choices.commercial_content} onChange={(event) => change({ commercial_content: event.target.checked, ...(event.target.checked ? {} : { brand_organic_toggle: false, brand_content_toggle: false }) })} />
+        {t('Dieser Clip enthält Werbung')}
+      </label>
+      {choices.commercial_content && <div className="space-y-2 pl-6">
+        <label className="flex items-center gap-2"><input type="checkbox" checked={choices.brand_organic_toggle} onChange={(event) => change({ brand_organic_toggle: event.target.checked })} />{t('Eigene Marke')}</label>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={choices.brand_content_toggle} onChange={(event) => change({ brand_content_toggle: event.target.checked })} />{t('Markenpartner')}</label>
+        {!choices.brand_organic_toggle && !choices.brand_content_toggle && <p role="status" className="text-warning">{t('Wähle mindestens eine Art von Werbung aus.')}</p>}
+        {choices.brand_content_toggle && <p role="status" className="text-sm text-warning">{t('Inhalte für Markenpartner dürfen bei TikTok nicht auf „Nur ich“ stehen.')}</p>}
+      </div>}
+    </div>
+    <p className="text-sm">{t('Mit der Veröffentlichung stimmst du TikToks')} <a className="text-accent underline" href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">{t('Bestätigung zur Musiknutzung')}</a> {t('zu.')}</p>
+    {choices.brand_content_toggle && <label className="flex items-start gap-2 text-sm">
+      <input type="checkbox" className="mt-1" checked={partnerConsent} onChange={(event) => setPartnerConsent(event.target.checked)} />
+      <span>{t('Für diesen Clip stimme ich TikToks')} <a className="text-accent underline" href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noreferrer">{t('Richtlinie für Markeninhalte')}</a> {t('zu.')}</span>
+    </label>}
+    <div className="flex flex-wrap items-center gap-2">
+      <button type="button" className="studio-button" disabled={busy || !choices.privacy_level} onClick={() => { setSaveMessage(''); saveDefaults.mutate(choices); }}>{t('Als Standard speichern')}</button>
+      {saveMessage && <span role="status" className="text-sm">{t(saveMessage)}</span>}
+      {saveDefaults.isError && <span role="alert" className="text-sm text-danger">{t('Speichern hat nicht geklappt. Versuch es nochmal.')}</span>}
+    </div>
+  </fieldset>;
 }

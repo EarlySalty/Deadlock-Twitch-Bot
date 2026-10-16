@@ -271,7 +271,6 @@ test('built publication panel preserves state and effects across language change
       });
       assert.equal(await video.locator('[aria-label="YouTube"] input').isChecked(), false);
       assert.equal(await video.locator('[aria-label="TikTok"] input').isChecked(), false);
-      await video.locator('.publish-actions button').last().evaluate((element) => element.click());
       await settled(page);
       assert.deepEqual((await calls(page)).find((call) => call.method === 'schedule'), { method: 'schedule', owner: 'synthetic-owner', payload: { id: 101, platforms: ['youtube', 'instagram', 'tiktok'] } });
       await video.locator('header button').evaluate((element) => element.click());
