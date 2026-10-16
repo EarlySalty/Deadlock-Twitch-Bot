@@ -5,7 +5,8 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 use crate::{
-    autopilot_settings, posting_plan::PLATFORMS, produced_video, video_processor::format_hashtags,
+    autopilot_settings, posting_plan::PLATFORMS, produced_video, uploaders::tiktok::build_caption,
+    video_processor::format_hashtags,
 };
 
 use super::AiEditorError;
@@ -116,6 +117,25 @@ fn stored_copy(value: Option<&Value>) -> PlatformCopy {
     }
 }
 
+pub fn tiktok_copy(metadata: &Value) -> PlatformCopy {
+    let targets = targets(metadata);
+    let platform = if targets.iter().any(|target| target == "tiktok") {
+        "tiktok"
+    } else {
+        targets.first().map(String::as_str).unwrap_or("tiktok")
+    };
+    stored_copy(
+        metadata
+            .get("platforms")
+            .and_then(|copies| copies.get(platform)),
+    )
+}
+
+pub fn tiktok_caption(metadata: &Value) -> String {
+    let copy = tiktok_copy(metadata);
+    build_caption(&copy.title, &copy.description, &copy.hashtags)
+}
+
 fn view(video: &produced_video::ProducedVideo, uncommitted: bool) -> VersionMetadata {
     let stored = video.metadata.get("platforms");
     let targets = targets(&video.metadata);
@@ -215,6 +235,24 @@ pub async fn save(
         owned_video(pool, owner, id).await?;
         return Err(AiEditorError::Conflict.into());
     }
+    let mut next = video.metadata.clone();
+    if let Some(object) = next.as_object_mut() {
+        object.insert(
+            "platforms".into(),
+            serde_json::to_value(&selected).map_err(|_| AiEditorError::Storage)?,
+        );
+    }
+    sqlx::query(
+        "UPDATE social_produced_videos SET metadata = metadata #- '{publication,tiktok_options}'
+         WHERE id = $1 AND twitch_user_id = $2 AND metadata #> '{publication,tiktok_options}' IS NOT NULL
+         AND metadata #>> '{publication,tiktok_options,caption}' IS DISTINCT FROM $3",
+    )
+    .bind(id)
+    .bind(owner)
+    .bind(tiktok_caption(&next))
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| AiEditorError::Storage)?;
     sqlx::query("UPDATE twitch_clips_upload_queue q SET title=v.metadata->'platforms'->q.platform->>'title',description=v.metadata->'platforms'->q.platform->>'description',hashtags=(v.metadata->'platforms'->q.platform->'hashtags')::text FROM social_produced_videos v WHERE v.id=$1 AND v.twitch_user_id=$2 AND q.produced_video_id=v.id AND v.metadata->'platforms' ? q.platform AND q.status IN ('waiting_exact_file','autopilot_held','autopilot_discarded') AND q.effect_started_at IS NULL AND q.external_id IS NULL")
         .bind(id).bind(owner).execute(&mut *tx).await.map_err(|_| AiEditorError::Storage)?;
     tx.commit().await.map_err(|_| AiEditorError::Storage)?;

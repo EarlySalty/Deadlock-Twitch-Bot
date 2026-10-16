@@ -8,6 +8,7 @@ use sqlx::{PgConnection, PgPool, Row};
 use crate::autopilot_settings::{self, NotificationPreferences, PublishMode, SettingsError};
 use crate::produced_video::{self, ProducedVideoError};
 use crate::production_jobs::autopilot_schedule::{self, ScheduleError, SchedulePatch};
+use crate::uploaders::tiktok::TikTokPostOptions;
 
 mod executor;
 mod notify;
@@ -23,12 +24,36 @@ pub const AUTOPILOT_APPROVER: &str = "autopilot";
 pub const DASHBOARD_LINK: &str =
     "https://deutsche-deadlock-community.de/twitch/social-media?view=plan";
 const RECENT_FINISHED_VIDEOS: i64 = 50;
-const RETRY_BLOCKING_REASONS: [&str; 4] = [
+const RETRY_BLOCKING_REASONS: [&str; 8] = [
     "account_changed",
     "account_missing",
     "exact_file_changed",
     "tiktok_effect_boundary_pending",
+    "tiktok_consent_missing",
+    "tiktok_caption_changed",
+    "tiktok_options_invalid",
+    "tiktok_music_consent_missing",
 ];
+const REAPPROVAL_REASONS: [&str; 8] = [
+    "account_changed",
+    "account_missing",
+    "exact_file_changed",
+    "review_required",
+    "tiktok_consent_missing",
+    "tiktok_caption_changed",
+    "tiktok_options_invalid",
+    "tiktok_music_consent_missing",
+];
+const TIKTOK_PRIVACY_LEVELS: [&str; 4] = [
+    "PUBLIC_TO_EVERYONE",
+    "MUTUAL_FOLLOW_FRIENDS",
+    "FOLLOWER_OF_CREATOR",
+    "SELF_ONLY",
+];
+const TIKTOK_EFFECT_STARTED: &str =
+    "Für dieses Video hat die TikTok-Übertragung bereits begonnen. Die Freigabe kann nicht mehr geändert werden.";
+const TIKTOK_OPTIONS_UNREADABLE: &str =
+    "Die TikTok-Freigabe ist unvollständig. Bitte öffne sie erneut.";
 
 pub(crate) mod queue_status {
     pub const PENDING: &str = "waiting_exact_file";
@@ -160,7 +185,145 @@ pub struct PublishVideo {
     pub artifact_state: &'static str,
     pub cleanup_error: Option<String>,
     pub approvals: Vec<Approval>,
+    pub tiktok_consent: &'static str,
     pub event: Option<PublicationEvent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TikTokBindingIssue {
+    ConsentMissing,
+    AccountMissing,
+    AccountChanged,
+    FileChanged,
+    CaptionChanged,
+    OptionsInvalid,
+    MusicConsentMissing,
+}
+
+impl TikTokBindingIssue {
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::ConsentMissing => "tiktok_consent_missing",
+            Self::AccountMissing => "account_missing",
+            Self::AccountChanged => "account_changed",
+            Self::FileChanged => "exact_file_changed",
+            Self::CaptionChanged => "tiktok_caption_changed",
+            Self::OptionsInvalid => "tiktok_options_invalid",
+            Self::MusicConsentMissing => "tiktok_music_consent_missing",
+        }
+    }
+
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::ConsentMissing => "Bitte bestätige die TikTok-Freigabe für genau diese Version.",
+            Self::AccountMissing => "TikTok ist nicht verbunden. Bitte verbinde das Konto zuerst.",
+            Self::AccountChanged => {
+                "Das TikTok-Konto hat sich geändert. Bitte öffne die TikTok-Freigabe erneut."
+            }
+            Self::FileChanged => {
+                "Die Videodatei hat sich geändert. Bitte öffne die TikTok-Freigabe erneut."
+            }
+            Self::CaptionChanged => {
+                "Die TikTok-Beschreibung wurde geändert. Bitte bestätige die Freigabe erneut."
+            }
+            Self::OptionsInvalid => {
+                "Bitte prüfe Sichtbarkeit und Werbekennzeichnung in der TikTok-Freigabe."
+            }
+            Self::MusicConsentMissing => {
+                "Bitte bestätige zuerst einmalig die Musiknutzung für dieses TikTok-Konto."
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TikTokSubject {
+    pub video_id: i64,
+    pub clip_id: i64,
+    #[serde(skip)]
+    pub file_path: String,
+    pub approved_video_sha256: String,
+    pub caption: String,
+    pub duration_ms: Option<i64>,
+    pub credential_id: Option<i32>,
+    pub platform_user_id: Option<String>,
+    pub music_consent: bool,
+    #[serde(skip)]
+    pub bound_options: Option<TikTokPostOptions>,
+}
+
+impl TikTokSubject {
+    pub fn issue(&self, options: &TikTokPostOptions) -> Option<TikTokBindingIssue> {
+        let account = self.platform_user_id.as_deref();
+        if !options.consent || options.creator_username.trim().is_empty() {
+            Some(TikTokBindingIssue::ConsentMissing)
+        } else if self.credential_id.is_none() || account.is_none() {
+            Some(TikTokBindingIssue::AccountMissing)
+        } else if Some(options.credential_id) != self.credential_id
+            || Some(options.platform_user_id.as_str()) != account
+        {
+            Some(TikTokBindingIssue::AccountChanged)
+        } else if options.approved_video_sha256 != self.approved_video_sha256
+            || options.video_path != self.file_path
+        {
+            Some(TikTokBindingIssue::FileChanged)
+        } else if options.caption != self.caption {
+            Some(TikTokBindingIssue::CaptionChanged)
+        } else if !valid_tiktok_choice(options) {
+            Some(TikTokBindingIssue::OptionsInvalid)
+        } else if !self.music_consent {
+            Some(TikTokBindingIssue::MusicConsentMissing)
+        } else {
+            None
+        }
+    }
+
+    pub fn binding(&self) -> Result<&TikTokPostOptions, TikTokBindingIssue> {
+        let options = self
+            .bound_options
+            .as_ref()
+            .ok_or(TikTokBindingIssue::ConsentMissing)?;
+        match self.issue(options) {
+            Some(issue) => Err(issue),
+            None => Ok(options),
+        }
+    }
+}
+
+fn valid_tiktok_choice(options: &TikTokPostOptions) -> bool {
+    TIKTOK_PRIVACY_LEVELS.contains(&options.privacy_level.as_str())
+        && options.commercial_content
+            == (options.brand_organic_toggle || options.brand_content_toggle)
+        && !(options.brand_content_toggle && options.privacy_level == "SELF_ONLY")
+}
+
+fn stored_tiktok_options(metadata: &Value) -> Option<TikTokPostOptions> {
+    metadata
+        .pointer("/publication/tiktok_options")
+        .cloned()
+        .and_then(|options| serde_json::from_value(options).ok())
+}
+
+fn tiktok_consent_state(
+    metadata: &Value,
+    file_path: Option<&str>,
+    account: Option<&str>,
+) -> &'static str {
+    let Some(options) = stored_tiktok_options(metadata) else {
+        return "missing";
+    };
+    let digest = metadata
+        .pointer("/publication/hashes/tiktok")
+        .and_then(Value::as_str);
+    let current = account.is_some_and(|account| account == options.platform_user_id)
+        && digest == Some(options.approved_video_sha256.as_str())
+        && file_path == Some(options.video_path.as_str())
+        && options.caption == crate::ai_editor::metadata::tiktok_caption(metadata);
+    if current {
+        "bound"
+    } else {
+        "stale"
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -272,7 +435,8 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<PublishSnapshot, Pub
             account_id: accounts.get(platform).cloned().flatten(),
         })
         .collect();
-    let videos = videos_on(&mut connection, owner).await?;
+    let tiktok_account = accounts.get("tiktok").cloned().flatten();
+    let videos = videos_on(&mut connection, owner, tiktok_account.as_deref()).await?;
     let notifications = notifications_on(&mut connection, owner).await?;
     let discord: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM twitch_streamer_identities WHERE twitch_user_id = $1
@@ -302,6 +466,7 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<PublishSnapshot, Pub
 async fn videos_on(
     connection: &mut PgConnection,
     owner: &str,
+    tiktok_account: Option<&str>,
 ) -> Result<Vec<PublishVideo>, PublishError> {
     let rows = sqlx::query(
         "WITH listed AS (
@@ -315,7 +480,8 @@ async fn videos_on(
          )
          SELECT id, clip_id, version_no, variant_index, mode, status, duration_ms, expires_at,
             needs_review, review_reasons::text AS review_reasons, file_path, artifact_deleted_at,
-            cleanup_error, scheduled_at, publication_executed_at, publication_completed_at
+            cleanup_error, scheduled_at, publication_executed_at, publication_completed_at,
+            metadata::text AS metadata
          FROM ranked WHERE unresolved OR position <= $3
          ORDER BY created_at DESC, id DESC",
     )
@@ -388,6 +554,7 @@ async fn videos_on(
             let file_path: Option<String> = row.try_get("file_path")?;
             let cleanup_error: Option<String> = row.try_get("cleanup_error")?;
             let scheduled_at: Option<DateTime<Utc>> = row.try_get("scheduled_at")?;
+            let metadata: Value = serde_json::from_str(&row.try_get::<String, _>("metadata")?)?;
             Ok(PublishVideo {
                 id,
                 clip_id: row.try_get("clip_id")?,
@@ -414,6 +581,11 @@ async fn videos_on(
                 ),
                 cleanup_error,
                 approvals: approvals.remove(&id).unwrap_or_default(),
+                tiktok_consent: tiktok_consent_state(
+                    &metadata,
+                    file_path.as_deref(),
+                    tiktok_account,
+                ),
                 event: match scheduled_at {
                     Some(scheduled_at) => Some(PublicationEvent {
                         id,
@@ -707,36 +879,177 @@ pub async fn approve(
     }
     let binding = binding(pool, owner, id).await?;
     let mut tx = pool.begin().await?;
+    autopilot_settings::lock_owner(&mut tx, owner).await?;
     produced_video::approve_on(&mut tx, owner, id, &platforms).await?;
     bind_on(&mut tx, owner, id, &binding, &platforms).await?;
-    let tiktok = decisions
-        .iter()
-        .find(|decision| decision.platform == "tiktok")
-        .and_then(|decision| decision.tiktok_options.clone());
-    if let Some(options) = tiktok {
-        sqlx::query(
-            "UPDATE social_produced_videos SET metadata = jsonb_set(metadata, '{publication,tiktok_options}', $3::text::jsonb)
-             WHERE id = $1 AND twitch_user_id = $2",
-        )
-        .bind(id)
-        .bind(owner)
-        .bind(serde_json::to_string(&options)?)
-        .execute(&mut *tx)
-        .await?;
+    if platforms.iter().any(|platform| platform == "tiktok") {
+        let choice = decisions
+            .iter()
+            .find(|decision| decision.platform == "tiktok")
+            .and_then(|decision| decision.tiktok_options.clone());
+        bind_tiktok_on(&mut tx, owner, id, &binding, choice).await?;
     }
     sqlx::query(
         "UPDATE twitch_clips_upload_queue SET status = $3, next_retry_at = clock_timestamp(), outcome_reason = NULL
          WHERE produced_video_id = $1 AND platform = ANY($2) AND status = $4
-         AND outcome_reason IN ('account_changed', 'account_missing', 'exact_file_changed', 'review_required')",
+         AND outcome_reason = ANY($5)",
     )
     .bind(id)
     .bind(&platforms)
     .bind(queue_status::RETRY)
     .bind(queue_status::HELD)
+    .bind(REAPPROVAL_REASONS)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     schedule(pool, owner, id, &platforms).await
+}
+
+pub async fn tiktok_subject(
+    pool: &PgPool,
+    owner: &str,
+    id: i64,
+) -> Result<TikTokSubject, PublishError> {
+    let binding = binding(pool, owner, id).await?;
+    let mut connection = pool.acquire().await?;
+    tiktok_subject_on(&mut connection, owner, id, &binding).await
+}
+
+async fn tiktok_subject_on(
+    connection: &mut PgConnection,
+    owner: &str,
+    id: i64,
+    binding: &Binding,
+) -> Result<TikTokSubject, PublishError> {
+    let video: Option<(i64, Option<i64>, String)> = sqlx::query_as(
+        "SELECT clip_id, duration_ms, metadata::text FROM social_produced_videos
+         WHERE id = $1 AND twitch_user_id = $2 AND file_path = $3 AND artifact_deleted_at IS NULL",
+    )
+    .bind(id)
+    .bind(owner)
+    .bind(&binding.path)
+    .fetch_optional(&mut *connection)
+    .await?;
+    let (clip_id, duration_ms, metadata) = video.ok_or(PublishError::State)?;
+    let metadata: Value = serde_json::from_str(&metadata)?;
+    let account: Option<(i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, platform_user_id FROM social_media_platform_auth
+         WHERE twitch_user_id = $1 AND platform = 'tiktok' AND enabled = 1
+         ORDER BY authorized_at DESC, id DESC LIMIT 1",
+    )
+    .bind(owner)
+    .fetch_optional(&mut *connection)
+    .await?;
+    let credential_id = account.as_ref().map(|(credential, _)| *credential);
+    let platform_user_id = account
+        .and_then(|(_, account)| account)
+        .filter(|account| !account.is_empty());
+    let music_consent = match platform_user_id.as_deref() {
+        Some(account) => music_consent_on(connection, owner, account).await?,
+        None => false,
+    };
+    Ok(TikTokSubject {
+        video_id: id,
+        clip_id,
+        file_path: binding.path.clone(),
+        approved_video_sha256: binding.digest.clone(),
+        caption: crate::ai_editor::metadata::tiktok_caption(&metadata),
+        duration_ms,
+        credential_id,
+        platform_user_id,
+        music_consent,
+        bound_options: stored_tiktok_options(&metadata),
+    })
+}
+
+async fn music_consent_on(
+    connection: &mut PgConnection,
+    owner: &str,
+    account: &str,
+) -> Result<bool, sqlx::Error> {
+    let consent_key = format!("tiktok_music_consent:{owner}:{account}");
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT key, value::text FROM social_media_settings WHERE key = ANY($1)")
+            .bind([consent_key.clone(), format!("tiktok_defaults:{owner}")])
+            .fetch_all(connection)
+            .await?;
+    Ok(rows.iter().any(|(key, raw)| {
+        let Ok(value) = serde_json::from_str::<Value>(raw) else {
+            return false;
+        };
+        let text = |field: &str| value.get(field).and_then(Value::as_str);
+        if *key == consent_key {
+            text("platform_user_id") == Some(account) && text("consented_at").is_some()
+        } else {
+            value.get("music_consent").and_then(Value::as_bool) == Some(true)
+                && text("music_consent_at").is_some()
+                && text("music_consent_platform_user_id") == Some(account)
+        }
+    }))
+}
+
+async fn tiktok_effect_started_on(
+    connection: &mut PgConnection,
+    id: i64,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM twitch_clips_upload_queue WHERE produced_video_id = $1
+         AND platform = 'tiktok' AND (effect_started_at IS NOT NULL OR external_id IS NOT NULL
+         OR status = ANY($2)))",
+    )
+    .bind(id)
+    .bind([
+        queue_status::EFFECT_STARTED,
+        queue_status::PUBLISHED,
+        queue_status::UNCERTAIN,
+    ])
+    .fetch_one(connection)
+    .await
+}
+
+async fn bind_tiktok_on(
+    connection: &mut PgConnection,
+    owner: &str,
+    id: i64,
+    binding: &Binding,
+    choice: Option<Value>,
+) -> Result<(), PublishError> {
+    let subject = tiktok_subject_on(connection, owner, id, binding).await?;
+    let options = match choice {
+        Some(raw) => {
+            let mut options: TikTokPostOptions = serde_json::from_value(raw)
+                .map_err(|_| PublishError::Invalid(TIKTOK_OPTIONS_UNREADABLE.into()))?;
+            options.video_path = subject.file_path.clone();
+            options
+        }
+        None => subject.bound_options.clone().ok_or_else(|| {
+            PublishError::Invalid(TikTokBindingIssue::ConsentMissing.message().into())
+        })?,
+    };
+    if let Some(issue) = subject.issue(&options) {
+        return Err(PublishError::Invalid(issue.message().into()));
+    }
+    if subject.bound_options.as_ref() == Some(&options) {
+        return Ok(());
+    }
+    if tiktok_effect_started_on(connection, id).await? {
+        return Err(PublishError::Invalid(TIKTOK_EFFECT_STARTED.into()));
+    }
+    let changed = sqlx::query(
+        "UPDATE social_produced_videos SET metadata = jsonb_set(metadata, '{publication,tiktok_options}', $3::text::jsonb)
+         WHERE id = $1 AND twitch_user_id = $2 AND file_path = $4 AND artifact_deleted_at IS NULL",
+    )
+    .bind(id)
+    .bind(owner)
+    .bind(serde_json::to_string(&options)?)
+    .bind(&subject.file_path)
+    .execute(&mut *connection)
+    .await?
+    .rows_affected();
+    if changed != 1 {
+        return Err(PublishError::State);
+    }
+    Ok(())
 }
 
 type SlotState = (Option<DateTime<Utc>>, Option<DateTime<Utc>>);

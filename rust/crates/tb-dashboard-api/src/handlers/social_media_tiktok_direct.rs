@@ -142,10 +142,106 @@ async fn duration(pool: &PgPool, clip_id: i64) -> Result<(String, f64, String), 
     Ok((path, duration, digest))
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct CreatorInfoQuery {
+    #[serde(default)]
+    produced_video_id: Option<i64>,
+}
+
+fn subject_error(failure: tb_social_media::autopilot_publish::PublishError) -> Response {
+    use tb_social_media::autopilot_publish::PublishError;
+    match failure {
+        PublishError::NotFound => version_missing(),
+        PublishError::State | PublishError::Io(_) => error(
+            StatusCode::CONFLICT,
+            "Diese Version ist nicht mehr verfügbar. Bitte wähle eine aktuelle Version.",
+        ),
+        _ => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Die TikTok-Freigabe konnte nicht geladen werden.",
+        ),
+    }
+}
+
+fn version_missing() -> Response {
+    error(StatusCode::NOT_FOUND, "Diese Version wurde nicht gefunden.")
+}
+
+async fn version_info(pool: &PgPool, clip_id: i64, video_id: i64) -> Response {
+    let user: Option<String> = match sqlx::query_scalar(
+        "SELECT twitch_user_id FROM twitch_clips_social_media WHERE id = $1",
+    )
+    .bind(clip_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(user) => user.flatten(),
+        Err(_) => return clip_load_failed(),
+    };
+    let Some(user) = user else {
+        return invalid_clip_db_id();
+    };
+    let subject =
+        match tb_social_media::autopilot_publish::tiktok_subject(pool, &user, video_id).await {
+            Ok(subject) if subject.clip_id == clip_id => subject,
+            Ok(_) => return version_missing(),
+            Err(failure) => return subject_error(failure),
+        };
+    let credentials = match credentials(pool, clip_id).await {
+        Ok(credentials) => credentials,
+        Err(response) => return response,
+    };
+    if Some(credentials.id) != subject.credential_id
+        || credentials.platform_user_id != subject.platform_user_id
+    {
+        return error(
+            StatusCode::CONFLICT,
+            "Das TikTok-Konto hat sich geändert. Bitte öffne die Freigabe erneut.",
+        );
+    }
+    let info = match creator(&credentials).await {
+        Ok(info) => info,
+        Err(response) => return response,
+    };
+    let duration = subject.duration_ms.unwrap_or_default() as f64 / 1000.0;
+    if duration <= 0.0 || duration > info.max_video_post_duration_sec as f64 {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Die Videodauer passt nicht zu diesem TikTok-Konto. Bitte kürze den Clip.",
+        );
+    }
+    let (draft, defaults) = match tiktok_editor::saved_choices(pool, clip_id, &user).await {
+        Ok(choices) => choices,
+        Err(response) => return response,
+    };
+    let bound = subject.binding().ok().cloned().map(|mut options| {
+        options.video_path.clear();
+        options
+    });
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({
+            "creator": info,
+            "caption": subject.caption,
+            "duration_seconds": duration,
+            "approved_video_sha256": subject.approved_video_sha256,
+            "credential_id": credentials.id,
+            "platform_user_id": credentials.platform_user_id,
+            "produced_video_id": subject.video_id,
+            "music_consent": subject.music_consent,
+            "draft": draft,
+            "defaults": defaults,
+            "bound_options": bound,
+        })),
+    )
+        .into_response()
+}
+
 pub async fn creator_info_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(raw): Path<String>,
+    Query(query): Query<CreatorInfoQuery>,
 ) -> Response {
     let scope = match require_sm_access(&auth, &pool, None).await {
         Ok(scope) => scope,
@@ -159,6 +255,9 @@ pub async fn creator_info_handler(
     }
     if let Some(response) = guard_partner_access_for_clip(&pool, &auth, clip_id).await {
         return response;
+    }
+    if let Some(video_id) = query.produced_video_id {
+        return version_info(&pool, clip_id, video_id).await;
     }
     let credentials = match credentials(&pool, clip_id).await {
         Ok(credentials) => credentials,
@@ -311,4 +410,40 @@ pub(super) async fn persist_choice(
         .map_err(|_| clip_load_failed())?;
     tx.commit().await.map_err(|_| clip_load_failed())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::{to_bytes, Body};
+    use axum::http::{header, Method, Request, StatusCode};
+    use sqlx::postgres::PgPoolOptions;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn cross_origin_tiktok_approval_is_rejected_before_binding() {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
+            .expect("lazy pool");
+        let response = crate::build_router(pool, "tok".into())
+            .oneshot(
+                Request::builder()
+                    .method(Method::PUT)
+                    .uri("/social-media/api/autopilot/publish/videos/1/approval")
+                    .header(header::HOST, "dashboard.example.com")
+                    .header(header::ORIGIN, "https://evil.example")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"destinations":[{"platform":"tiktok","tiktok_options":{"consent":true}}]}"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert!(String::from_utf8_lossy(&body).contains("invalid_csrf"));
+    }
 }
