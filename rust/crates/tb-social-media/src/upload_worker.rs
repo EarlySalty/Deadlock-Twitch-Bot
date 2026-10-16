@@ -1157,6 +1157,7 @@ fn verzoegerung_fuer(error: &UploadError) -> Option<chrono::Duration> {
         // Validierung, API-Ablehnung, IO, nicht implementiert: bleibt kaputt.
         UploadError::Validation(_)
         | UploadError::Api(_)
+        | UploadError::PublishUnconfirmed(_)
         | UploadError::NotImplemented(_)
         | UploadError::Io(_) => None,
     }
