@@ -78,3 +78,10 @@ Global AI switch `external_llm_consent` needs an admin UI (set to true in prod o
 - Verify the snapshot actually sends `tiktok_consent` (U11).
 - `publishReviewLanguage.browser` subtest 3 stops on a fixture id mismatch (2203 vs 101); the schedule call is not exercised by any test (U18).
 - U16: SocialMedia.tsx still mounts old video lists, the AI editor's separate clip picker and `TikTokPostDialog`; ScheduleQueuePanel still shows the old queue card; pass `owner` to `PipelineClips` everywhere.
+
+### From U11 (b8ce1f2a5, 2026-10-16)
+- TikTok dispatch is wired on in main.rs but only dispatches for owners with `social_pipeline_cutover` state `unified` (checked in the effect-start transaction); others stay held with re-approvable `tiktok_effect_boundary_pending`. Clip-level fence stops legacy + autopilot double transfer.
+- U16 (U15 is merged, so the frontend follow-up moves here): handle `autopilot_processing` and reasons `tiktok_file_invalid`, `tiktok_transfer_active`, `tiktok_already_published`, `tiktok_init_unconfirmed`, `tiktok_inbox_only`, `tiktok_rejected`, status unconfirmed; update the retry exclusion list in PublishReviewPanel.tsx.
+- U12: uncertain rows on other platforms keep files indefinitely (no cleanup); file still hashed twice per claim; `upload_worker::resolve_tiktok_uploader` duplicates `direct_post_uploader`; `Capabilities.tiktok_effect_boundary` static.
+- notify.rs alerts on held rows only for account and file reasons.
+- U17: no owner has a `social_pipeline_cutover` row yet.
