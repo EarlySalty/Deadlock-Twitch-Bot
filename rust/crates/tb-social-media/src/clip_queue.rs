@@ -206,7 +206,7 @@ pub async fn apply_tiktok_choice(
         "SELECT id::bigint, status, tiktok_post_options FROM twitch_clips_upload_queue \
          WHERE clip_id = $1 AND platform = 'tiktok' \
            AND status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule', 'failed') \
-           AND tiktok_publish_id IS NULL FOR UPDATE",
+           AND tiktok_publish_id IS NULL AND produced_video_id IS NULL FOR UPDATE",
     )
     .bind(clip_id)
     .fetch_all(&mut *connection)

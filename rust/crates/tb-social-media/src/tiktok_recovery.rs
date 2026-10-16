@@ -79,14 +79,28 @@ pub(crate) struct Checkpoint<'a> {
     pub queue_id: i64,
 }
 
+fn require_publish_id(publish_id: &str) -> Result<(), UploadError> {
+    if publish_id.trim().is_empty() {
+        return Err(UploadError::Validation(
+            "TikTok-Vorgangsnummer fehlt".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn require_single_owner(changed: u64) -> Result<(), UploadError> {
+    if changed != 1 {
+        return Err(UploadError::Api(
+            "TikTok-Vorgang ist bereits vergeben".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl UploadCheckpoint for Checkpoint<'_> {
     async fn record_publish_id(&self, publish_id: &str) -> Result<(), UploadError> {
-        if publish_id.trim().is_empty() {
-            return Err(UploadError::Validation(
-                "TikTok-Vorgangsnummer fehlt".into(),
-            ));
-        }
+        require_publish_id(publish_id)?;
         let changed = sqlx::query(
             "UPDATE twitch_clips_upload_queue SET tiktok_publish_id = $1, last_attempt_at = NOW() \
              WHERE id = $2 AND platform = 'tiktok' AND status = 'inbox_pending' \
@@ -98,12 +112,35 @@ impl UploadCheckpoint for Checkpoint<'_> {
         .await
         .map_err(|_| UploadError::Api("TikTok-Vorgang konnte nicht gesichert werden".into()))?
         .rows_affected();
-        if changed != 1 {
-            return Err(UploadError::Api(
-                "TikTok-Vorgang ist bereits vergeben".into(),
-            ));
-        }
-        Ok(())
+        require_single_owner(changed)
+    }
+}
+
+pub(crate) struct ClaimCheckpoint<'a> {
+    pub pool: &'a PgPool,
+    pub queue_id: i64,
+    pub generation: i64,
+}
+
+#[async_trait]
+impl UploadCheckpoint for ClaimCheckpoint<'_> {
+    async fn record_publish_id(&self, publish_id: &str) -> Result<(), UploadError> {
+        require_publish_id(publish_id)?;
+        let changed = sqlx::query(
+            "UPDATE twitch_clips_upload_queue SET tiktok_publish_id = $1, \
+             outcome_reason = 'tiktok_transferring', last_attempt_at = clock_timestamp() \
+             WHERE id = $2 AND platform = 'tiktok' AND status = $3 AND claim_generation = $4 \
+             AND tiktok_publish_id IS NULL",
+        )
+        .bind(publish_id)
+        .bind(self.queue_id)
+        .bind(crate::autopilot_publish::queue_status::EFFECT_STARTED)
+        .bind(self.generation)
+        .execute(self.pool)
+        .await
+        .map_err(|_| UploadError::Api("TikTok-Vorgang konnte nicht gesichert werden".into()))?
+        .rows_affected();
+        require_single_owner(changed)
     }
 }
 

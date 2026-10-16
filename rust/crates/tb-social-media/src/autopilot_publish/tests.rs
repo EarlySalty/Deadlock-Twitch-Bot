@@ -11,7 +11,8 @@ use super::*;
 use crate::autopilot_settings::{AutopilotSettings, ScheduleSlot};
 use crate::produced_video::{NewProducedVideo, RenderedVideo};
 use crate::production_jobs::ProductionMode;
-use crate::uploaders::UploadError;
+use crate::uploaders::tiktok::TikTokPostOptions;
+use crate::uploaders::{UploadCheckpoint, UploadError};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -57,7 +58,8 @@ async fn pool() -> PgPool {
         CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL,
             status TEXT DEFAULT 'pending', scheduled_at TIMESTAMPTZ, title TEXT, description TEXT, hashtags TEXT,
             priority INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ,
-            completed_at TIMESTAMPTZ, youtube_visibility TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
+            completed_at TIMESTAMPTZ, youtube_visibility TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            tiktok_publish_id TEXT, tiktok_post_options JSONB)")
         .execute(&pool).await.expect("legacy prerequisite schema");
     for migration in [
         include_str!("../../../../migrations/20261011100000_social_autopilot_contracts.sql"),
@@ -1164,7 +1166,7 @@ async fn stale_claim_cannot_change_a_recovered_destination() {
         .await
         .expect("stale hold");
     assert!(!executor
-        .start_effect(&stale, Some("yt-1"))
+        .start_effect(&stale, Some("yt-1"), None)
         .await
         .expect("stale start"));
     executor
@@ -1767,5 +1769,355 @@ async fn late_event_keeps_its_valid_future_destination_slot() {
     let (reserved, uploads) = video_slots(&pool, id).await;
     assert_eq!(uploads, before);
     assert_eq!(reserved, before);
+    cleanup(pool).await;
+}
+
+enum TikTokStep {
+    Fail(UploadError),
+    CheckpointFails,
+    Transfer(&'static str, Result<(), UploadError>),
+}
+
+struct TikTokFake {
+    pool: PgPool,
+    steps: Mutex<Vec<TikTokStep>>,
+    calls: Mutex<Vec<(String, TikTokPostOptions)>>,
+    persisted_before_transfer: Mutex<Vec<bool>>,
+}
+
+impl TikTokFake {
+    fn with(pool: &PgPool, steps: Vec<TikTokStep>) -> Arc<Self> {
+        Arc::new(Self {
+            pool: pool.clone(),
+            steps: Mutex::new(steps),
+            calls: Mutex::default(),
+            persisted_before_transfer: Mutex::default(),
+        })
+    }
+
+    fn calls(&self) -> Vec<(String, TikTokPostOptions)> {
+        self.calls.lock().expect("calls").clone()
+    }
+
+    fn persisted(&self) -> Vec<bool> {
+        self.persisted_before_transfer
+            .lock()
+            .expect("persisted")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl DestinationPublisher for TikTokFake {
+    async fn publish(
+        &self,
+        _owner: &str,
+        _platform: &str,
+        _request: &PublishRequest,
+    ) -> Result<PublishOutcome, UploadError> {
+        Err(UploadError::Api("unexpected generic upload".into()))
+    }
+
+    async fn publish_tiktok(
+        &self,
+        _owner: &str,
+        request: &PublishRequest,
+        options: &TikTokPostOptions,
+        checkpoint: &dyn UploadCheckpoint,
+    ) -> Result<String, UploadError> {
+        self.calls
+            .lock()
+            .expect("calls")
+            .push((request.file_path.clone(), options.clone()));
+        let step = {
+            let mut steps = self.steps.lock().expect("steps");
+            if steps.is_empty() {
+                return Err(UploadError::Api("unexpected TikTok upload".into()));
+            }
+            steps.remove(0)
+        };
+        match step {
+            TikTokStep::Fail(error) => Err(error),
+            TikTokStep::CheckpointFails => {
+                checkpoint.record_publish_id(" ").await?;
+                Ok("never".into())
+            }
+            TikTokStep::Transfer(publish_id, transfer) => {
+                checkpoint.record_publish_id(publish_id).await?;
+                let persisted: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM twitch_clips_upload_queue WHERE platform = 'tiktok'
+                     AND tiktok_publish_id = $1 AND status = $2)",
+                )
+                .bind(publish_id)
+                .bind(queue_status::EFFECT_STARTED)
+                .fetch_one(&self.pool)
+                .await
+                .expect("checkpoint lookup");
+                self.persisted_before_transfer
+                    .lock()
+                    .expect("persisted")
+                    .push(persisted);
+                transfer.map(|()| publish_id.to_string())
+            }
+        }
+    }
+}
+
+async fn tiktok_ready(pool: &PgPool, name: &str) -> i64 {
+    let (id, _) = video(pool, name).await;
+    approve(pool, "owner", id, &consented(pool, id, &["tiktok"]).await)
+        .await
+        .expect("tiktok consent");
+    make_due(pool, id).await;
+    id
+}
+
+async fn tiktok_row(pool: &PgPool, id: i64) -> (Option<String>, Option<Value>, bool, bool) {
+    sqlx::query_as(
+        "SELECT q.tiktok_publish_id, q.tiktok_post_options, q.effect_started_at IS NOT NULL,
+            COALESCE(c.uploaded_tiktok, FALSE)
+         FROM twitch_clips_upload_queue q JOIN twitch_clips_social_media c ON c.id = q.clip_id
+         WHERE q.produced_video_id = $1 AND q.platform = 'tiktok'",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .expect("tiktok row")
+}
+
+fn dispatching(pool: &PgPool, fake: &Arc<TikTokFake>) -> PublishExecutor {
+    PublishExecutor::new(pool.clone(), fake.clone()).with_tiktok_dispatch(true)
+}
+
+#[tokio::test]
+async fn disabled_tiktok_dispatch_holds_with_the_specific_binding_reason() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
+    let fake = TikTokFake::with(&pool, vec![]);
+    let executor = PublishExecutor::new(pool.clone(), fake.clone());
+    let bound = tiktok_ready(&pool, "bound").await;
+    executor.tick().await.expect("bound tick");
+    assert_eq!(
+        queue_state(&pool, bound, "tiktok").await,
+        (
+            queue_status::HELD.into(),
+            Some("tiktok_effect_boundary_pending".into())
+        )
+    );
+    let revoked = tiktok_ready(&pool, "revoked").await;
+    sqlx::query("DELETE FROM social_media_settings WHERE key LIKE 'tiktok_music_consent:%'")
+        .execute(&pool)
+        .await
+        .expect("revoke music consent");
+    executor.tick().await.expect("revoked tick");
+    assert_eq!(
+        queue_state(&pool, revoked, "tiktok").await,
+        (
+            queue_status::HELD.into(),
+            Some("tiktok_music_consent_missing".into())
+        )
+    );
+    dispatching(&pool, &fake)
+        .tick()
+        .await
+        .expect("dispatch tick");
+    assert!(fake.calls().is_empty());
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn tiktok_dispatch_persists_publish_id_before_transfer_and_never_repeats() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
+    let id = tiktok_ready(&pool, "dispatch").await;
+    sqlx::query(
+        "UPDATE twitch_clips_upload_queue SET title = 'queue row title' WHERE produced_video_id = $1",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .expect("queue title");
+    let fake = TikTokFake::with(&pool, vec![TikTokStep::Transfer("pub-1", Ok(()))]);
+    let executor = dispatching(&pool, &fake);
+    executor.tick().await.expect("dispatch tick");
+    let bound: TikTokPostOptions =
+        serde_json::from_value(bound_options(&pool, id).await.expect("binding"))
+            .expect("bound options");
+    let calls = fake.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].1, bound);
+    assert_ne!(calls[0].1.caption, "queue row title");
+    assert_eq!(fake.persisted(), vec![true]);
+    assert_eq!(
+        queue_state(&pool, id, "tiktok").await,
+        (
+            queue_status::UNCERTAIN.into(),
+            Some("tiktok_processing".into())
+        )
+    );
+    let (publish_id, options, _, uploaded) = tiktok_row(&pool, id).await;
+    assert_eq!(publish_id.as_deref(), Some("pub-1"));
+    assert_eq!(
+        options,
+        Some(serde_json::to_value(&bound).expect("options json"))
+    );
+    assert!(!uploaded);
+    executor.tick().await.expect("second tick");
+    executor.tick().await.expect("third tick");
+    assert_eq!(fake.calls().len(), 1);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn failures_around_init_checkpoint_and_transfer_never_start_a_second_operation() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
+    let init = tiktok_ready(&pool, "init").await;
+    let checkpoint = tiktok_ready(&pool, "checkpoint").await;
+    let transfer = tiktok_ready(&pool, "transfer").await;
+    let fake = TikTokFake::with(
+        &pool,
+        vec![
+            TikTokStep::Fail(UploadError::Request("timeout".into())),
+            TikTokStep::CheckpointFails,
+            TikTokStep::Transfer("pub-2", Err(UploadError::Api("chunk failed".into()))),
+        ],
+    );
+    let executor = dispatching(&pool, &fake);
+    executor.tick().await.expect("failure tick");
+    assert_eq!(fake.calls().len(), 3);
+    for (id, reason, publish_id) in [
+        (init, "tiktok_init_uncertain", None),
+        (checkpoint, "tiktok_init_uncertain", None),
+        (transfer, "tiktok_transfer_uncertain", Some("pub-2")),
+    ] {
+        assert_eq!(
+            queue_state(&pool, id, "tiktok").await,
+            (queue_status::UNCERTAIN.into(), Some(reason.into()))
+        );
+        assert_eq!(tiktok_row(&pool, id).await.0.as_deref(), publish_id);
+        assert!(matches!(
+            retry(&pool, "owner", id, "tiktok").await,
+            Err(PublishError::RetryBlocked)
+        ));
+    }
+    executor.tick().await.expect("second tick");
+    assert_eq!(fake.calls().len(), 3);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn claim_checkpoint_is_fenced_by_generation_and_written_once() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
+    let id = tiktok_ready(&pool, "fenced").await;
+    PublishExecutor::new(pool.clone(), ScriptedPublisher::with(vec![]))
+        .tick()
+        .await
+        .expect("held tick");
+    let queue_id: i64 = sqlx::query_scalar(
+        "UPDATE twitch_clips_upload_queue SET status = $2, claim_generation = 3
+         WHERE produced_video_id = $1 AND platform = 'tiktok' RETURNING id::bigint",
+    )
+    .bind(id)
+    .bind(queue_status::EFFECT_STARTED)
+    .fetch_one(&pool)
+    .await
+    .expect("effect started");
+    let at = |generation| crate::tiktok_recovery::ClaimCheckpoint {
+        pool: &pool,
+        queue_id,
+        generation,
+    };
+    assert!(at(2).record_publish_id("stale").await.is_err());
+    at(3).record_publish_id("first").await.expect("checkpoint");
+    assert!(at(3).record_publish_id("second").await.is_err());
+    assert_eq!(tiktok_row(&pool, id).await.0.as_deref(), Some("first"));
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn rejected_tiktok_choice_is_held_editable_and_dispatched_once_after_rebinding() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
+    let id = tiktok_ready(&pool, "rejected").await;
+    let fake = TikTokFake::with(
+        &pool,
+        vec![
+            TikTokStep::Fail(UploadError::not_started(UploadError::Validation(
+                "privacy level not allowed".into(),
+            ))),
+            TikTokStep::Transfer("pub-3", Ok(())),
+        ],
+    );
+    let executor = dispatching(&pool, &fake);
+    executor.tick().await.expect("rejected tick");
+    assert_eq!(
+        queue_state(&pool, id, "tiktok").await,
+        (
+            queue_status::HELD.into(),
+            Some("tiktok_options_invalid".into())
+        )
+    );
+    let (publish_id, _, started, _) = tiktok_row(&pool, id).await;
+    assert!(publish_id.is_none());
+    assert!(!started);
+    let mut choice = tiktok_choice(&pool, id).await;
+    choice["privacy_level"] = json!("FOLLOWER_OF_CREATOR");
+    approve(&pool, "owner", id, &with_tiktok(choice))
+        .await
+        .expect("rebind");
+    sqlx::query("UPDATE twitch_clips_upload_queue SET next_retry_at = clock_timestamp() - INTERVAL '1 minute' WHERE produced_video_id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("due retry");
+    executor.tick().await.expect("rebound tick");
+    let calls = fake.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].1.privacy_level, "FOLLOWER_OF_CREATOR");
+    assert_eq!(
+        queue_state(&pool, id, "tiktok").await,
+        (
+            queue_status::UNCERTAIN.into(),
+            Some("tiktok_processing".into())
+        )
+    );
+    executor.tick().await.expect("settled tick");
+    assert_eq!(fake.calls().len(), 2);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn retry_row_with_a_known_publish_id_is_quarantined_without_upload() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
+    let id = tiktok_ready(&pool, "ghost").await;
+    let fake = TikTokFake::with(&pool, vec![TikTokStep::Transfer("pub-4", Ok(()))]);
+    PublishExecutor::new(pool.clone(), fake.clone())
+        .tick()
+        .await
+        .expect("held tick");
+    sqlx::query(
+        "UPDATE twitch_clips_upload_queue SET status = $2, tiktok_publish_id = 'ghost',
+         next_retry_at = clock_timestamp() - INTERVAL '1 minute' WHERE produced_video_id = $1",
+    )
+    .bind(id)
+    .bind(queue_status::RETRY)
+    .execute(&pool)
+    .await
+    .expect("retry with publish id");
+    dispatching(&pool, &fake)
+        .tick()
+        .await
+        .expect("quarantine tick");
+    assert!(fake.calls().is_empty());
+    assert_eq!(
+        queue_state(&pool, id, "tiktok").await,
+        (
+            queue_status::UNCERTAIN.into(),
+            Some("tiktok_transfer_uncertain".into())
+        )
+    );
     cleanup(pool).await;
 }
