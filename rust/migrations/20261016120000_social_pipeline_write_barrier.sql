@@ -100,11 +100,17 @@ ALTER TABLE social_pipeline_cutover ADD COLUMN streamer_paused BOOLEAN;
 CREATE FUNCTION social_pipeline_hold_streamer_pause() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path FROM CURRENT AS $$
 BEGIN
-    IF social_pipeline_legacy_paused(NEW.twitch_user_id) THEN
+    IF NOT social_pipeline_legacy_paused(NEW.twitch_user_id) THEN
+        RETURN NEW;
+    END IF;
+    IF (TG_OP = 'UPDATE' AND NEW.paused IS DISTINCT FROM OLD.paused)
+        OR (TG_OP = 'INSERT' AND NOT EXISTS (
+            SELECT 1 FROM social_media_autopilot_settings s
+            WHERE s.twitch_user_id = NEW.twitch_user_id)) THEN
         UPDATE social_pipeline_cutover SET streamer_paused = NEW.paused, updated_at = NOW()
         WHERE twitch_user_id = NEW.twitch_user_id;
-        NEW.paused := TRUE;
     END IF;
+    NEW.paused := TRUE;
     RETURN NEW;
 END;
 $$;

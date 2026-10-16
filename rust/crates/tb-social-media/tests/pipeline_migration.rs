@@ -539,6 +539,21 @@ async fn umstellung_schliesst_altschreiber_und_pausiert_ohne_nachholen() {
     assert!(legacy_ids(&pool).await.is_empty());
     assert!(autopilot_paused(&pool, "300").await);
     sqlx::query(
+        "INSERT INTO social_media_autopilot_settings (twitch_user_id, paused)
+         SELECT twitch_user_id, paused FROM social_media_autopilot_settings WHERE twitch_user_id = '300'
+         ON CONFLICT (twitch_user_id) DO UPDATE SET paused = EXCLUDED.paused, updated_at = NOW()",
+    )
+    .execute(&pool)
+    .await
+    .expect("Streamer speichert andere Einstellungen");
+    let kept: Option<bool> = sqlx::query_scalar(
+        "SELECT streamer_paused FROM social_pipeline_cutover WHERE twitch_user_id = '300'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Gesicherte Streamer-Pause");
+    assert_eq!(kept, Some(false));
+    sqlx::query(
         "UPDATE social_media_autopilot_settings SET paused = FALSE WHERE twitch_user_id = '300'",
     )
     .execute(&pool)

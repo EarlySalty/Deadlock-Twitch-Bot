@@ -362,18 +362,25 @@ pub async fn pause(pool: &PgPool, owner: &str) -> Result<CutoverReport, Migratio
         return Ok(outcome(owner, CutoverOutcome::NotUnified, 0));
     }
     sqlx::query(
-        "UPDATE social_pipeline_cutover SET state = 'paused', streamer_paused = NULL, updated_at = NOW()
-         WHERE twitch_user_id = $1",
+        "UPDATE social_pipeline_cutover c SET streamer_paused = s.paused, updated_at = NOW()
+         FROM social_media_autopilot_settings s
+         WHERE c.twitch_user_id = $1 AND s.twitch_user_id = c.twitch_user_id",
     )
     .bind(owner)
     .execute(&mut *tx)
     .await?;
     let enabled: Option<bool> = sqlx::query_scalar(
-        "UPDATE social_media_autopilot_settings SET paused = paused, updated_at = NOW()
+        "UPDATE social_media_autopilot_settings SET paused = TRUE, updated_at = NOW()
          WHERE twitch_user_id = $1 RETURNING enabled",
     )
     .bind(owner)
     .fetch_optional(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE social_pipeline_cutover SET state = 'paused', updated_at = NOW() WHERE twitch_user_id = $1",
+    )
+    .bind(owner)
+    .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(switched(owner, CutoverOutcome::Paused, enabled))
