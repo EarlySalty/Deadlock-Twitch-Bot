@@ -13,7 +13,9 @@ use tokio::io::AsyncReadExt;
 use super::{AutopilotWorker, RunnerError};
 use crate::{
     ai_editor::{self, MediaInfo},
-    autopilot_settings::{self, PipelineMode, PipelinePolicy, PolicyScope, ReviewPolicy},
+    autopilot_settings::{
+        self, CutoverState, PipelineMode, PipelinePolicy, PolicyScope, ReviewPolicy,
+    },
     clip_templates,
     produced_video::{self, NewProducedVideo, ProducedVideo, RenderedVideo},
     production_jobs::{self, JobCompletion, JobSource, ProductionJob, ProductionMode},
@@ -81,12 +83,17 @@ impl AutopilotWorker {
         if job.source == JobSource::Manual || job.metadata.get("static").is_some() {
             return Ok(StaticRoute::Legacy);
         }
-        if let Some(video) = self.existing_static(job).await? {
-            if video.metadata.get("upload").is_none() {
-                return Ok(StaticRoute::Legacy);
+        let prepared = match self.existing_static(job).await? {
+            Some(video) if video.metadata.get("upload").is_none() => {
+                return Ok(StaticRoute::Legacy)
             }
+            Some(_) => true,
+            None => false,
+        };
+        if !prepared && self.cutover_state(job).await? != CutoverState::Unified {
+            return Ok(StaticRoute::Legacy);
         }
-        let policy = self.frozen_policy(job).await?;
+        let policy = self.frozen_policy(job, prepared).await?;
         Ok(match policy.pipeline_mode {
             PipelineMode::Upload => StaticRoute::Upload(Box::new(policy)),
             PipelineMode::UploadText => StaticRoute::Unavailable("upload_text_mode_unavailable"),
@@ -94,20 +101,39 @@ impl AutopilotWorker {
         })
     }
 
-    async fn frozen_policy(&self, job: &ProductionJob) -> Result<PipelinePolicy, RunnerError> {
-        if let Some(policy) = &job.policy_snapshot {
+    async fn cutover_state(&self, job: &ProductionJob) -> Result<CutoverState, RunnerError> {
+        let state: Option<String> = sqlx::query_scalar(
+            "SELECT state FROM social_pipeline_cutover WHERE twitch_user_id = $1",
+        )
+        .bind(&job.twitch_user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        match state {
+            Some(state) => Ok(serde_json::from_value(Value::String(state))?),
+            None => Ok(CutoverState::Legacy),
+        }
+    }
+
+    async fn frozen_policy(
+        &self,
+        job: &ProductionJob,
+        prepared: bool,
+    ) -> Result<PipelinePolicy, RunnerError> {
+        if let (true, Some(policy)) = (prepared, &job.policy_snapshot) {
             return Ok(policy.clone());
         }
         let policy = autopilot_settings::load_policy(&self.pool, &job.twitch_user_id)
             .await
             .map_err(super::ScheduleError::from)?;
         let stored: Option<String> = sqlx::query_scalar(
-            "UPDATE social_production_jobs SET policy_snapshot = COALESCE(policy_snapshot, $3::text::jsonb)
+            "UPDATE social_production_jobs SET policy_snapshot =
+            CASE WHEN $4 THEN COALESCE(policy_snapshot, $3::text::jsonb) ELSE $3::text::jsonb END
             WHERE id = $1 AND twitch_user_id = $2 RETURNING policy_snapshot::text",
         )
         .bind(job.id)
         .bind(&job.twitch_user_id)
         .bind(serde_json::to_string(&policy)?)
+        .bind(prepared)
         .fetch_optional(&self.pool)
         .await?;
         Ok(serde_json::from_str(&stored.ok_or(RunnerError::Source)?)?)
@@ -126,7 +152,7 @@ impl AutopilotWorker {
             job.id,
             JobCompletion::Review,
             &[reason.into()],
-            Some("Dieser Produktionsmodus ist noch nicht verfügbar. Bitte prüfe den Auftrag."),
+            Some(unavailable_message(reason)),
         )
         .await?;
         Ok(())
@@ -156,6 +182,7 @@ impl AutopilotWorker {
                     .await?;
             }
             lease.ensure_held().await?;
+            self.freeze_video_policy(job, &video, policy).await?;
             production_jobs::finish(
                 &self.pool,
                 &job.twitch_user_id,
@@ -450,9 +477,7 @@ impl AutopilotWorker {
             .map(|platforms| platforms.keys().cloned().collect())
             .unwrap_or_default();
         let tasks = preparation_tasks(&media, &platforms);
-        let needs_review = job.source == JobSource::Manual
-            || !tasks.is_empty()
-            || policy.review_policy == ReviewPolicy::Required;
+        let needs_review = !tasks.is_empty() || policy.review_policy == ReviewPolicy::Required;
         let metadata = json!({
             "upload_artifact": {
                 "sha256": output_sha256,
@@ -482,15 +507,7 @@ impl AutopilotWorker {
             },
         )
         .await?;
-        sqlx::query(
-            "UPDATE social_produced_videos SET policy_snapshot = COALESCE(policy_snapshot, $3::text::jsonb)
-            WHERE id = $1 AND twitch_user_id = $2",
-        )
-        .bind(video.id)
-        .bind(&job.twitch_user_id)
-        .bind(serde_json::to_string(policy)?)
-        .execute(&self.pool)
-        .await?;
+        self.freeze_video_policy(job, video, policy).await?;
         production_jobs::finish(
             &self.pool,
             &job.twitch_user_id,
@@ -499,6 +516,24 @@ impl AutopilotWorker {
             &tasks,
             None,
         )
+        .await?;
+        Ok(())
+    }
+
+    async fn freeze_video_policy(
+        &self,
+        job: &ProductionJob,
+        video: &ProducedVideo,
+        policy: &PipelinePolicy,
+    ) -> Result<(), RunnerError> {
+        sqlx::query(
+            "UPDATE social_produced_videos SET policy_snapshot = COALESCE(policy_snapshot, $3::text::jsonb)
+            WHERE id = $1 AND twitch_user_id = $2",
+        )
+        .bind(video.id)
+        .bind(&job.twitch_user_id)
+        .bind(serde_json::to_string(policy)?)
+        .execute(&self.pool)
         .await?;
         Ok(())
     }
@@ -671,6 +706,13 @@ fn preparation_tasks(media: &MediaInfo, platforms: &[String]) -> Vec<String> {
         }
     }
     tasks
+}
+
+fn unavailable_message(reason: &str) -> &'static str {
+    match reason {
+        "ai_edit_mode_mismatch" => "Für diesen Kanal ist KI-Videoschnitt eingestellt, die KI-Bearbeitung ist aber aus. Bitte prüfe die Einstellungen und starte den Auftrag dann erneut.",
+        _ => "Dieser Produktionsmodus ist noch nicht verfügbar. Bitte wähle einen anderen Modus und starte den Auftrag dann erneut.",
+    }
 }
 
 fn review_reasons(value: &Value) -> Vec<String> {

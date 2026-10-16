@@ -614,12 +614,19 @@ async fn autopilot_runner_repeated_resource_holds_do_not_drain_the_pool() {
 }
 
 #[tokio::test]
-async fn autopilot_runner_upload_mode_transient_failures_reuse_the_exact_artifact() {
-    for stage in ["rendering", "rendered", "completed", "existing_completed"] {
+async fn autopilot_runner_transient_failures_reuse_the_version_in_legacy_and_upload_mode() {
+    for (unified, stage) in [false, true].into_iter().flat_map(|unified| {
+        ["rendering", "rendered", "completed", "existing_completed"]
+            .into_iter()
+            .map(move |stage| (unified, stage))
+    }) {
         let pool = pool().await;
         let (root, config, source, clip_id) = real_static_fixture(&pool).await;
         let original = tokio::fs::read(&source).await.expect("original bytes");
         let slot = automatic_schedule(&pool, "42", false, true).await;
+        if unified {
+            unify_owner(&pool).await;
+        }
         let queued = production_jobs::insert(
             &pool,
             &production_jobs::NewProductionJob {
@@ -632,7 +639,7 @@ async fn autopilot_runner_upload_mode_transient_failures_reuse_the_exact_artifac
             },
         )
         .await
-        .expect("scheduled automatic upload job");
+        .expect("scheduled automatic static job");
         let existing = stage == "existing_completed";
         inject_job_database_failure(
             &pool,
@@ -649,7 +656,11 @@ async fn autopilot_runner_upload_mode_transient_failures_reuse_the_exact_artifac
             .expect("output root")
             .join("42")
             .join(format!("production-{}", queued.id))
-            .join("upload-1.mp4");
+            .join(if unified {
+                "upload-1.mp4"
+            } else {
+                "version-1.mp4"
+            });
         let mut previous_bytes = None;
         if existing {
             previous_bytes = Some(
@@ -691,7 +702,11 @@ async fn autopilot_runner_upload_mode_transient_failures_reuse_the_exact_artifac
             }
         );
         let saved_file = if stage == "rendered" {
-            Some(expected.with_extension("staged.mp4"))
+            Some(expected.with_extension(if unified {
+                "staged.mp4"
+            } else {
+                "rendering.mp4"
+            }))
         } else if stage == "rendering" {
             None
         } else {
@@ -701,11 +716,15 @@ async fn autopilot_runner_upload_mode_transient_failures_reuse_the_exact_artifac
             previous_bytes = Some(tokio::fs::read(file).await.expect("valid checkpoint bytes"));
         }
         retry_now(&pool, queued.id).await;
-        let restart = worker(
-            &pool,
-            root.path(),
-            VideoProcessor::new("unavailable-ffmpeg", "unavailable-ffprobe"),
-        );
+        let restart = if stage == "rendering" && !unified {
+            worker(&pool, root.path(), VideoProcessor::default())
+        } else {
+            worker(
+                &pool,
+                root.path(),
+                VideoProcessor::new("unavailable-ffmpeg", "unavailable-ffprobe"),
+            )
+        };
         assert!(restart
             .run_once()
             .await
@@ -726,18 +745,26 @@ async fn autopilot_runner_upload_mode_transient_failures_reuse_the_exact_artifac
         assert_eq!(finished[0].file_path.as_deref(), expected.to_str());
         assert_eq!(finished[0].scheduled_at, Some(slot));
         assert!(!finished[0].needs_review);
-        assert_eq!(finished[0].metadata["production_mode"], "upload");
         assert_eq!(
-            finished[0].metadata["upload_artifact"]["conversion"],
-            "exact"
+            finished[0].metadata["production_mode"],
+            if unified { "upload" } else { "static" }
         );
-        assert!(done.policy_snapshot.is_some());
-        assert_eq!(
-            tokio::fs::read(&expected)
-                .await
-                .expect("exact upload artifact"),
-            original
-        );
+        if unified {
+            assert_eq!(
+                finished[0].metadata["upload_artifact"]["conversion"],
+                "exact"
+            );
+            assert!(done.policy_snapshot.is_some());
+            assert_eq!(
+                tokio::fs::read(&expected)
+                    .await
+                    .expect("exact upload artifact"),
+                original
+            );
+        } else {
+            assert!(done.policy_snapshot.is_none());
+            assert!(finished[0].metadata.get("upload").is_none());
+        }
         if let Some(bytes) = previous_bytes {
             assert_eq!(
                 tokio::fs::read(&expected)
@@ -912,6 +939,13 @@ async fn autopilot_runner_recovers_when_the_retry_write_also_fails_transiently()
     cleanup(pool).await;
 }
 
+async fn unify_owner(pool: &PgPool) {
+    sqlx::query("INSERT INTO social_pipeline_cutover (twitch_user_id, state, migration_version) VALUES ('42', 'unified', 1)")
+        .execute(pool)
+        .await
+        .expect("unified owner");
+}
+
 async fn upload_policy_fixture(
     pool: &PgPool,
     review_policy: crate::autopilot_settings::ReviewPolicy,
@@ -950,6 +984,7 @@ async fn upload_policy_fixture(
     crate::autopilot_settings::save_policy(pool, "42", &policy)
         .await
         .expect("upload pipeline policy");
+    unify_owner(pool).await;
     slot
 }
 
@@ -1171,5 +1206,91 @@ async fn autopilot_runner_upload_text_mode_is_held_without_fallback() {
         .await
         .expect("no fallback version")
         .is_empty());
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn autopilot_runner_upload_policy_waits_for_unified_cutover() {
+    use crate::autopilot_settings::{PipelineMode, ReviewPolicy};
+    for state in [None, Some("legacy"), Some("shadow"), Some("paused")] {
+        let pool = pool().await;
+        let (root, _, _, clip_id) = real_static_fixture(&pool).await;
+        let slot =
+            upload_policy_fixture(&pool, ReviewPolicy::Off, PipelineMode::Upload, &["tiktok"])
+                .await;
+        match state {
+            Some(state) => sqlx::query("UPDATE social_pipeline_cutover SET state=$1 WHERE twitch_user_id='42'")
+                .bind(state).execute(&pool).await.map(|_| ()),
+            None => sqlx::query("DELETE FROM social_pipeline_cutover WHERE twitch_user_id='42'")
+                .execute(&pool).await.map(|_| ()),
+        }
+        .expect("cutover state");
+        let job_id = upload_job(&pool, clip_id, slot).await;
+        let runner = worker(&pool, root.path(), VideoProcessor::default());
+        assert!(runner.run_once().await.expect("legacy static production"));
+        let done = production_jobs::get(&pool, "42", job_id)
+            .await
+            .expect("static job")
+            .expect("owned job");
+        assert_eq!(done.status, "completed", "{state:?}");
+        assert!(done.policy_snapshot.is_none());
+        let videos = produced_video::list(&pool, "42", 50)
+            .await
+            .expect("legacy version");
+        assert_eq!(videos.len(), 1);
+        assert_eq!(videos[0].metadata["production_mode"], "static");
+        assert!(videos[0]
+            .file_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with("version-1.mp4")));
+        cleanup(pool).await;
+    }
+}
+
+#[tokio::test]
+async fn autopilot_runner_held_mode_reads_the_changed_policy_after_process() {
+    use crate::autopilot_settings::{PipelineMode, ReviewPolicy};
+    let pool = pool().await;
+    let (root, _, _, clip_id) = real_static_fixture(&pool).await;
+    let slot = upload_policy_fixture(
+        &pool,
+        ReviewPolicy::Off,
+        PipelineMode::UploadText,
+        &["tiktok"],
+    )
+    .await;
+    let job_id = upload_job(&pool, clip_id, slot).await;
+    let runner = worker(&pool, root.path(), VideoProcessor::default());
+    assert!(runner.run_once().await.expect("held dispatch"));
+    let held = production_jobs::get(&pool, "42", job_id)
+        .await
+        .expect("held job")
+        .expect("owned job");
+    assert_eq!(held.status, "review");
+    let mut policy = crate::autopilot_settings::load_policy(&pool, "42")
+        .await
+        .expect("held policy");
+    policy.pipeline_mode = PipelineMode::Upload;
+    crate::autopilot_settings::save_policy(&pool, "42", &policy)
+        .await
+        .expect("changed mode");
+    super::resolve_review(&pool, "42", job_id, super::ReviewDecision::Process, None)
+        .await
+        .expect("process held job");
+    assert!(runner.run_once().await.expect("requeued upload"));
+    let done = production_jobs::get(&pool, "42", job_id)
+        .await
+        .expect("processed job")
+        .expect("owned job");
+    assert_eq!(done.status, "completed");
+    assert_eq!(
+        done.policy_snapshot.map(|policy| policy.pipeline_mode),
+        Some(PipelineMode::Upload)
+    );
+    let videos = produced_video::list(&pool, "42", 50)
+        .await
+        .expect("upload version");
+    assert_eq!(videos.len(), 1);
+    assert_eq!(videos[0].metadata["production_mode"], "upload");
     cleanup(pool).await;
 }
