@@ -148,7 +148,7 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
       {snapshot.settings.paused && <p className="publish-note" role="status">{t('Pausiert. Keine neuen geplanten Veröffentlichungen. Deine Warteschlange bleibt erhalten.')}</p>}
       {editorVideo !== null && <AiRevisionPanel key={editorVideo} owner={twitchUserId} videoId={editorVideo} onBusyChange={setEditorBusy} onClose={() => setEditorVideo(null)} onRefresh={() => act(async () => {}, { key: 'Stand aktualisiert.' })} />}
       {(section === 'all' || section === 'videos') && <div className="publish-video-list">
-        {visibleVideos.length === 0 ? <p>{t('Noch keine fertigen Videos. Sobald ein Video gerendert ist, findest du es hier.')}</p> : visibleVideos.map((video) => <VideoRow key={video.id} video={video} snapshot={snapshot} busy={busy || editorBusy || editorVideo === video.id} onRevise={editorVideo === null ? setEditorVideo : undefined} onOpenVideo={onOpenVideo} onConfigureTikTok={onConfigureTikTok} act={act} client={client} owner={twitchUserId} inlineTikTok={clipDbId === undefined ? undefined : { clipDbId, revision: textRevision }} locked={locked} />)}
+        {visibleVideos.length === 0 ? <p>{videoId === undefined ? t('Noch keine fertigen Videos. Sobald ein Video gerendert ist, findest du es hier.') : t('Diese Fassung wartet nicht mehr auf eine Freigabe.')}</p> : visibleVideos.map((video) => <VideoRow key={video.id} video={video} snapshot={snapshot} busy={busy || editorBusy || editorVideo === video.id} onRevise={editorVideo === null ? setEditorVideo : undefined} onOpenVideo={onOpenVideo} onConfigureTikTok={onConfigureTikTok} act={act} client={client} owner={twitchUserId} inlineTikTok={clipDbId === undefined ? undefined : { clipDbId, revision: textRevision }} locked={locked} />)}
       </div>}
       {(section === 'all' || section === 'notifications') && preferences && <details className="publish-preferences"><summary>{t('Benachrichtigungen & Aufbewahrung')}</summary>
         <p>{t('Ungeprüfte Videos bleiben sieben Tage ab dem fertigen Rendern verfügbar. Freigegebene Videos sowie laufende, fehlgeschlagene oder unklare Veröffentlichungen bleiben geschützt.')}</p>
@@ -226,7 +226,8 @@ function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onCo
   const consentTask = platforms.includes('tiktok') && connectedTo(snapshot, 'tiktok') && video.tiktok_consent !== undefined && video.tiktok_consent !== 'bound';
   const heldTask = video.event?.destinations.some((destination) => destination.state === 'held') ?? false;
   const routineOnly = snapshot.settings.publish_mode === 'full_auto' && !video.needs_review && video.status !== 'review' && !consentTask && !heldTask;
-  const approved = video.approvals.some((approval) => approval.state === 'approved');
+  const approvedPlatforms = platforms.filter((platform) => video.approvals.some((approval) => approval.platform === platform && approval.state === 'approved'));
+  const approved = approvedPlatforms.length > 0;
   const willSchedule = !video.event;
   const tikTokMissing = selected.includes('tiktok') && Boolean(inlineTikTok) && tikTokOptions === null;
   async function approve() {
@@ -239,7 +240,8 @@ function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onCo
       } else decisions.push({ platform });
     }
     if (decisions.length > 0) await client.approve(owner, video.id, decisions);
-    if (willSchedule) await client.schedule(owner, video.id, platforms);
+    const remaining = willSchedule ? approvedPlatforms.filter((platform) => !selected.includes(platform)) : [];
+    if (remaining.length > 0) await client.schedule(owner, video.id, remaining);
   }
   return <article className="publish-video" data-unsaved={selected.length > 0 || busy ? 'true' : undefined} aria-label={t('Videoversion {version}, Variante {variant}', { version: video.version_no, variant: video.variant_index + 1 })}>
     <header><div><h3>{t('Video #{id}', { id: video.id })} <span>{t('Version {version}, Variante {variant}', { version: video.version_no, variant: video.variant_index + 1 })}</span></h3><p>{t(video.mode === 'ai' ? 'KI-bearbeitet' : 'Statisch bearbeitet')}{video.duration_ms ? ` · ${new Intl.NumberFormat(locale, { style: 'unit', unit: 'second', unitDisplay: 'long' }).format(video.duration_ms / 1000)}` : ''}</p></div>{onOpenVideo && !expired && <button type="button" disabled={busy} onClick={() => onOpenVideo(video.id)}>{t('Video prüfen')}</button>}</header>
@@ -314,12 +316,7 @@ export function ClipReviewDetail({ owner, source, mode, title, onClose, onChange
     window.addEventListener('beforeunload', guard);
     return () => window.removeEventListener('beforeunload', guard);
   }, [dirty]);
-  const reportEditing = useCallback((value: boolean) => {
-    setEditing((previous) => {
-      if (previous && !value) setTextRevision((revision) => revision + 1);
-      return value;
-    });
-  }, []);
+  const textsSaved = useCallback(() => setTextRevision((revision) => revision + 1), []);
   const refresh = () => { setReloadKey((value) => value + 1); onChanged?.(); };
   const switchTab = (next: DetailMode) => {
     if (next === tab) return;
@@ -340,7 +337,7 @@ export function ClipReviewDetail({ owner, source, mode, title, onClose, onChange
           </nav>
         </div>
         <div ref={area} className="clip-review-area">
-          {tab === 'enrichment' && (version ? <MetadataPanel key={version.id} channel={owner} videoId={version.id} disabled={busy} onEditingChange={reportEditing} /> : <EnrichmentPanel clipDbId={clipDbId} onSavingChange={setBusy} />)}
+          {tab === 'enrichment' && (version ? <MetadataPanel key={version.id} channel={owner} videoId={version.id} disabled={busy} onEditingChange={setEditing} onSaved={textsSaved} /> : <EnrichmentPanel clipDbId={clipDbId} onSavingChange={setBusy} />)}
           {tab === 'ai' && (version?.mode === 'ai' ? <AiRevisionPanel key={version.id} owner={owner} videoId={version.id} onBusyChange={setBusy} onClose={() => setTab('enrichment')} onRefresh={async () => { refresh(); return true; }} /> : <AiEditorPanel twitchUserId={owner} streamer="" clipDbId={clipDbId} clipOnly />)}
           {tab === 'layout' && <ClipLayout clipDbId={clipDbId} onBusyChange={setBusy} onSaved={refresh} />}
         </div>

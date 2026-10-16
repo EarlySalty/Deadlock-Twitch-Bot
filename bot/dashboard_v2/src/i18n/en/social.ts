@@ -556,4 +556,5 @@ export const SOCIAL_EN: Record<string, string> = {
   'Texte': 'Texts',
   'Zuletzt gestartete Aufträge für diesen Clip.': 'Recently started jobs for this clip.',
   'TikTok-Einwilligung': 'TikTok consent',
+  'Diese Fassung wartet nicht mehr auf eine Freigabe.': 'This version is no longer waiting for approval.',
 };

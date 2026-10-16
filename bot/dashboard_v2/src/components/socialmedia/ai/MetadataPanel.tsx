@@ -64,7 +64,7 @@ function usage(platform: AiCopyPlatform, copy: AiPlatformCopy, t: ReturnType<typ
   return t('Beitragstext {count}/2200 Zeichen · {tags}/30 Hashtags', { count: Array.from(joined([copy.description, tags])).length, tags: copy.hashtags.length });
 }
 
-export function MetadataPanel({ channel, videoId, disabled = false, onEditingChange }: { channel: string; videoId: number; disabled?: boolean; onEditingChange?: (editing: boolean) => void }) {
+export function MetadataPanel({ channel, videoId, disabled = false, onEditingChange, onSaved }: { channel: string; videoId: number; disabled?: boolean; onEditingChange?: (editing: boolean) => void; onSaved?: () => void }) {
   const { language, t } = useLanguage();
   const formId = useId();
   const client = useQueryClient();
@@ -74,7 +74,7 @@ export function MetadataPanel({ channel, videoId, disabled = false, onEditingCha
   const [mode, setMode] = useState<{ videoId: number; channel: string; shared: boolean } | null>(null);
   const save = useMutation({
     mutationFn: (copy: Record<AiCopyPlatform, AiPlatformCopy>) => saveAiVersionMetadata(channel, videoId, copy),
-    onSuccess: (value) => { client.setQueryData(key, value); setDraft(null); },
+    onSuccess: (value) => { client.setQueryData(key, value); setDraft(null); onSaved?.(); },
   });
   useEffect(() => {
     onEditingChange?.(draft !== null || save.isPending || save.isError);
