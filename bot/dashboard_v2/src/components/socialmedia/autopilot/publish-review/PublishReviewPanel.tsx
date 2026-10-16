@@ -226,8 +226,7 @@ function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onCo
   const consentTask = platforms.includes('tiktok') && connectedTo(snapshot, 'tiktok') && video.tiktok_consent !== undefined && video.tiktok_consent !== 'bound';
   const heldTask = video.event?.destinations.some((destination) => destination.state === 'held') ?? false;
   const routineOnly = snapshot.settings.publish_mode === 'full_auto' && !video.needs_review && video.status !== 'review' && !consentTask && !heldTask;
-  const approvedPlatforms = platforms.filter((platform) => video.approvals.some((approval) => approval.platform === platform && approval.state === 'approved'));
-  const approved = approvedPlatforms.length > 0;
+  const approved = video.approvals.some((approval) => approval.state === 'approved');
   const willSchedule = !video.event;
   const tikTokMissing = selected.includes('tiktok') && Boolean(inlineTikTok) && tikTokOptions === null;
   async function approve() {
@@ -240,8 +239,7 @@ function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onCo
       } else decisions.push({ platform });
     }
     if (decisions.length > 0) await client.approve(owner, video.id, decisions);
-    const remaining = willSchedule ? approvedPlatforms.filter((platform) => !selected.includes(platform)) : [];
-    if (remaining.length > 0) await client.schedule(owner, video.id, remaining);
+    if (willSchedule) await client.schedule(owner, video.id, platforms);
   }
   return <article className="publish-video" data-unsaved={selected.length > 0 || busy ? 'true' : undefined} aria-label={t('Videoversion {version}, Variante {variant}', { version: video.version_no, variant: video.variant_index + 1 })}>
     <header><div><h3>{t('Video #{id}', { id: video.id })} <span>{t('Version {version}, Variante {variant}', { version: video.version_no, variant: video.variant_index + 1 })}</span></h3><p>{t(video.mode === 'ai' ? 'KI-bearbeitet' : 'Statisch bearbeitet')}{video.duration_ms ? ` · ${new Intl.NumberFormat(locale, { style: 'unit', unit: 'second', unitDisplay: 'long' }).format(video.duration_ms / 1000)}` : ''}</p></div>{onOpenVideo && !expired && <button type="button" disabled={busy} onClick={() => onOpenVideo(video.id)}>{t('Video prüfen')}</button>}</header>
@@ -307,7 +305,7 @@ export function ClipReviewDetail({ owner, source, mode, title, onClose, onChange
   const [textRevision, setTextRevision] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
   const area = useRef<HTMLDivElement>(null);
-  const version = versions.find((item) => item.id === versionId) ?? null;
+  const version = versions.find((item) => item.id === versionId) ?? versions[0] ?? null;
   const clipDbId = source.clip_db_id;
   const dirty = editing || busy;
   useEffect(() => {
@@ -328,7 +326,7 @@ export function ClipReviewDetail({ owner, source, mode, title, onClose, onChange
       {clipDbId === null ? <p role="status">{t('Für diesen Clip liegt keine Quelldatei vor. Bearbeiten ist deshalb nicht möglich.')}</p> : <>
         <div className="clip-review-context">
           {versions.length > 0 ? <label className="clip-review-version">{t('Fassung')}
-            <select className="studio-select" value={versionId ?? ''} disabled={dirty} onChange={(event) => setVersionId(Number(event.target.value))}>
+            <select className="studio-select" value={version?.id ?? ''} disabled={dirty} onChange={(event) => setVersionId(Number(event.target.value))}>
               {versions.map((item) => <option key={item.id} value={item.id}>{t('Version {version}, Variante {variant}', { version: item.version_no, variant: item.variant_index + 1 })} · {t(item.mode === 'ai' ? 'KI-bearbeitet' : 'Statisch bearbeitet')}</option>)}
             </select>
           </label> : <p className="publish-note">{t('Für diesen Clip gibt es noch keine fertige Fassung. Texte, KI-Bearbeitung und Layout gelten für die nächste Fassung.')}</p>}
