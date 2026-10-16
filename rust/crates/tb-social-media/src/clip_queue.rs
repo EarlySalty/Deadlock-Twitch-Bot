@@ -21,6 +21,10 @@ pub enum QueueError {
     InvalidPlatform(String),
     #[error("Dieser Clip wird im Clip-Pool verwaltet")]
     PoolManaged,
+    #[error("Dieser Kanal veröffentlicht nur noch über den Autopiloten")]
+    PipelineUnified,
+    #[error("Für diesen Clip läuft auf dieser Plattform schon eine Veröffentlichung")]
+    PipelineBusy,
     #[error("db: {0}")]
     Db(#[from] sqlx::Error),
 }
@@ -320,6 +324,30 @@ async fn queue_upload_record_with_schedule(
     Ok(id)
 }
 
+async fn ensure_legacy_writable(
+    connection: &mut PgConnection,
+    clip_db_id: i64,
+    platform: &str,
+) -> Result<(), QueueError> {
+    if !crate::pipeline_migration::legacy_writer_open(connection, clip_db_id).await? {
+        return Err(QueueError::PipelineUnified);
+    }
+    let busy: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM twitch_clips_upload_queue WHERE clip_id = $1 \
+         AND platform = $2 AND COALESCE(status, '') NOT IN ('completed', 'failed', 'cancelled', \
+         'autopilot_discarded', 'autopilot_failed') \
+         AND (produced_video_id IS NOT NULL OR status = 'uncertain'))",
+    )
+    .bind(clip_db_id)
+    .bind(platform)
+    .fetch_one(&mut *connection)
+    .await?;
+    if busy {
+        return Err(QueueError::PipelineBusy);
+    }
+    Ok(())
+}
+
 async fn queue_upload_record_on(
     connection: &mut PgConnection,
     request: QueueUploadRequest<'_>,
@@ -338,6 +366,7 @@ async fn queue_upload_record_on(
     if !PLATFORMS.contains(&platform) {
         return Err(QueueError::InvalidPlatform(platform.to_string()));
     }
+    ensure_legacy_writable(connection, clip_db_id, platform).await?;
     let tags = hashtags_json(hashtags);
     if platform == "tiktok" {
         if let Some(id) = sqlx::query_scalar::<_, i64>(
@@ -443,6 +472,19 @@ async fn queue_upload_record_on(
 
 /// Lädt die Upload-Queue (+ Clip-Daten). Optional vorab verwaiste processing-Jobs
 /// (älter als `reclaim_stale_before`) auf pending zurücksetzen.
+async fn paused_filter_available(pool: &PgPool) -> bool {
+    let installed = match pool.acquire().await {
+        Ok(mut connection) => {
+            crate::pipeline_migration::write_barrier_installed(&mut connection).await
+        }
+        Err(error) => Err(error),
+    };
+    installed.unwrap_or_else(|error| {
+        tracing::warn!(%error, "Social-Media-Upload-Queue: Umstellungsstand nicht lesbar");
+        true
+    })
+}
+
 pub async fn get_upload_queue(
     pool: &PgPool,
     platform: Option<&str>,
@@ -473,6 +515,11 @@ pub async fn get_upload_queue(
     sql.push_str(
         "q.status = $1 AND NULLIF(to_jsonb(q)->'produced_video_id', 'null'::jsonb) IS NULL",
     );
+    if paused_filter_available(pool).await {
+        sql.push_str(
+            " AND NOT social_pipeline_legacy_paused(social_clip_pipeline_owner(q.clip_id))",
+        );
+    }
     if status == "waiting_connection" {
         sql.push_str(
             " AND (q.last_attempt_at IS NULL OR q.last_attempt_at <= NOW() - INTERVAL '5 minutes')",
@@ -583,6 +630,24 @@ pub async fn reschedule_upload(
     .execute(&mut *tx)
     .await?;
     tx.commit().await
+}
+
+pub async fn mark_upload_uncertain(
+    pool: &PgPool,
+    queue_id: i64,
+    error: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE twitch_clips_upload_queue SET status = 'uncertain', \
+         outcome_reason = 'publish_unconfirmed', last_error = $2, \
+         effect_started_at = COALESCE(effect_started_at, NOW()), last_attempt_at = NOW() \
+         WHERE id = $1 AND produced_video_id IS NULL AND status = 'processing'",
+    )
+    .bind(queue_id)
+    .bind(error)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub async fn update_upload_status(
@@ -753,7 +818,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_queue_upload_never_overwrites_produced_version_rows() {
+    async fn legacy_queue_upload_is_refused_beside_open_produced_version_rows() {
         let pool = make_pool("t_sm_queue_produced_guard")
             .await
             .expect("isolated database");
@@ -776,17 +841,11 @@ mod tests {
             None,
             5,
         )
-        .await
-        .expect("legacy queue row");
-        assert_ne!(legacy, produced);
+        .await;
+        assert!(matches!(legacy, Err(QueueError::PipelineBusy)));
         sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'processing', last_attempt_at = '2000-01-01'::timestamptz WHERE id = $1")
             .bind(produced).execute(&pool).await.expect("stale produced processing row");
-        sqlx::query("DELETE FROM twitch_clips_upload_queue WHERE id = $1")
-            .bind(legacy)
-            .execute(&pool)
-            .await
-            .expect("drop legacy row");
-        let reinserted = queue_upload(
+        let beside_stale = queue_upload(
             &pool,
             clip,
             "youtube",
@@ -796,9 +855,13 @@ mod tests {
             None,
             5,
         )
-        .await
-        .expect("legacy row beside stale produced row");
-        assert_ne!(reinserted, produced);
+        .await;
+        assert!(matches!(beside_stale, Err(QueueError::PipelineBusy)));
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_clips_upload_queue")
+            .fetch_one(&pool)
+            .await
+            .expect("row count");
+        assert_eq!(rows, 1);
         let row: (String, String, String, i32) = sqlx::query_as(
             "SELECT status, title, description, priority FROM twitch_clips_upload_queue WHERE id = $1",
         )
@@ -815,6 +878,45 @@ mod tests {
                 1
             )
         );
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_legacy_publish_stays_uncertain_and_blocks_requeue() {
+        let pool = make_pool("t_sm_queue_unconfirmed")
+            .await
+            .expect("isolated database");
+        let clip = seed_clip(&pool).await;
+        let id = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
+            .await
+            .expect("legacy row");
+        sqlx::query("ALTER TABLE twitch_clips_upload_queue ADD COLUMN outcome_reason TEXT, ADD COLUMN effect_started_at TIMESTAMPTZ")
+            .execute(&pool)
+            .await
+            .expect("autopilot columns");
+        sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'processing' WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("claimed row");
+        mark_upload_uncertain(&pool, id, "publish unconfirmed")
+            .await
+            .expect("uncertain row");
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("status");
+        assert_eq!(status, "uncertain");
+        assert!(
+            get_upload_queue(&pool, None, "pending", 10, Some("2999-01-01T00:00:00Z"))
+                .await
+                .is_empty()
+        );
+        assert!(matches!(
+            queue_upload(&pool, clip, "tiktok", None, None, None, None, 0).await,
+            Err(QueueError::PipelineBusy)
+        ));
     }
 
     #[tokio::test]

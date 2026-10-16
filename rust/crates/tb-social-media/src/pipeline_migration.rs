@@ -1,14 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveTime;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool, Row};
 
 use crate::autopilot_settings::{
     self, AutopilotSettings, MigrationDisposition, PipelineMigrationMapping, PipelinePolicy,
-    PolicyScope, ReviewPolicy, ScheduleSlot, SettingsError,
+    PolicyScope, PublishMode, ReviewPolicy, ScheduleSlot, SettingsError,
 };
 use crate::posting_plan::PLATFORMS;
 
@@ -58,6 +58,40 @@ pub enum MigrationError {
     Database(#[from] sqlx::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Settings(#[from] SettingsError),
+    #[error("{0}")]
+    Schedule(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CutoverOutcome {
+    Activated,
+    AlreadyClosed,
+    NotShadow,
+    NotReady,
+    Paused,
+    Resumed,
+    NotUnified,
+    NotPaused,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CutoverReport {
+    pub twitch_user_id: String,
+    pub outcome: CutoverOutcome,
+    pub unresolved: usize,
+    pub autopilot_enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct ProposedPolicy {
+    policy: PipelinePolicy,
+    timezone: Option<String>,
+    target_platforms: Vec<String>,
+    schedule_slots: Vec<ScheduleSlot>,
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +187,43 @@ struct StoredRow {
     reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CutoverCommand {
+    DryRun,
+    Apply,
+    Pause(String),
+    Resume(String),
+}
+
+impl CutoverCommand {
+    pub fn parse(arguments: &[&str]) -> Option<Self> {
+        match arguments {
+            ["--social-cutover", "--dry-run"] => Some(Self::DryRun),
+            ["--social-cutover", "--apply"] => Some(Self::Apply),
+            ["--social-cutover", "--pause", owner] if !owner.is_empty() => {
+                Some(Self::Pause((*owner).to_string()))
+            }
+            ["--social-cutover", "--resume", owner] if !owner.is_empty() => {
+                Some(Self::Resume((*owner).to_string()))
+            }
+            _ => None,
+        }
+    }
+}
+
+pub async fn run_command(pool: &PgPool, command: &CutoverCommand) -> Result<Value, MigrationError> {
+    Ok(match command {
+        CutoverCommand::DryRun => json!({ "migration": dry_run(pool).await? }),
+        CutoverCommand::Apply => {
+            let migration = apply(pool).await?;
+            let cutover = activate_ready(pool).await?;
+            json!({ "migration": migration, "cutover": cutover })
+        }
+        CutoverCommand::Pause(owner) => json!({ "cutover": [pause(pool, owner).await?] }),
+        CutoverCommand::Resume(owner) => json!({ "cutover": [resume(pool, owner).await?] }),
+    })
+}
+
 pub async fn dry_run(pool: &PgPool) -> Result<MigrationReport, MigrationError> {
     let mut tx = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -196,6 +267,235 @@ pub async fn apply(pool: &PgPool) -> Result<MigrationReport, MigrationError> {
     }
     tx.commit().await?;
     Ok(report)
+}
+
+pub async fn activate(pool: &PgPool, owner: &str) -> Result<CutoverReport, MigrationError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL TimeZone = 'UTC'")
+        .execute(&mut *tx)
+        .await?;
+    autopilot_settings::lock_owner(&mut tx, owner).await?;
+    let report = match cutover_state(&mut tx, owner).await?.as_deref() {
+        Some("shadow") => activate_on(&mut tx, owner).await?,
+        Some("unified" | "paused") => outcome(owner, CutoverOutcome::AlreadyClosed, 0),
+        _ => outcome(owner, CutoverOutcome::NotShadow, 0),
+    };
+    tx.commit().await?;
+    Ok(report)
+}
+
+pub async fn activate_ready(pool: &PgPool) -> Result<Vec<CutoverReport>, MigrationError> {
+    let owners: Vec<String> = sqlx::query_scalar(
+        "SELECT twitch_user_id FROM social_pipeline_cutover WHERE state = 'shadow' ORDER BY twitch_user_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut reports = Vec::with_capacity(owners.len());
+    for owner in owners {
+        reports.push(activate(pool, &owner).await?);
+    }
+    Ok(reports)
+}
+
+pub async fn pause(pool: &PgPool, owner: &str) -> Result<CutoverReport, MigrationError> {
+    switch(pool, owner, "unified", "paused", CutoverOutcome::Paused).await
+}
+
+pub async fn resume(pool: &PgPool, owner: &str) -> Result<CutoverReport, MigrationError> {
+    switch(pool, owner, "paused", "unified", CutoverOutcome::Resumed).await
+}
+
+async fn switch(
+    pool: &PgPool,
+    owner: &str,
+    from: &str,
+    to: &str,
+    done: CutoverOutcome,
+) -> Result<CutoverReport, MigrationError> {
+    let mut tx = pool.begin().await?;
+    autopilot_settings::lock_owner(&mut tx, owner).await?;
+    if cutover_state(&mut tx, owner).await?.as_deref() != Some(from) {
+        tx.commit().await?;
+        let refused = if from == "unified" {
+            CutoverOutcome::NotUnified
+        } else {
+            CutoverOutcome::NotPaused
+        };
+        return Ok(outcome(owner, refused, 0));
+    }
+    sqlx::query(
+        "UPDATE social_pipeline_cutover SET state = $2, updated_at = NOW() WHERE twitch_user_id = $1",
+    )
+    .bind(owner)
+    .bind(to)
+    .execute(&mut *tx)
+    .await?;
+    let enabled: Option<bool> = sqlx::query_scalar(
+        "UPDATE social_media_autopilot_settings SET paused = $2, updated_at = NOW()
+         WHERE twitch_user_id = $1 RETURNING enabled",
+    )
+    .bind(owner)
+    .bind(to == "paused")
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let mut report = outcome(owner, done, 0);
+    report.autopilot_enabled = enabled.unwrap_or(false);
+    Ok(report)
+}
+
+async fn activate_on(
+    connection: &mut PgConnection,
+    owner: &str,
+) -> Result<CutoverReport, MigrationError> {
+    let plan = plan(&load_inventory(connection).await?);
+    let reconciliation = plan.reconciliation.get(owner).cloned().unwrap_or_else(
+        || json!({"migration_version": MIGRATION_VERSION, "unresolved": 0, "ready": true}),
+    );
+    let rows: Vec<&PlannedRow> = plan
+        .rows
+        .iter()
+        .filter(|row| row.mapping.twitch_user_id == owner)
+        .collect();
+    for row in &rows {
+        upsert(connection, row).await?;
+    }
+    upsert_cutover(connection, owner, &reconciliation).await?;
+    let unresolved = rows
+        .iter()
+        .filter(|row| row.mapping.disposition == MigrationDisposition::Unresolved)
+        .count();
+    let blocking = rows
+        .iter()
+        .filter(|row| blocks_activation(&row.mapping))
+        .count();
+    if blocking > 0 {
+        return Ok(outcome(owner, CutoverOutcome::NotReady, unresolved));
+    }
+    let enabled = match reconciliation.get("proposed_policy") {
+        Some(proposed) => {
+            apply_policy(connection, owner, serde_json::from_value(proposed.clone())?).await?
+        }
+        None => {
+            autopilot_settings::load_on(connection, owner)
+                .await?
+                .enabled
+        }
+    };
+    sqlx::query(
+        "UPDATE social_pipeline_cutover SET state = 'unified', updated_at = NOW()
+         WHERE twitch_user_id = $1",
+    )
+    .bind(owner)
+    .execute(&mut *connection)
+    .await?;
+    let mut report = outcome(owner, CutoverOutcome::Activated, unresolved);
+    report.autopilot_enabled = enabled;
+    Ok(report)
+}
+
+fn blocks_activation(mapping: &PipelineMigrationMapping) -> bool {
+    mapping.disposition == MigrationDisposition::Unresolved
+        && matches!(
+            mapping.unresolved_reason.as_deref(),
+            Some("in_flight_claim" | "uncertain_effect")
+        )
+}
+
+async fn apply_policy(
+    connection: &mut PgConnection,
+    owner: &str,
+    proposed: ProposedPolicy,
+) -> Result<bool, MigrationError> {
+    let mut settings = autopilot_settings::load_on(connection, owner).await?;
+    if let Some(timezone) = proposed.timezone {
+        settings.timezone = timezone;
+    }
+    settings.target_platforms =
+        autopilot_settings::normalize_platforms(&proposed.target_platforms)?;
+    settings.schedule_slots = sorted(proposed.schedule_slots);
+    settings.enabled = settings.enabled || !settings.target_platforms.is_empty();
+    let mut policy = proposed.policy;
+    for slots in policy.platform_schedule_slots.values_mut() {
+        *slots = sorted(std::mem::take(slots));
+    }
+    settings.publish_mode = if policy.review_policy == ReviewPolicy::Off {
+        PublishMode::FullAuto
+    } else {
+        PublishMode::Review
+    };
+    settings.validate()?;
+    policy.validate()?;
+    sqlx::query(
+        "INSERT INTO social_media_autopilot_settings (twitch_user_id, enabled, publish_mode,
+            timezone, schedule_slots, target_platforms, pipeline_mode, review_policy,
+            metadata_scope, text_defaults, schedule_scope, platform_schedule_slots,
+            distribution_policy, policy_revision)
+         SELECT $1, s.enabled, s.publish_mode, s.timezone, s.schedule_slots, s.target_platforms,
+            p.pipeline_mode, p.review_policy, p.metadata_scope, p.text_defaults, p.schedule_scope,
+            p.platform_schedule_slots, p.distribution_policy, 1
+         FROM jsonb_populate_record(NULL::social_media_autopilot_settings, $2::text::jsonb) s,
+            jsonb_populate_record(NULL::social_media_autopilot_settings, $3::text::jsonb) p
+         ON CONFLICT (twitch_user_id) DO UPDATE SET enabled = EXCLUDED.enabled,
+            publish_mode = EXCLUDED.publish_mode, timezone = EXCLUDED.timezone,
+            schedule_slots = EXCLUDED.schedule_slots, target_platforms = EXCLUDED.target_platforms,
+            pipeline_mode = EXCLUDED.pipeline_mode, review_policy = EXCLUDED.review_policy,
+            metadata_scope = EXCLUDED.metadata_scope, text_defaults = EXCLUDED.text_defaults,
+            schedule_scope = EXCLUDED.schedule_scope,
+            platform_schedule_slots = EXCLUDED.platform_schedule_slots,
+            distribution_policy = EXCLUDED.distribution_policy,
+            policy_revision = social_media_autopilot_settings.policy_revision + 1,
+            updated_at = NOW()",
+    )
+    .bind(owner)
+    .bind(serde_json::to_string(&settings)?)
+    .bind(serde_json::to_string(&policy)?)
+    .execute(&mut *connection)
+    .await?;
+    crate::production_jobs::autopilot_schedule::retime_on(connection, owner, &settings)
+        .await
+        .map_err(|error| MigrationError::Schedule(error.to_string()))?;
+    Ok(settings.enabled)
+}
+
+async fn cutover_state(
+    connection: &mut PgConnection,
+    owner: &str,
+) -> Result<Option<String>, MigrationError> {
+    Ok(
+        sqlx::query_scalar("SELECT state FROM social_pipeline_cutover WHERE twitch_user_id = $1")
+            .bind(owner)
+            .fetch_optional(connection)
+            .await?,
+    )
+}
+
+fn outcome(owner: &str, outcome: CutoverOutcome, unresolved: usize) -> CutoverReport {
+    CutoverReport {
+        twitch_user_id: owner.to_string(),
+        outcome,
+        unresolved,
+        autopilot_enabled: false,
+    }
+}
+
+pub async fn write_barrier_installed(connection: &mut PgConnection) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT to_regprocedure('social_pipeline_legacy_closed(text)') IS NOT NULL")
+        .fetch_one(connection)
+        .await
+}
+
+pub async fn legacy_writer_open(
+    connection: &mut PgConnection,
+    clip_db_id: i64,
+) -> Result<bool, sqlx::Error> {
+    if !write_barrier_installed(connection).await? {
+        return Ok(true);
+    }
+    sqlx::query_scalar("SELECT NOT social_pipeline_legacy_closed(social_clip_pipeline_owner($1))")
+        .bind(clip_db_id)
+        .fetch_one(connection)
+        .await
 }
 
 fn plan_owners(plan: &Plan) -> BTreeSet<String> {
@@ -580,7 +880,10 @@ pub fn plan(inventory: &Inventory) -> Plan {
                 *plan.orphans.entry(table.to_string()).or_default() += 1;
                 continue;
             };
-            if inventory.cutover.get(owner).map(String::as_str) == Some("unified") {
+            if matches!(
+                inventory.cutover.get(owner).map(String::as_str),
+                Some("unified" | "paused")
+            ) {
                 plan.skipped_unified.insert(owner.clone());
                 continue;
             }

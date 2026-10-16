@@ -46,6 +46,8 @@ pub enum ApprovalError {
     /// Deutsch da.
     #[error("only_paused_platforms: {0}")]
     NurPausiertePlattformen(String),
+    #[error("pipeline_unified")]
+    PipelineUnified,
     #[error("db: {0}")]
     Db(#[from] sqlx::Error),
 }
@@ -193,13 +195,22 @@ pub async fn ensure_approval_row(pool: &PgPool, clip_db_id: i32) -> ApprovalReco
         })
 }
 
-/// Setzt den Clip (zurück) auf „wartet auf Freigabe" (Python
-/// `mark_clip_awaiting_approval`; ersetzt den Orchestrator-Stub).
-pub async fn mark_clip_awaiting_approval(pool: &PgPool, clip_db_id: i32) {
-    if !crate::clip_pool::legacy_automatic_allowed(pool, i64::from(clip_db_id))
+async fn legacy_pipeline_open(pool: &PgPool, clip_db_id: i32) -> Result<bool, sqlx::Error> {
+    let mut connection = pool.acquire().await?;
+    crate::pipeline_migration::legacy_writer_open(&mut connection, i64::from(clip_db_id)).await
+}
+
+async fn legacy_automation_allowed(pool: &PgPool, clip_db_id: i32) -> bool {
+    crate::clip_pool::legacy_automatic_allowed(pool, i64::from(clip_db_id))
         .await
         .unwrap_or(false)
-    {
+        && legacy_pipeline_open(pool, clip_db_id)
+            .await
+            .unwrap_or(false)
+}
+
+pub async fn mark_clip_awaiting_approval(pool: &PgPool, clip_db_id: i32) {
+    if !legacy_automation_allowed(pool, clip_db_id).await {
         return;
     }
     ensure_approval_row(pool, clip_db_id).await;
@@ -432,10 +443,7 @@ async fn auto_platforms(pool: &PgPool, clip_db_id: i32) -> Vec<String> {
 /// Wird am Ende der Enrichment-Pipeline aufgerufen. Im Modus `manual` passiert
 /// hier nichts, der Clip bleibt in `awaiting_approval` liegen.
 pub async fn auto_approve_if_allowed(pool: &PgPool, clip_db_id: i32) -> Vec<String> {
-    if !crate::clip_pool::legacy_automatic_allowed(pool, i64::from(clip_db_id))
-        .await
-        .unwrap_or(false)
-    {
+    if !legacy_automation_allowed(pool, clip_db_id).await {
         return Vec::new();
     }
     if !posting_plan::auto_schedule_allowed(pool, i64::from(clip_db_id)).await {
@@ -478,6 +486,9 @@ pub async fn handle_decision(
         return Err(ApprovalError::ClipNotFound(clip_db_id));
     }
     let decision = normalize_decision(decision);
+    if decision == DECISION_APPROVE && !legacy_pipeline_open(pool, clip_db_id).await? {
+        return Err(ApprovalError::PipelineUnified);
+    }
     let selected = normalize_platforms(approved_platforms.iter().cloned());
 
     let mut nicht_eingeplant: Vec<String> = Vec::new();
@@ -613,10 +624,7 @@ async fn enqueue_approved_platform(
 }
 
 pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(String, i64)> {
-    if !crate::clip_pool::legacy_automatic_allowed(pool, i64::from(clip_db_id))
-        .await
-        .unwrap_or(false)
-    {
+    if !legacy_automation_allowed(pool, clip_db_id).await {
         return Vec::new();
     }
     if !clip_exists(pool, clip_db_id).await {

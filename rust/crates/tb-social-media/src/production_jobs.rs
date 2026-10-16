@@ -208,6 +208,7 @@ async fn eligible_head_on(
     let backlog = autopilot_schedule::review_backlog_sql("j.twitch_user_id");
     let limit = autopilot_schedule::REVIEW_LIMIT;
     let scheduled = autopilot_schedule::has_schedule_sql("s");
+    let review = crate::autopilot_publish::EFFECTIVE_REVIEW;
     Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT j.id, j.twitch_user_id FROM social_production_jobs j WHERE j.status = 'queued'
          AND j.attempts < j.max_attempts
@@ -218,7 +219,7 @@ async fn eligible_head_on(
              AND (j.scheduled_at IS NULL OR (j.scheduled_at > clock_timestamp()
                  AND j.scheduled_at <= clock_timestamp() + make_interval(hours => s.lead_time_hours)
                      + CASE WHEN s.lead_time_hours = 0 THEN INTERVAL '1 minute' ELSE INTERVAL '0' END))
-             AND (s.publish_mode = 'full_auto' OR {backlog} < {limit})))
+             AND ({review} <> 'required' OR {backlog} < {limit})))
          ORDER BY j.queue_order, j.id LIMIT 1"
     )))
     .fetch_optional(connection)
@@ -272,8 +273,9 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
         if !settings.enabled
             || settings.paused
             || !scheduled
-            || (settings.publish_mode == autopilot_settings::PublishMode::Review
-                && reviews >= autopilot_schedule::REVIEW_LIMIT)
+            || (reviews >= autopilot_schedule::REVIEW_LIMIT
+                && crate::autopilot_publish::review_mode_on(&mut tx, &owner).await?
+                    == crate::autopilot_publish::ReviewMode::Review)
             || job.scheduled_at.is_some_and(|slot| {
                 slot <= now || slot > autopilot_schedule::production_horizon(&settings, now)
             })

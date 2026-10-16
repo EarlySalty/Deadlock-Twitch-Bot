@@ -1374,7 +1374,9 @@ pub async fn queue_upload_handler(
         .await
         {
             Ok(queue_id) => queued.push(json!({ "platform": platform, "queue_id": queue_id })),
-            Err(_) => queued.push(json!({ "platform": platform, "error": "queue_failed" })),
+            Err(error) => {
+                queued.push(json!({ "platform": platform, "error": queue_error_code(&error) }))
+            }
         }
     }
     let mut forms = Vec::new();
@@ -1402,6 +1404,14 @@ pub async fn queue_upload_handler(
         }
     }
     Json(json!({ "queued": queued, "forms": forms })).into_response()
+}
+
+fn queue_error_code(error: &tb_social_media::clip_queue::QueueError) -> &'static str {
+    match error {
+        tb_social_media::clip_queue::QueueError::PipelineUnified => "pipeline_unified",
+        tb_social_media::clip_queue::QueueError::PipelineBusy => "pipeline_busy",
+        _ => "queue_failed",
+    }
 }
 
 /// Baut den Clip-Fetcher inline aus den Twitch-App-Credentials (`None`, wenn
@@ -3184,6 +3194,11 @@ pub async fn approval_decision_handler(
         Err(ApprovalError::NurPausiertePlattformen(plattformen)) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "only_paused_platforms", "message": plattformen })),
+        )
+            .into_response(),
+        Err(ApprovalError::PipelineUnified) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "pipeline_unified" })),
         )
             .into_response(),
         Err(e) => (

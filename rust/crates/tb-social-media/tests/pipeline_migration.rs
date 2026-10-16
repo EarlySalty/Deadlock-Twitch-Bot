@@ -4,7 +4,10 @@ mod postgres;
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
-use tb_social_media::pipeline_migration::{self, APPROVALS, QUEUE, SCHEDULES};
+use tb_social_media::clip_queue;
+use tb_social_media::pipeline_migration::{
+    self, CutoverCommand, CutoverOutcome, APPROVALS, QUEUE, SCHEDULES,
+};
 
 async fn database() -> (postgres::TestPostgres, PgPool) {
     let db = postgres::TestPostgres::start_with_timescaledb().await;
@@ -336,4 +339,225 @@ async fn legacy_zustand_wird_verlustfrei_und_idempotent_abgebildet() {
 async fn probelauf_ohne_altschema_meldet_fehler_statt_zu_schreiben() {
     let db = postgres::TestPostgres::start().await;
     assert!(pipeline_migration::dry_run(&db.pool).await.is_err());
+}
+
+async fn seed_cutover(pool: &PgPool) {
+    sqlx::raw_sql(
+        r#"
+        INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('gamma', '300'), ('delta', '400'), ('epsilon', '500');
+        INSERT INTO social_media_autopilot_settings (twitch_user_id, enabled, publish_mode, timezone)
+            VALUES ('500', TRUE, 'review', 'Europe/Berlin');
+        INSERT INTO social_media_streamer_settings (streamer_login, approval_mode, timezone, twitch_user_id)
+            VALUES ('gamma', 'veto_window', 'Europe/Berlin', '300'),
+            ('epsilon', 'full_auto', 'Europe/Berlin', '500');
+        INSERT INTO social_media_platform_schedule (streamer_login, platform, auto_post, posts_per_week, max_posts_per_day, post_times, twitch_user_id) VALUES
+            ('gamma', 'youtube', TRUE, 3, 1, '["18:00"]', '300'),
+            ('gamma', 'tiktok', FALSE, 0, 0, '[]', '300');
+        INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login, twitch_user_id, category_key) VALUES
+            (20, 'c20', 'https://clips/c20', 'gamma', '300', 'deadlock'),
+            (21, 'c21', 'https://clips/c21', 'gamma', NULL, 'deadlock'),
+            (22, 'c22', 'https://clips/c22', 'gamma', '300', 'other'),
+            (30, 'c30', 'https://clips/c30', 'delta', '400', 'deadlock'),
+            (31, 'c31', 'https://clips/c31', 'delta', '400', 'deadlock');
+        INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms) VALUES
+            (21, 'awaiting_approval', '["youtube"]'),
+            (22, 'awaiting_approval', '["youtube"]');
+        INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, title, scheduled_at) VALUES
+            (20, 'youtube', 'pending', 'Zugesagt', '2026-01-01T18:00:00Z'),
+            (30, 'youtube', 'processing', 'Läuft', NULL);
+        "#,
+    )
+    .execute(pool)
+    .await
+    .expect("Umstellungsdaten");
+}
+
+async fn legacy_counts(pool: &PgPool) -> (i64, i64, i64) {
+    sqlx::query_as(
+        "SELECT (SELECT count(*) FROM twitch_clips_upload_queue),
+            (SELECT count(*) FROM social_media_clip_approval),
+            (SELECT count(*) FROM twitch_clips_social_media)",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("Zählung")
+}
+
+async fn cutover_state(pool: &PgPool, owner: &str) -> String {
+    sqlx::query_scalar("SELECT state FROM social_pipeline_cutover WHERE twitch_user_id = $1")
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("Umstellungszustand")
+}
+
+async fn legacy_ids(pool: &PgPool) -> Vec<i64> {
+    clip_queue::get_upload_queue(pool, None, "pending", 50, None)
+        .await
+        .into_iter()
+        .map(|item| item.clip_db_id)
+        .collect()
+}
+
+fn rejection(result: Result<sqlx::postgres::PgQueryResult, sqlx::Error>) -> String {
+    result
+        .expect_err("Altschreiber muss abgewiesen werden")
+        .to_string()
+}
+
+#[tokio::test]
+async fn umstellung_schliesst_altschreiber_und_pausiert_ohne_nachholen() {
+    let (_db, pool) = database().await;
+    seed_cutover(&pool).await;
+    let before = legacy_counts(&pool).await;
+
+    let first = pipeline_migration::run_command(&pool, &CutoverCommand::Apply)
+        .await
+        .expect("Umstellung");
+    assert_eq!(first["cutover"].as_array().map(Vec::len), Some(3));
+    let epsilon = first["cutover"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["twitch_user_id"] == "500"))
+        .expect("epsilon");
+    assert_eq!(epsilon["outcome"], "activated");
+    assert_eq!(epsilon["unresolved"], 1);
+    let kept: String = sqlx::query_scalar(
+        "SELECT review_policy FROM social_media_autopilot_settings WHERE twitch_user_id = '500'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Prüfregel");
+    assert_eq!(kept, "required");
+    let gamma = first["cutover"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["twitch_user_id"] == "300"))
+        .expect("gamma");
+    assert_eq!(gamma["outcome"], "activated");
+    assert_eq!(gamma["autopilot_enabled"], true);
+    let delta = first["cutover"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["twitch_user_id"] == "400"))
+        .expect("delta");
+    assert_eq!(delta["outcome"], "not_ready");
+    assert_eq!(cutover_state(&pool, "300").await, "unified");
+    assert_eq!(cutover_state(&pool, "400").await, "shadow");
+    assert_eq!(legacy_counts(&pool).await, before);
+
+    let (review, configured, targets, slots, timezone): (String, bool, String, String, String) =
+        sqlx::query_as(
+            "SELECT review_policy, pipeline_mode IS NOT NULL, target_platforms::text,
+                schedule_slots::text, timezone
+             FROM social_media_autopilot_settings WHERE twitch_user_id = '300'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("Autopilot");
+    assert_eq!(review, "veto_until_deadline");
+    assert!(configured);
+    assert_eq!(targets, r#"["youtube"]"#);
+    let slots: Value = serde_json::from_str(&slots).expect("Slots");
+    let weekdays: Vec<u64> = slots
+        .as_array()
+        .expect("Slots")
+        .iter()
+        .filter_map(|slot| slot["weekday"].as_u64())
+        .collect();
+    assert_eq!(weekdays.len(), 3);
+    assert!(slots
+        .as_array()
+        .expect("Slots")
+        .iter()
+        .all(|slot| slot["local_time"] == "18:00"));
+    assert_eq!(timezone, "Europe/Berlin");
+
+    let closed = rejection(
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES (21, 'tiktok', 'pending')")
+            .execute(&pool)
+            .await,
+    );
+    assert!(closed.contains("nur noch über den Autopiloten"), "{closed}");
+    let approval = rejection(
+        sqlx::query(
+            "UPDATE social_media_clip_approval SET state = 'approved' WHERE clip_db_id = 21",
+        )
+        .execute(&pool)
+        .await,
+    );
+    assert!(
+        approval.contains("nur noch über den Autopiloten"),
+        "{approval}"
+    );
+    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES (31, 'tiktok', 'pending')")
+        .execute(&pool)
+        .await
+        .expect("Kanal im Schattenbetrieb schreibt weiter");
+    sqlx::query("DELETE FROM twitch_clips_upload_queue WHERE clip_id = 31")
+        .execute(&pool)
+        .await
+        .expect("Aufräumen");
+
+    let video: i64 = sqlx::query_scalar(
+        "INSERT INTO social_produced_videos (twitch_user_id, clip_id, mode, status, file_path, duration_ms)
+         VALUES ('300', 20, 'static', 'approved', '/tmp/u17.mp4', 15000) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Version");
+    let busy = rejection(
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, produced_video_id) VALUES (20, 'youtube', 'pending', $1)")
+            .bind(video)
+            .execute(&pool)
+            .await,
+    );
+    assert!(busy.contains("schon eine Veröffentlichung"), "{busy}");
+
+    assert_eq!(legacy_ids(&pool).await, vec![20]);
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'processing' WHERE clip_id = 20")
+        .execute(&pool)
+        .await
+        .expect("Zugesagter Beitrag läuft ab");
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'pending' WHERE clip_id = 20")
+        .execute(&pool)
+        .await
+        .expect("Zugesagter Beitrag bleibt erhalten");
+
+    let map_before = map_fingerprint(&pool).await;
+    let paused = pipeline_migration::pause(&pool, "300")
+        .await
+        .expect("Pause");
+    assert_eq!(paused.outcome, CutoverOutcome::Paused);
+    assert!(legacy_ids(&pool).await.is_empty());
+    let autopilot_paused: bool = sqlx::query_scalar(
+        "SELECT paused FROM social_media_autopilot_settings WHERE twitch_user_id = '300'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Pausenzustand");
+    assert!(autopilot_paused);
+    assert_eq!(
+        pipeline_migration::pause(&pool, "300")
+            .await
+            .expect("Zweite Pause")
+            .outcome,
+        CutoverOutcome::NotUnified
+    );
+    let again = pipeline_migration::apply(&pool)
+        .await
+        .expect("Erneuter Lauf");
+    assert!(again.skipped_unified >= 1);
+    assert_eq!(
+        pipeline_migration::activate(&pool, "300")
+            .await
+            .expect("Aktivierung")
+            .outcome,
+        CutoverOutcome::AlreadyClosed
+    );
+    let resumed = pipeline_migration::resume(&pool, "300")
+        .await
+        .expect("Fortsetzen");
+    assert_eq!(resumed.outcome, CutoverOutcome::Resumed);
+    assert_eq!(cutover_state(&pool, "300").await, "unified");
+    assert_eq!(legacy_ids(&pool).await, vec![20]);
+    assert_eq!(map_fingerprint(&pool).await, map_before);
+    assert_eq!(legacy_counts(&pool).await, before);
 }

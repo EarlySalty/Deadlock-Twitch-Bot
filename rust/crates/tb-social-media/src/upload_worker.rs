@@ -18,7 +18,7 @@ use sqlx::PgPool;
 use crate::approval::is_clip_approved_for;
 use crate::clip_prep_worker::{download_atomic, register_local_file, YtDlpDownloader};
 use crate::clip_queue::{
-    get_upload_queue, reschedule_upload, update_upload_status,
+    get_upload_queue, mark_upload_uncertain, reschedule_upload, update_upload_status,
     update_upload_status_with_visibility, wait_for_connection, UploadQueueItem, VertagungsKonto,
 };
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
@@ -669,6 +669,18 @@ impl UploadTask {
         context: &'static str,
     ) {
         let text = error.to_string();
+        if matches!(error, UploadError::PublishUnconfirmed(_)) {
+            if let Err(db_error) = mark_upload_uncertain(&self.pool, item.id, &text).await {
+                tracing::warn!(
+                    error = %db_error,
+                    queue_id = item.id,
+                    platform = %item.platform,
+                    context,
+                    "Unbestätigter Upload konnte nicht vermerkt werden"
+                );
+            }
+            return;
+        }
         let verzoegerung = verzoegerung_fuer(error);
         // Ein volles Tageskontingent sagt nichts ueber den Clip. Es darf
         // deshalb das Versuchskonto weder pruefen noch verbrauchen: sonst

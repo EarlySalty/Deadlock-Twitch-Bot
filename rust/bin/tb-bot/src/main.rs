@@ -461,6 +461,13 @@ impl PollHooks for SubscriptionPollHooks {
     }
 }
 
+fn social_cutover_command(
+    remaining: &[std::ffi::OsString],
+) -> Option<tb_social_media::pipeline_migration::CutoverCommand> {
+    let arguments: Option<Vec<&str>> = remaining.iter().map(|value| value.to_str()).collect();
+    tb_social_media::pipeline_migration::CutoverCommand::parse(&arguments?)
+}
+
 #[tokio::main]
 async fn main() {
     if print_build_revision() {
@@ -493,7 +500,8 @@ async fn main() {
         return;
     }
     let migrate_token_storage = remaining == ["--migrate-token-storage", "--apply"];
-    if !remaining.is_empty() && !migrate_token_storage {
+    let social_cutover = social_cutover_command(&remaining);
+    if !remaining.is_empty() && !migrate_token_storage && social_cutover.is_none() {
         eprintln!("Der Bot-Start akzeptiert nur --config mit absolutem Dateipfad.");
         std::process::exit(2);
     }
@@ -561,6 +569,18 @@ async fn main() {
         }
     } else {
         tracing::warn!("DB-Migrationen laut Betriebskonfiguration deaktiviert");
+    }
+    if let Some(command) = social_cutover {
+        let result = tb_social_media::pipeline_migration::run_command(&pool, &command).await;
+        pool.close().await;
+        match result {
+            Ok(report) => println!("{report:#}"),
+            Err(error) => {
+                eprintln!("Social-Media-Umstellung nicht abgeschlossen: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
     }
 
     supervisor.spawn(
