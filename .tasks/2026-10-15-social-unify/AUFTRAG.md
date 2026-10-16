@@ -71,3 +71,10 @@ Global AI switch `external_llm_consent` needs an admin UI (set to true in prod o
 - U11: music consent not re-checked inside the effect-start transaction; file hashed twice per claim; non-TikTok start update carries a dummy `$8::text IS NULL`.
 - U11/U12: `recover_stale` overwrites TikTok reason with `interrupted`; 7-day cleanup deletes files of UNCERTAIN rows; `upload_worker::resolve_tiktok_uploader` should reuse `direct_post_uploader`.
 - U17 (decision per "one system"): a clip must never post to TikTok from both a legacy queue row and an autopilot row; the canonical writer wins, legacy writes are rejected or delegated. U11 must not enable dispatch for channels without `social_pipeline_cutover`.
+
+### From U15 (6e011dba4, 2026-10-16)
+- Integrator before deploy: U15 set frontend `PIPELINE_DETAIL_CUTOVER` on; verify it only affects channels with `social_pipeline_cutover` or that the new detail is safe for legacy channels.
+- Backend gap: publish snapshot knows only review and full-auto, no veto review mode (U12/U17).
+- Verify the snapshot actually sends `tiktok_consent` (U11).
+- `publishReviewLanguage.browser` subtest 3 stops on a fixture id mismatch (2203 vs 101); the schedule call is not exercised by any test (U18).
+- U16: SocialMedia.tsx still mounts old video lists, the AI editor's separate clip picker and `TikTokPostDialog`; ScheduleQueuePanel still shows the old queue card; pass `owner` to `PipelineClips` everywhere.
