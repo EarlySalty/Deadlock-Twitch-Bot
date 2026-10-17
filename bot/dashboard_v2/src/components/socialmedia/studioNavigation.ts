@@ -1,4 +1,3 @@
-import type { ScheduleQueueApi } from '@/components/socialmedia/autopilot/schedule-queue';
 import type { SocialMediaView, SocialMediaViewTarget } from './labels';
 import type { QueueStage } from './queuePresentation';
 
@@ -7,7 +6,6 @@ export interface AiEditorMountProps {
   streamer: string;
   clipDbId?: number;
   settingsOnly?: boolean;
-  scheduleApi?: ScheduleQueueApi;
 }
 
 const VIEW_ALIASES: Record<string, SocialMediaView> = {

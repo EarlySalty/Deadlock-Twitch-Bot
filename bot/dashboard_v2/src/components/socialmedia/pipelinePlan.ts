@@ -27,19 +27,16 @@ export const REVIEWS: { id: ReviewPolicy; title: string; text: string }[] = [
   { id: 'veto_until_deadline', title: 'Veto bis Frist', text: 'Geht zur Frist automatisch raus, wenn du nicht stoppst.' },
 ];
 
-export const SCOPES: { id: PolicyScope; title: string; text: string }[] = [
-  { id: 'shared', title: 'Gemeinsam', text: 'Alle Plattformen posten zu denselben Zeiten.' },
-  { id: 'per_platform', title: 'Je Plattform', text: 'Jede Plattform bekommt eigene Zeiten.' },
+export const SCOPES: { id: PolicyScope; title: string }[] = [
+  { id: 'shared', title: 'Gemeinsamer Plan (Standard)' },
+  { id: 'per_platform', title: 'Getrennt je Plattform' },
 ];
+
+export const TAB_ORDER = ['tiktok', 'youtube', 'instagram'];
 
 export const TEXT_SCOPES: { id: PolicyScope; title: string; text: string }[] = [
   { id: 'shared', title: 'Gleich für alle', text: 'Alle Plattformen bekommen dieselben Standardtexte.' },
   { id: 'per_platform', title: 'Je Plattform', text: 'Jede Plattform bekommt eigene Standardtexte. Leere Felder nutzen die gemeinsamen Texte.' },
-];
-
-export const DISTRIBUTIONS: { id: DistributionPolicy; title: string; text: string }[] = [
-  { id: 'same_clip', title: 'Gleicher Clip auf allen Plattformen', text: 'Jeder Clip erscheint auf allen ausgewählten Plattformen, jeweils zum nächsten freien Termin.' },
-  { id: 'independent_clips', title: 'Jede Plattform eigene Clips', text: 'Jede Plattform bekommt ihre eigenen Clips.' },
 ];
 
 export const HOLDS: Record<Exclude<ProductionHold, null>, string> = {
@@ -56,8 +53,6 @@ export const PLAN_EN: Record<string, string> = {
   'Schritt {number}': 'Step {number}',
   'Postingplan': 'Posting plan',
   'Wann soll gepostet werden?': 'When should clips be posted?',
-  'Erweiterte Plattform-Regeln (abweichende Zeiten / unterschiedliche Clips pro Kanal)': 'Advanced platform rules (different times / different clips per channel)',
-  'Vorlauf in Stunden (Standard: 24 h vor Termin vorbereiten)': 'Lead time in hours (default: prepare 24 h before the slot)',
   'Noch keine Plattform für Auto-Posting aktiv. Aktiviere sie unter Einstellungen bei den Konten.': 'No platform is active for auto-posting yet. Turn one on under Settings in the accounts list.',
   'Video-Vorbereitung': 'Video preparation',
   'Wie sollen Clips geschnitten & betextet werden?': 'How should clips be cut and captioned?',
@@ -84,10 +79,7 @@ export const PLAN_EN: Record<string, string> = {
   'Veto bis Frist': 'Veto until deadline',
   'Geht zur Frist automatisch raus, wenn du nicht stoppst.': 'Goes out automatically at the deadline unless you stop it.',
   'Clips, die schon auf deine Freigabe warten, bleiben dort, bis du entscheidest.': 'Clips already waiting for your approval stay there until you decide.',
-  'Gemeinsam': 'Shared',
-  'Alle Plattformen posten zu denselben Zeiten.': 'All platforms post at the same times.',
   'Je Plattform': 'Per platform',
-  'Jede Plattform bekommt eigene Zeiten.': 'Each platform gets its own times.',
   'Zeitzone: {timezone}': 'Time zone: {timezone}',
   'Zeitzone in Verwaltung ändern': 'Change time zone in Settings',
   'Sommerzeit wird berücksichtigt. Verpasste Termine werden nicht nachgeholt.': 'Daylight saving time is handled. Missed times are not made up.',
@@ -96,17 +88,15 @@ export const PLAN_EN: Record<string, string> = {
   '{day} {time} entfernen': 'Remove {day} {time}',
   'Uhrzeit am {day}': 'Time on {day}',
   'Keine Zeit': 'No time',
-  'Welche Zeiten sollen für alle gelten?': 'Which times should apply to all platforms?',
-  'Die Plattformen haben unterschiedliche Zeiten. Wähle aus, welche du behalten willst.': 'The platforms have different times. Choose which ones to keep.',
-  'Zeiten von {platforms}': 'Times from {platforms}',
-  'Keine Zeiten': 'No times',
-  'Abbrechen': 'Cancel',
-  'Verteilung der Clips': 'Clip distribution',
-  'Gleicher Clip auf allen Plattformen': 'Same clip on all platforms',
-  'Jeder Clip erscheint auf allen ausgewählten Plattformen, jeweils zum nächsten freien Termin.': 'Each clip goes out on all selected platforms, each at its next free time.',
-  'Jede Plattform eigene Clips': 'Each platform gets its own clips',
-  'Jede Plattform bekommt ihre eigenen Clips.': 'Each platform gets its own clips.',
   'Nächster Termin': 'Next time',
+  'Gemeinsamer Plan (Standard)': 'Shared plan (default)',
+  'Getrennt je Plattform': 'Separate per platform',
+  'Postingplan-Art': 'Posting plan type',
+  'Plattform wählen': 'Choose platform',
+  'Vorlauf': 'Lead time',
+  'h vor Termin': 'h before the slot',
+  'Unterschiedliche Clips je Plattform posten': 'Post different clips on each platform',
+  'Zeiten für {platform}': 'Times for {platform}',
   'Alle Plattformen': 'All platforms',
   'Noch kein Termin': 'No time yet',
   'Termin nicht verfügbar': 'Time unavailable',
@@ -252,7 +242,8 @@ export function schedulePatch(base: PlanState, draft: PlanDraft): SchedulePatch 
   const patch: SchedulePatch = {};
   if (draft.lead_time_hours !== settings.lead_time_hours) patch.lead_time_hours = draft.lead_time_hours;
   if (!sameJson(normalizeSlots(draft.shared), normalizeSlots(settings.schedule_slots))) patch.schedule_slots = normalizeSlots(draft.shared);
-  if (draft.pipeline_mode !== base.policy.pipeline_mode && (draft.pipeline_mode === 'ai_edit') !== settings.ai_editing_enabled) patch.ai_editing_enabled = draft.pipeline_mode === 'ai_edit';
+  const aiWanted = draft.pipeline_mode !== 'upload';
+  if (draft.pipeline_mode !== base.policy.pipeline_mode && aiWanted !== settings.ai_editing_enabled) patch.ai_editing_enabled = aiWanted;
   return patch;
 }
 
@@ -286,11 +277,13 @@ function editedLists(draft: PlanDraft): WeeklySlot[][] {
   return draft.target_platforms.map(platform => draft.per_platform[platform] ?? []);
 }
 
+const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 export function validateDraft(draft: PlanDraft, text: PlanText): string[] {
   const problems: string[] = [];
   if (!Number.isFinite(draft.lead_time_hours) || draft.lead_time_hours < 0 || draft.lead_time_hours > 720) problems.push(text('Der Vorlauf muss zwischen 0 und 720 Stunden liegen.'));
   for (const slots of editedLists(draft)) {
-    if (slots.some(slot => !/^\d{2}:\d{2}$/.test(slot.local_time))) problems.push(text('Jede Zeit braucht eine Uhrzeit.'));
+    if (slots.some(slot => !TIME_PATTERN.test(slot.local_time))) problems.push(text('Jede Zeit braucht eine Uhrzeit.'));
     const seen = new Set<string>();
     for (const slot of slots) {
       const key = `${slot.weekday}-${slot.local_time}`;
@@ -301,35 +294,29 @@ export function validateDraft(draft: PlanDraft, text: PlanText): string[] {
   return [...new Set(problems)];
 }
 
+export function normalizeTime(value: string): string {
+  const match = value.trim().match(/^(\d{1,2})(?:[:.]?(\d{2}))?$/);
+  if (!match) return value.trim();
+  return `${match[1].padStart(2, '0')}:${match[2] ?? '00'}`;
+}
+
 export function addTime(slots: WeeklySlot[], weekday: number): WeeklySlot[] {
   const used = new Set(slots.filter(slot => slot.weekday === weekday).map(slot => slot.local_time));
   const local_time = SUGGESTED_TIMES.find(time => !used.has(time)) ?? '00:00';
   return [...slots, { weekday, local_time }];
 }
 
-export interface ScopeSwitch {
-  draft: PlanDraft;
-  choices?: { platforms: string[]; slots: WeeklySlot[] }[];
-}
-
-export function switchScope(draft: PlanDraft, scope: PolicyScope): ScopeSwitch {
-  if (scope === draft.schedule_scope) return { draft };
+export function switchScope(draft: PlanDraft, scope: PolicyScope): PlanDraft {
+  if (scope === draft.schedule_scope) return draft;
   if (scope === 'per_platform') {
     const per_platform = { ...draft.per_platform };
     for (const platform of draft.target_platforms) {
       if (!per_platform[platform]?.length) per_platform[platform] = structuredClone(draft.shared);
     }
-    return { draft: { ...draft, schedule_scope: 'per_platform', per_platform } };
+    return { ...draft, schedule_scope: 'per_platform', per_platform };
   }
-  const choices: { platforms: string[]; slots: WeeklySlot[] }[] = [];
-  for (const platform of draft.target_platforms) {
-    const slots = normalizeSlots(draft.per_platform[platform] ?? []);
-    const match = choices.find(choice => sameJson(choice.slots, slots));
-    if (match) match.platforms.push(platform);
-    else choices.push({ platforms: [platform], slots });
-  }
-  if (choices.length > 1) return { draft, choices };
-  return { draft: { ...draft, schedule_scope: 'shared', shared: choices[0]?.slots ?? draft.shared } };
+  const union = normalizeSlots(draft.target_platforms.flatMap(platform => draft.per_platform[platform] ?? []));
+  return { ...draft, schedule_scope: 'shared', shared: union.length ? union : draft.shared };
 }
 
 export interface SaveOutcome {

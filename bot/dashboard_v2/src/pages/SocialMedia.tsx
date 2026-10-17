@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, Calendar, CalendarClock, CheckCircle2, ExternalLink, Film, Layers3, Loader2, Pencil, ShieldAlert, SlidersHorizontal, Crop } from 'lucide-react';
+import { Archive, Calendar, CalendarClock, CheckCircle2, ExternalLink, Film, Layers3, Loader2, Pencil, ShieldAlert, SlidersHorizontal } from 'lucide-react';
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { PlatformCheck } from '@/components/socialmedia/PlatformCheck';
+import { StatusChip } from '@/components/socialmedia/StatusChip';
+import { HintChip } from '@/components/socialmedia/HintChip';
 import { istGesperrt, istStandUnbekannt } from '@/components/socialmedia/kartenZustand';
 import { StudioActivity } from '@/components/socialmedia/StudioActivity';
 import { StudioAutopilotSwitches, StudioHero } from '@/components/socialmedia/StudioHero';
@@ -264,26 +266,21 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
   };
 
   const layoutCards = (
-    <div className="studio-templates-card">
-      <StudioSectionHeading
-        title={t('Vorlagen & Layouts')}
-        icon={Crop}
-        level={3}
-        description={t('Lege den Standard-Ausschnitt für neue Clips fest. Einzelne Clips kannst du weiterhin separat anpassen.')}
-        actions={
-          <button
-            type="button"
-            className="studio-button"
-            disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data}
-            onClick={() => {
-              saveLayoutMutation.reset();
-              setLayoutChoice(layoutForEditor);
-            }}
-          >
-            {t('Gespeichertes Layout öffnen')}
-          </button>
-        }
-      />
+    <div className="studio-templates">
+      <div className="studio-templates-bar">
+        <p className="studio-templates-hint">{t('Lege den Standard-Ausschnitt für neue Clips fest. Einzelne Clips kannst du weiterhin separat anpassen.')}</p>
+        <button
+          type="button"
+          className="studio-button"
+          disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data}
+          onClick={() => {
+            saveLayoutMutation.reset();
+            setLayoutChoice(layoutForEditor);
+          }}
+        >
+          {t('Gespeichertes Layout öffnen')}
+        </button>
+      </div>
       {layoutQuery.isError ? <LadeFehlerHinweis fehler={layoutQuery.error} /> : null}
       <div className="grid gap-4 md:grid-cols-3">
         {(
@@ -419,8 +416,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
             ) : (
               <ScheduleQueuePanel twitchUserId={twitchUserId} api={scheduleApi} onChanged={refreshSchedule} reloadKey={reloadKey}
                 layoutSlot={layoutCards}
-                aiOptionsSlot={AiEditor && twitchUserId ? <AiPlanOptions channel={twitchUserId} onOpenSettings={() => openView('einstellungen')} /> : undefined}
-                reviewStatusSlot={twitchUserId ? <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="mode" onChanged={refreshSchedule} reloadKey={reloadKey} /> : undefined} />
+                aiOptionsSlot={AiEditor && twitchUserId ? <AiPlanOptions channel={twitchUserId} onOpenSettings={() => openView('einstellungen')} /> : undefined} />
             )}
           </div>
         ) : activeView === 'vod' ? (
@@ -456,7 +452,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                 onToggleTarget={(platform, active) => targetPlatformMutation.mutate({ platform, active })}
               />
               {AiEditor && twitchUserId && <section className="studio-card studio-production-card" aria-labelledby="studio-production-title">
-                <AiEditor twitchUserId={twitchUserId} streamer={streamer} settingsOnly scheduleApi={scheduleApi} />
+                <AiEditor twitchUserId={twitchUserId} streamer={streamer} settingsOnly />
               </section>}
             </div>
             {twitchUserId && <section className="studio-card"><PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="notifications" onChanged={refreshSchedule} reloadKey={reloadKey} /></section>}
@@ -725,55 +721,61 @@ function PlatformConnectionsCard({
             : null;
 
           let zeile: string;
-          let tonKlasse = 'text-text-secondary';
+          let ton: 'neutral' | 'success' | 'warning' | 'danger' = 'neutral';
+          let detail: string | null = null;
           if (standUnbekannt) {
             zeile = isLoading ? t('Wird geladen') : t('Zustand unbekannt');
-            tonKlasse = ladeFehler ? 'text-danger' : 'text-text-secondary';
+            ton = ladeFehler ? 'danger' : 'neutral';
           } else if (!status) {
             zeile = t('Zustand unbekannt');
           } else if (!uploadAvailable) {
-            zeile = t(status?.capabilities.reason ?? 'Noch nicht verfügbar');
+            zeile = t('Noch nicht verfügbar');
+            detail = status.capabilities.reason ? t(status.capabilities.reason) : null;
           } else if (!connected) {
             zeile = t('nicht verbunden');
           } else if (abgelaufen) {
-            zeile = t('Zugang abgelaufen, bitte neu verbinden');
-            tonKlasse = 'text-warning';
+            zeile = t('Abgelaufen');
+            detail = t('Zugang abgelaufen, bitte neu verbinden');
+            ton = 'warning';
           } else if (sammelverbindung) {
-            zeile = t('Dieser Kanal nutzt ein gemeinsames Konto. Verbinde ein eigenes Konto, um es hier verwalten zu können.');
-            tonKlasse = 'text-warning';
+            zeile = t('Gemeinsames Konto');
+            detail = t('Dieser Kanal nutzt ein gemeinsames Konto. Verbinde ein eigenes Konto, um es hier verwalten zu können.');
+            ton = 'warning';
+          } else if (ablauf) {
+            zeile = t('Neu verbinden bis {datum}', { datum: ablauf });
+            ton = 'warning';
           } else {
-            zeile = status?.username ?? t('verbunden');
+            zeile = t('Verbunden');
+            ton = 'success';
           }
+          const autoPostingBlocker: AutoPostingBlocker = standUnbekannt ? 'unknown' : !uploadAvailable ? 'no_upload' : connected && !abgelaufen ? null : 'disconnected';
+          const autoPostingAktiv = targetPlatforms?.includes(platform) ?? false;
+          const autoPostingHinweis = autoPostingHint(autoPostingBlocker, autoPostingAktiv);
+          const hinweise = [
+            connected && status?.username ? status.username : null,
+            detail,
+            t(authorizationFact(status, isLoading, Boolean(ladeFehler)).label),
+            !standUnbekannt && connected && !abgelaufen && !ablauf && status?.automatically_renewed ? t('Verlängert sich automatisch.') : null,
+            !standUnbekannt && platform === 'tiktok' ? t('TikTok-Statistiken sind in dieser Beta nicht verfügbar.') : null,
+            autoPostingHinweis ? t(autoPostingHinweis) : null,
+          ].filter((hinweis): hinweis is string => Boolean(hinweis));
 
           return (
             <PlatformCheck key={platform} platform={platform}>
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-ui-text">
-                  {PLATFORM_LABELS[platform] ?? platform}
-                </div>
-                <div className={`text-xs ${tonKlasse}`}>{zeile}</div>
-                <p className="mt-1 text-xs text-text-secondary">{t(authorizationFact(status, isLoading, Boolean(ladeFehler)).label)}</p>
-                {!standUnbekannt && connected && !abgelaufen && (
-                  <div className="text-[11px] text-text-secondary">
-                    {ablauf
-                      ? t('Bitte bis {datum} neu verbinden.', { datum: ablauf })
-                      : status?.automatically_renewed
-                        ? t('Verlängert sich automatisch.')
-                        : null}
-                  </div>
-                )}
-                {!standUnbekannt && platform === 'tiktok' && (
-                  <p className="mt-1 text-xs text-text-secondary">{t('TikTok-Statistiken sind in dieser Beta nicht verfügbar.')}</p>
-                )}
+              <div className="studio-connection-name">
+                <span className="text-sm font-medium text-ui-text">{PLATFORM_LABELS[platform] ?? platform}</span>
+                <StatusChip tone={ton}>{zeile}</StatusChip>
+                {hinweise.length > 0 && <HintChip hint={hinweise.join(' · ')} />}
+              </div>
+              <div className="studio-connection-actions">
                 <AutoPostingSwitch
-                  active={targetPlatforms?.includes(platform) ?? false}
-                  blocker={standUnbekannt ? 'unknown' : !uploadAvailable ? 'no_upload' : connected && !abgelaufen ? null : 'disconnected'}
+                  active={autoPostingAktiv}
+                  blocker={autoPostingBlocker}
                   disabled={gesperrt || targetPlatforms === null || targetSaving}
                   onChange={(active) => onToggleTarget(platform, active)}
                 />
-              </div>
               {standUnbekannt ? null : connected && !status?.uses_global_fallback ? (
-                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <>
                   {abgelaufen && uploadAvailable && (
                     <a href={oauthStartUrl(platform, twitchUserId)} className="rounded-lg border border-ui-accent-strong/25 px-3 py-1.5 text-sm text-ui-accent-ink">
                       {t('Neu verbinden')}
@@ -793,7 +795,7 @@ function PlatformConnectionsCard({
                   >
                     {t('Trennen')}
                   </button>
-                </div>
+                </>
               ) : !uploadAvailable ? null : (
                 <a
                   href={oauthStartUrl(platform, twitchUserId)}
@@ -802,6 +804,7 @@ function PlatformConnectionsCard({
                   {status?.uses_global_fallback ? t('Eigenes Konto verbinden') : abgelaufen ? t('Neu verbinden') : t('Verbinden')}
                 </a>
               )}
+              </div>
             </PlatformCheck>
           );
         })}
@@ -830,10 +833,9 @@ function AutoPostingSwitch({ active, blocker, disabled, onChange }: {
   const t = useT();
   const hint = autoPostingHint(blocker, active);
   return (
-    <label className="studio-switch studio-target-switch">
+    <label className="studio-switch studio-target-switch" title={hint ? t(hint) : undefined}>
       <input type="checkbox" role="switch" checked={active} disabled={disabled || (blocker !== null && !active)} onChange={(event) => onChange(event.target.checked)} />
-      <span>{t('Für Auto-Posting aktiv')}</span>
-      {hint && <small>{t(hint)}</small>}
+      <span>{t('Auto-Posting')}</span>
     </label>
   );
 }
