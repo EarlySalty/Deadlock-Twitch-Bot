@@ -7,7 +7,7 @@ async fn player_direct_verified_link_wins_without_discord_or_name_search() {
     let result = lookup(&server).twitch_reply(&db.pool, &target(), true).await;
     assert!(result.contains("Rang von Viewer: Oracle 5"), "{result}");
     assert!(!result.contains("unbestätigt"));
-    assert!(server.received_requests().await.unwrap().iter().all(|r| r.url.path().starts_with("/v1/")));
+    assert!(server.received_requests().await.unwrap().iter().all(|r| r.url.path().starts_with("/v1/players/42") || r.url.path().starts_with("/v1/assets") || r.url.query().unwrap_or_default().contains("steam_id=76561197960265770")));
 }
 #[tokio::test]
 async fn player_disconnect_blocks_all_fallback_and_cached_rank_until_fresh_connect() {
