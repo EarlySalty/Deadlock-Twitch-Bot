@@ -1869,8 +1869,8 @@ select.studio-select {
 .social-studio .studio-clip-media, .social-studio .import-pool-thumb { aspect-ratio: 9 / 16; width: 90px; min-height: 160px; max-height: 200px; }
 .social-studio .studio-clip-media img, .social-studio .studio-clip-media video, .social-studio .import-pool-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .studio-platform-check { display: flex; gap: 12px; align-items: center; padding-block: 10px; border-bottom: 1px solid var(--color-border); }
-.studio-platform-check-content { display: flex; flex: 1; gap: 12px; align-items: center; justify-content: space-between; min-width: 0; }
-.studio-connection-name { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.studio-platform-check-content { display: flex; flex: 1; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; min-width: 0; }
+.studio-connection-name { display: flex; flex: 1 1 13rem; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 13rem; }
 .studio-connection-name .studio-hint-tooltip { left: 0; right: auto; }
 .studio-connection-name .studio-status-chip { white-space: nowrap; }
 .studio-connection-actions { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: 8px; }
