@@ -17,20 +17,22 @@ function reasonText(reasons: string[], labels: Record<string, string>, t: Transl
   return known.length > 0 ? known.map(label => t(label)).join(' ') : reasons[0] ?? null;
 }
 
-function automaticRejection(status: string, failedStatus: string, reasons: string[]): boolean {
-  return status === failedStatus || reasons.length > 0;
+const MANUAL_DESTINATION_REASONS = new Set(['revision_replaced', 'not_approved_at_execution']);
+
+function automaticDestinationDiscard(state: string, reason: string | null | undefined): boolean {
+  return state === 'failed' || (state === 'discarded' && Boolean(reason) && !MANUAL_DESTINATION_REASONS.has(reason ?? ''));
 }
 
 export function discardedItems(schedule: ScheduleQueueSnapshot | undefined, publish: PublishSnapshot | undefined, clips: SocialClipMitPosting[] | undefined, t: Translate): DiscardedItem[] {
-  const jobs = (schedule?.jobs ?? []).filter(job => (job.status === 'failed' || job.status === 'cancelled') && automaticRejection(job.status, 'failed', job.review_reasons)).map(job => ({
+  const jobs = (schedule?.jobs ?? []).filter(job => job.status === 'failed').map(job => ({
     key: `job-${job.id}`, title: job.clip_title || t('Clip {id}', { id: job.clip_id }),
     reason: reasonText(job.review_reasons, HOLD_REASONS, t) ?? (job.last_error ? t(job.last_error) : t('Produktion fehlgeschlagen')),
   }));
   const videos = (publish?.videos ?? []).flatMap(video => {
     const title = clipName(clips, video.clip_id, t('Video {id}', { id: video.id }));
-    const own = ['rejected', 'failed'].includes(video.status) && automaticRejection(video.status, 'failed', video.review_reasons) ? [{ key: `video-${video.id}`, title,
+    const own = video.status === 'failed' ? [{ key: `video-${video.id}`, title,
       reason: reasonText(video.review_reasons, HOLD_REASONS, t) ?? t('Video fehlgeschlagen') }] : [];
-    const destinations = (video.event?.destinations ?? []).filter(destination => destination.state === 'failed' || (destination.state === 'discarded' && destination.reason)).map(destination => ({
+    const destinations = (video.event?.destinations ?? []).filter(destination => automaticDestinationDiscard(destination.state, destination.reason)).map(destination => ({
       key: `destination-${video.id}-${destination.platform}`, title,
       reason: destination.reason ? t(DESTINATION_REASONS[destination.reason] ?? destination.reason) : t('Veröffentlichung fehlgeschlagen'),
     }));
