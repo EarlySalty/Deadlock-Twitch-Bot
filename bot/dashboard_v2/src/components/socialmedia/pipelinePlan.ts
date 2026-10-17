@@ -108,6 +108,7 @@ export const PLAN_EN: Record<string, string> = {
   'Gespeicherten Stand laden': 'Load saved settings',
   'Jede Zeit braucht eine Uhrzeit.': 'Every time needs a clock time.',
   '{day} {time} ist doppelt.': '{day} {time} is listed twice.',
+  'Die Zeiten aller Plattformen wurden zusammengeführt. Mit „Verwerfen“ kannst du das rückgängig machen.': 'The times of all platforms were merged. Use “Discard” to undo this.',
   'Der Vorlauf muss zwischen 0 und 720 Stunden liegen.': 'Lead time must be between 0 and 720 hours.',
   'Bitte melde dich erneut an.': 'Please sign in again.',
   'Du hast keinen Zugriff auf diesen Kanal.': 'You do not have access to this channel.',
@@ -242,7 +243,7 @@ export function schedulePatch(base: PlanState, draft: PlanDraft): SchedulePatch 
   const patch: SchedulePatch = {};
   if (draft.lead_time_hours !== settings.lead_time_hours) patch.lead_time_hours = draft.lead_time_hours;
   if (!sameJson(normalizeSlots(draft.shared), normalizeSlots(settings.schedule_slots))) patch.schedule_slots = normalizeSlots(draft.shared);
-  const aiWanted = draft.pipeline_mode !== 'upload';
+  const aiWanted = draft.pipeline_mode === 'ai_edit';
   if (draft.pipeline_mode !== base.policy.pipeline_mode && aiWanted !== settings.ai_editing_enabled) patch.ai_editing_enabled = aiWanted;
   return patch;
 }
@@ -272,26 +273,42 @@ export function isDirty(base: PlanState, draft: PlanDraft): boolean {
   return Object.keys(schedulePatch(base, draft)).length > 0 || policyChange(base, draft) !== null;
 }
 
-function editedLists(draft: PlanDraft): WeeklySlot[][] {
-  if (draft.schedule_scope === 'shared') return [draft.shared];
-  return draft.target_platforms.map(platform => draft.per_platform[platform] ?? []);
+function editedLists(draft: PlanDraft): { platform?: string; slots: WeeklySlot[] }[] {
+  if (draft.schedule_scope === 'shared') return [{ slots: draft.shared }];
+  return draft.target_platforms.map(platform => ({ platform, slots: draft.per_platform[platform] ?? [] }));
 }
 
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+function slotProblems(slots: WeeklySlot[], text: PlanText): string[] {
+  const problems: string[] = [];
+  if (slots.some(slot => !TIME_PATTERN.test(slot.local_time))) problems.push(text('Jede Zeit braucht eine Uhrzeit.'));
+  const seen = new Set<string>();
+  for (const slot of slots) {
+    const key = `${slot.weekday}-${slot.local_time}`;
+    if (seen.has(key)) problems.push(text('{day} {time} ist doppelt.', { day: text(WEEKDAYS[slot.weekday - 1]), time: slot.local_time }));
+    seen.add(key);
+  }
+  return problems;
+}
+
+export function planPlatformLabel(platform: string): string {
+  return PLAN_PLATFORMS.find(item => item.id === platform)?.label ?? platform;
+}
+
 export function validateDraft(draft: PlanDraft, text: PlanText): string[] {
   const problems: string[] = [];
   if (!Number.isFinite(draft.lead_time_hours) || draft.lead_time_hours < 0 || draft.lead_time_hours > 720) problems.push(text('Der Vorlauf muss zwischen 0 und 720 Stunden liegen.'));
-  for (const slots of editedLists(draft)) {
-    if (slots.some(slot => !TIME_PATTERN.test(slot.local_time))) problems.push(text('Jede Zeit braucht eine Uhrzeit.'));
-    const seen = new Set<string>();
-    for (const slot of slots) {
-      const key = `${slot.weekday}-${slot.local_time}`;
-      if (seen.has(key)) problems.push(text('{day} {time} ist doppelt.', { day: text(WEEKDAYS[slot.weekday - 1]), time: slot.local_time }));
-      seen.add(key);
+  for (const { platform, slots } of editedLists(draft)) {
+    for (const problem of slotProblems(slots, text)) {
+      problems.push(platform ? `${planPlatformLabel(platform)}: ${problem}` : problem);
     }
   }
   return [...new Set(problems)];
+}
+
+export function invalidPlatforms(draft: PlanDraft): string[] {
+  return editedLists(draft).flatMap(({ platform, slots }) => platform && slotProblems(slots, value => value).length ? [platform] : []);
 }
 
 export function normalizeTime(value: string): string {
@@ -317,6 +334,12 @@ export function switchScope(draft: PlanDraft, scope: PolicyScope): PlanDraft {
   }
   const union = normalizeSlots(draft.target_platforms.flatMap(platform => draft.per_platform[platform] ?? []));
   return { ...draft, schedule_scope: 'shared', shared: union.length ? union : draft.shared };
+}
+
+export function scopeMergeChanges(draft: PlanDraft): boolean {
+  if (draft.schedule_scope !== 'per_platform') return false;
+  const merged = switchScope(draft, 'shared').shared;
+  return draft.target_platforms.some(platform => !sameJson(normalizeSlots(draft.per_platform[platform] ?? []), normalizeSlots(merged)));
 }
 
 export interface SaveOutcome {

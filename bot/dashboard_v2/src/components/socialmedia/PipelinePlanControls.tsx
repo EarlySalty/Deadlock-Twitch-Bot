@@ -4,8 +4,8 @@ import { useLanguage } from '@/context/LanguageContext';
 import { platformIconUrl } from './platformIcon';
 import type { PolicyScope, ScheduleQueueApi, WeeklySlot } from './autopilot/schedule-queue/api';
 import {
-  AI_MODES, HOLDS, PATHS, PLAN_PLATFORMS, REVIEWS, SCOPES, SHARED_TEXT, TAB_ORDER, TEXT_SCOPES, WEEKDAYS, addTime, failureText, isDirty, loadPlan, normalizeTime, planDraft, planText,
-  savePlan, switchScope, validateDraft, type PlanDraft, type PlanState, type PlanText, type TextDraft,
+  AI_MODES, HOLDS, PATHS, REVIEWS, SCOPES, SHARED_TEXT, TAB_ORDER, TEXT_SCOPES, WEEKDAYS, addTime, failureText, invalidPlatforms, isDirty, loadPlan, normalizeTime, planDraft,
+  planPlatformLabel as platformLabel, planText, savePlan, scopeMergeChanges, switchScope, validateDraft, type PlanDraft, type PlanState, type PlanText, type TextDraft,
 } from './pipelinePlan';
 
 function slotLabel(value: string | undefined, timezone: string, locale: string, text: PlanText): string {
@@ -18,10 +18,6 @@ function slotLabel(value: string | undefined, timezone: string, locale: string, 
   } catch {
     return text('Termin nicht verfügbar');
   }
-}
-
-function platformLabel(platform: string): string {
-  return PLAN_PLATFORMS.find(item => item.id === platform)?.label ?? platform;
 }
 
 export interface PipelinePlanControlsProps {
@@ -45,6 +41,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
   const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState('');
+  const [merged, setMerged] = useState(false);
   const dirtyRef = useRef(false);
   const savingRef = useRef(false);
   const changed = useRef(onChanged);
@@ -66,6 +63,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
       if (signal?.aborted || savingRef.current || (dirtyRef.current && !force)) return;
       setBase(state);
       setDraft(planDraft(state));
+      setMerged(false);
       setLoadError('');
       if (force) setSaveError('');
     } catch (failure) {
@@ -108,11 +106,15 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
       return;
     }
     setDraft(planDraft(outcome.state));
+    setMerged(false);
     setNotice('Gespeichert.');
     changed.current?.();
   }
 
-  const scheduleScope = (scope: PolicyScope) => edit(switchScope(draft, scope));
+  const scheduleScope = (scope: PolicyScope) => {
+    setMerged(scope === 'shared' && scopeMergeChanges(draft));
+    edit(switchScope(draft, scope));
+  };
 
   const aiPath = draft.pipeline_mode !== 'upload';
   const choosePath = (path: 'template' | 'ai') => {
@@ -121,7 +123,8 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
   };
 
   const tabs = TAB_ORDER.filter(platform => draft.target_platforms.includes(platform)).concat(draft.target_platforms.filter(platform => !TAB_ORDER.includes(platform)));
-  const activeTab = tabs.includes(tab) ? tab : tabs[0];
+  const invalid = invalidPlatforms(draft);
+  const activeTab = tabs.includes(tab) ? tab : invalid[0] ?? tabs[0];
   const barShown = dirty || saving || saveError !== '';
 
   return <section className="schedule-queue pp-plan" aria-labelledby={`${id}-heading`} data-unsaved={dirty || saving ? 'true' : undefined} data-saving={saving ? 'true' : undefined}>
@@ -142,6 +145,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
             </label>
             <NextSlots base={base} targets={draft.target_platforms} locale={locale} text={text} />
           </div>
+          {merged && draft.schedule_scope === 'shared' && <p className="sq-help pp-merge-note">{text('Die Zeiten aller Plattformen wurden zusammengeführt. Mit „Verwerfen“ kannst du das rückgängig machen.')}</p>}
           {!draft.target_platforms.length && <p className="sq-help">{text('Noch keine Plattform für Auto-Posting aktiv. Aktiviere sie unter Einstellungen bei den Konten.')}</p>}
           {draft.schedule_scope === 'shared'
             ? <WeekEditor label={text('Gemeinsamer Plan (Standard)')} slots={draft.shared} text={text} onChange={shared => edit({ shared })} />
@@ -156,7 +160,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
                   onChange={slots => edit({ per_platform: { ...draft.per_platform, [activeTab]: slots } })} />
               </div>
             </div>}
-          {draft.target_platforms.length > 1 && <div className="sq-toggles pp-distribution">
+          {(draft.target_platforms.length > 1 || draft.distribution_policy === 'independent_clips' || base.policy.distribution_policy === 'independent_clips') && <div className="sq-toggles pp-distribution">
             <label><input type="checkbox" role="switch" checked={draft.distribution_policy === 'independent_clips'} onChange={event => edit({ distribution_policy: event.target.checked ? 'independent_clips' : 'same_clip' })} />{text('Unterschiedliche Clips je Plattform posten')}</label>
           </div>}
           <p className="sq-help">{text('Sommerzeit wird berücksichtigt. Verpasste Termine werden nicht nachgeholt.')}</p>
@@ -181,7 +185,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
             hint={base.policy.review_policy !== 'off' && draft.review_policy !== base.policy.review_policy ? text('Clips, die schon auf deine Freigabe warten, bleiben dort, bis du entscheidest.') : undefined} />
         </Step>
       </fieldset>
-      {notice && !barShown && <p className="sq-notice pp-toast" role="status">{text(notice)}</p>}
+      <p className="sq-notice pp-toast" role="status">{notice && !barShown ? text(notice) : ''}</p>
       {barShown && <footer className="pp-footer">
         <div className="pp-messages" aria-live="polite">
           {problems.map(problem => <p className="sq-error" key={problem}>{problem}</p>)}
@@ -190,7 +194,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
         </div>
         <div className="sq-actions">
           {saveError && <button type="button" disabled={saving} onClick={() => { void reload(true); }}>{text('Gespeicherten Stand laden')}</button>}
-          <button type="button" disabled={!dirty || saving} onClick={() => { setDraft(planDraft(base)); setSaveError(''); }}>{text('Verwerfen')}</button>
+          <button type="button" disabled={!dirty || saving} onClick={() => { setDraft(planDraft(base)); setMerged(false); setSaveError(''); }}>{text('Verwerfen')}</button>
           <button className="sq-primary" type="submit" disabled={!dirty || saving || problems.length > 0}>{text(saving ? 'Wird gespeichert' : 'Speichern')}</button>
         </div>
       </footer>}

@@ -21,7 +21,7 @@ import './publish-review.css';
 
 export interface PublishReviewPanelProps {
   twitchUserId: string;
-  section?: 'all' | 'videos' | 'mode' | 'notifications';
+  section?: 'all' | 'videos' | 'notifications';
   client?: PublishReviewClient;
   onChanged?: () => void;
   onOpenVideo?: (videoId: number) => void;
@@ -123,14 +123,14 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
   }
 
   return <section className="publish-review" aria-label={t('Freigabe und Veröffentlichung')} aria-busy={busy} data-unsaved={preferencesDirty || busy ? 'true' : undefined} data-saving={busy ? 'true' : undefined}>
-    <StudioSectionHeading title={t(section === 'videos' ? 'Fertige Videos' : section === 'mode' ? 'Aktuell wirksam' : section === 'notifications' ? 'Benachrichtigungen & Aufbewahrung' : 'Freigabe & Veröffentlichung')} icon={ShieldCheck}
-      description={section === 'mode' || section === 'notifications' ? undefined : t('Prüfe die fertige Videoversion. Eine Kontoverbindung ist noch keine Freigabe.')} />
+    <StudioSectionHeading title={t(section === 'videos' ? 'Fertige Videos' : section === 'notifications' ? 'Benachrichtigungen & Aufbewahrung' : 'Freigabe & Veröffentlichung')} icon={ShieldCheck}
+      description={section === 'notifications' ? undefined : t('Prüfe die fertige Videoversion. Eine Kontoverbindung ist noch keine Freigabe.')} />
     {error && <p role="alert" className="publish-error">{'raw' in error ? error.raw : t(error.key, error.params)}</p>}
     {error && !snapshot && <button type="button" disabled={busy} onClick={() => setRetry((value) => value + 1)}>{t('Erneut laden')}</button>}
     {message && <p role="status" className="publish-message">{t(message.key, message.params)}</p>}
     {!snapshot && !error && <p role="status">{t('Veröffentlichungsdaten werden geladen.')}</p>}
     {snapshot && <>
-      {(section === 'all' || section === 'mode') && <div className="publish-mode-row">
+      {section === 'all' && <div className="publish-mode-row">
         <div><strong>{t(reviewModeLabels[reviewMode(snapshot)].title)}</strong><p>{t(reviewModeLabels[reviewMode(snapshot)].text)}</p></div>
       </div>}
       {snapshot.settings.paused && <p className="publish-note" role="status">{t('Pausiert. Keine neuen geplanten Veröffentlichungen. Deine Warteschlange bleibt erhalten.')}</p>}

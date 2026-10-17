@@ -1874,6 +1874,7 @@ select.studio-select {
 .studio-connection-name .studio-hint-tooltip { left: 0; right: auto; }
 .studio-connection-name .studio-status-chip { white-space: nowrap; }
 .studio-connection-actions { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: 8px; }
+.studio-connection-blocker { flex-basis: 100%; margin: 0; }
 .studio-status-chip { display: inline-flex; border: 1px solid currentColor; border-radius: 6px; padding: 3px 8px; font-size: 12px; font-weight: 600; }
 .studio-status-chip[data-tone='neutral'] { color: var(--color-text-secondary); }
 .studio-status-chip[data-tone='success'] { color: var(--color-success); }

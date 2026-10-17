@@ -50,7 +50,6 @@ export const SOCIAL_STUDIO_EN: Record<string, string> = {
   'Mit KI bearbeiten': 'Edit with AI',
   'Fertige Videos': 'Produced videos',
   'Veröffentlichungsmodus': 'Publication mode',
-  'Aktuell wirksam': 'Currently in effect',
   'Clips': 'Clips',
   'Aus der Warteschlange entfernen': 'Remove from queue',
   'Fertige Videos ohne Prüfung veröffentlichen': 'Publish produced videos without review',

@@ -114,5 +114,6 @@
 .pp-footer .sq-actions { margin-top: 0; }
 .schedule-queue .pp-footer button { min-height: 36px; }
 .schedule-queue .pp-toast { margin: 12px 0 0; }
+.schedule-queue .pp-toast:empty { margin: 0; }
 @media (max-width: 900px) { .pp-wide { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 420px) { .pp-step { padding: 14px; } .pp-path-body { padding-left: 10px; } .pp-day { grid-template-columns: minmax(0, 1fr); gap: 4px; } .pp-compact { grid-template-columns: minmax(0, 1fr); } .pp-footer .sq-actions { width: 100%; } .pp-footer .sq-actions button { flex: 1 1 auto; } .pp-segment { width: 100%; } .pp-segment label { flex: 1 1 auto; justify-content: center; } }

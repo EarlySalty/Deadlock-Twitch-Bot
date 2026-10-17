@@ -16,6 +16,8 @@ import type { PipelineSource } from '../src/components/socialmedia/pipelineApi';
 import type { SocialClipMitPosting } from '../src/api/socialMedia';
 import { upcomingTerms, upcomingTermView } from '../src/components/socialmedia/upcomingTerms';
 import { DEFAULT_LAYOUT } from '../src/types/socialMedia';
+import { createScheduleQueueFixture } from '../src/components/socialmedia/autopilot/schedule-queue/fixtures';
+import { planDraft, planText, schedulePatch, scopeMergeChanges, switchScope, validateDraft } from '../src/components/socialmedia/pipelinePlan';
 import { approvalFact, authorizationFact, clipPlatformPresentation, connectionFact, publicationFact, transferFact } from '../src/components/socialmedia/platformPresentation';
 import { socialStageFromSearch, socialViewFromSearch, socialViewSearch } from '../src/components/socialmedia/studioNavigation';
 import { getPreviewSocialResponse, SOCIAL_CLIPS_FIXTURE, SOCIAL_PLATFORMS_FIXTURE } from '../src/preview/fixtures';
@@ -360,4 +362,28 @@ test('Von KI aussortiert zählt nur automatische Ablehnungen, keine Handaktionen
   const clips = [{ clip_db_id: 99, clip_id: 'x', title: 'Hand', discarded_at: '2026-10-01T10:00:00Z' }] as unknown as SocialClipMitPosting[];
   const keys = discardedItems(schedule, publish, clips, key => key).map(item => item.key);
   assert.deepEqual(keys, ['job-1', 'video-12', 'destination-13-tiktok', 'destination-13-instagram']);
+});
+
+test('nur KI-Schnitt schaltet die KI-Bearbeitung ein, Nur KI-Texte und Vorlage nicht', () => {
+  const fixture = createScheduleQueueFixture();
+  const editing = (enabled: boolean, from: 'upload' | 'upload_text' | 'ai_edit') => {
+    const snapshot = fixture.snapshot();
+    const base = { snapshot: { ...snapshot, settings: { ...snapshot.settings, ai_editing_enabled: enabled } }, policy: { ...fixture.policy(), pipeline_mode: from } };
+    return (mode: 'upload' | 'upload_text' | 'ai_edit') => schedulePatch(base, { ...planDraft(base), pipeline_mode: mode }).ai_editing_enabled;
+  };
+  assert.equal(editing(false, 'upload')('upload_text'), undefined);
+  assert.equal(editing(false, 'upload')('ai_edit'), true);
+  assert.equal(editing(true, 'ai_edit')('upload_text'), false);
+  assert.equal(editing(true, 'ai_edit')('upload'), false);
+});
+
+test('Wechsel auf gemeinsamen Plan meldet nur echte Zusammenführung, Fehler nennen die Plattform', () => {
+  const fixture = createScheduleQueueFixture();
+  const snapshot = fixture.snapshot();
+  const base = { snapshot: { ...snapshot, settings: { ...snapshot.settings, target_platforms: ['tiktok', 'youtube'] } }, policy: fixture.policy() };
+  const split = switchScope(planDraft(base), 'per_platform');
+  assert.equal(scopeMergeChanges(split), false);
+  const extra = { ...split, per_platform: { ...split.per_platform, tiktok: [...split.per_platform.tiktok, { weekday: 2, local_time: '08:00' }, { weekday: 2, local_time: '08:00' }] } };
+  assert.equal(scopeMergeChanges(extra), true);
+  assert.deepEqual(validateDraft(extra, planText('de')), ['TikTok: Dienstag 08:00 ist doppelt.']);
 });

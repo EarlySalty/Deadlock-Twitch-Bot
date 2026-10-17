@@ -757,7 +757,6 @@ function PlatformConnectionsCard({
             t(authorizationFact(status, isLoading, Boolean(ladeFehler)).label),
             !standUnbekannt && connected && !abgelaufen && !ablauf && status?.automatically_renewed ? t('Verlängert sich automatisch.') : null,
             !standUnbekannt && platform === 'tiktok' ? t('TikTok-Statistiken sind in dieser Beta nicht verfügbar.') : null,
-            autoPostingHinweis ? t(autoPostingHinweis) : null,
           ].filter((hinweis): hinweis is string => Boolean(hinweis));
 
           return (
@@ -771,6 +770,7 @@ function PlatformConnectionsCard({
                 <AutoPostingSwitch
                   active={autoPostingAktiv}
                   blocker={autoPostingBlocker}
+                  describedBy={autoPostingHinweis ? `studio-blocker-${platform}` : undefined}
                   disabled={gesperrt || targetPlatforms === null || targetSaving}
                   onChange={(active) => onToggleTarget(platform, active)}
                 />
@@ -805,6 +805,7 @@ function PlatformConnectionsCard({
                 </a>
               )}
               </div>
+              {autoPostingHinweis && <p id={`studio-blocker-${platform}`} className="studio-connection-blocker text-xs text-text-secondary">{t(autoPostingHinweis)}</p>}
             </PlatformCheck>
           );
         })}
@@ -824,9 +825,10 @@ function autoPostingHint(blocker: AutoPostingBlocker, active: boolean): string |
   return null;
 }
 
-function AutoPostingSwitch({ active, blocker, disabled, onChange }: {
+function AutoPostingSwitch({ active, blocker, describedBy, disabled, onChange }: {
   active: boolean;
   blocker: AutoPostingBlocker;
+  describedBy?: string;
   disabled: boolean;
   onChange: (active: boolean) => void;
 }) {
@@ -834,7 +836,7 @@ function AutoPostingSwitch({ active, blocker, disabled, onChange }: {
   const hint = autoPostingHint(blocker, active);
   return (
     <label className="studio-switch studio-target-switch" title={hint ? t(hint) : undefined}>
-      <input type="checkbox" role="switch" checked={active} disabled={disabled || (blocker !== null && !active)} onChange={(event) => onChange(event.target.checked)} />
+      <input type="checkbox" role="switch" checked={active} aria-describedby={describedBy} disabled={disabled || (blocker !== null && !active)} onChange={(event) => onChange(event.target.checked)} />
       <span>{t('Auto-Posting')}</span>
     </label>
   );
