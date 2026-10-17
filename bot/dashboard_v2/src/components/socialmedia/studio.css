@@ -1893,6 +1893,7 @@ select.studio-select {
   .social-studio .studio-clip-media, .social-studio .import-pool-thumb { width: 72px; min-height: 128px; }
   .social-studio .studio-platform-check-content { align-items: flex-start; flex-direction: column; }
   .social-studio .studio-connection-actions { flex-wrap: wrap; justify-content: flex-start; }
+  .social-studio .studio-connection-name, .social-studio .studio-connection-blocker { flex: none; min-width: 0; max-width: 100%; }
   .social-studio .studio-header-actions { flex-wrap: wrap; }
 }
 
