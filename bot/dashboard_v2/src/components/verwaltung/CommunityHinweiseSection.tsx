@@ -81,7 +81,6 @@ export function CommunityHinweiseSection() {
             />
           }
           title={t('Community-Hinweise im Chat')}
-          description={t(HILFE)}
           savedAt={savedAt}
           toggle={{
             checked: enabled,

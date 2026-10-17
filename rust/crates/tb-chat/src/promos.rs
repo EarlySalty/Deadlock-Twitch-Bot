@@ -2985,7 +2985,7 @@ impl PromoEngine {
         if normalized.is_empty() {
             return false;
         }
-        match sqlx::query_scalar!(
+        let promo_disabled = match sqlx::query_scalar!(
             "SELECT COALESCE(promo_disabled, 0) AS \"promo_disabled!\"
                FROM streamer_plans
               WHERE LOWER(COALESCE(twitch_login,'')) = $1
@@ -2995,13 +2995,26 @@ impl PromoEngine {
         .fetch_optional(&self.pool)
         .await
         {
-            Ok(Some(flag)) => flag != 0,
-            Ok(None) => false,
+            Ok(value) => value,
             Err(error) => {
                 tracing::warn!(
                     %error,
                     login = %normalized,
                     "Promo-Disable-Flag konnte nicht geladen werden"
+                );
+                None
+            }
+        };
+        if !promo_disabled.is_some_and(|flag| flag != 0) {
+            return false;
+        }
+        match tb_analytics::plan::resolve_plan_snapshot(&self.pool, &normalized, "").await {
+            Ok(snapshot) => snapshot.entitlements.contains(&"chat.promos.disable"),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    login = %normalized,
+                    "Promo-Disable-Plan konnte nicht aufgeloest werden"
                 );
                 false
             }
@@ -3067,25 +3080,30 @@ impl PromoEngine {
     /// Live-Kanäle für Promo-Loop laden (promos.py:1630: `_get_live_channels_for_promo`).
     /// twitch_live_state.is_live = integer, twitch_live_state.last_game = text (prod schema)
     async fn get_live_channels_for_promo(&self) -> Result<Vec<(String, String)>, String> {
-        // SUBSCRIPTION_PLANS_ENABLED=True → mit promo_disabled-Filter.
-        let rows = sqlx::query!(
-            "SELECT s.twitch_login AS \"twitch_login!\",
-                    s.twitch_user_id AS \"twitch_user_id!\"
+        let rows = sqlx::query(
+            "SELECT s.twitch_login AS twitch_login,
+                    s.twitch_user_id AS twitch_user_id
                FROM twitch_streamer_identities s
                JOIN twitch_live_state l ON s.twitch_user_id = l.twitch_user_id
-               LEFT JOIN streamer_plans p ON s.twitch_user_id = p.twitch_user_id
               WHERE l.is_live = 1
-                AND LOWER(COALESCE(l.last_game, '')) = $1
-                AND COALESCE(p.promo_disabled, 0) = 0",
-            "deadlock",
+                AND LOWER(COALESCE(l.last_game, '')) = $1",
         )
+        .bind("deadlock")
         .fetch_all(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
 
         Ok(rows
             .into_iter()
-            .map(|row| (row.twitch_login, row.twitch_user_id))
+            .filter_map(|row| {
+                let login = row.try_get::<String, _>("twitch_login").ok()?;
+                let user_id = row.try_get::<String, _>("twitch_user_id").ok()?;
+                if login.is_empty() || user_id.is_empty() {
+                    None
+                } else {
+                    Some((login, user_id))
+                }
+            })
             .collect())
     }
 
@@ -6691,7 +6709,27 @@ mod db_tests {
         .unwrap();
 
         let blocked = engine.promo_blocked_by_plan_or_flag("blockiert").await;
-        assert!(blocked, "promo_disabled=1 → blockiert");
+        assert!(
+            !blocked,
+            "promo_disabled ohne chat.promos.disable schaltet die Hinweise nicht aus"
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_flag_blockiert_nur_mit_entitlement() {
+        let pool = pool_or_skip!("promo_plan_flag_plus");
+        let engine = make_engine(pool.clone());
+
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, promo_disabled)
+             VALUES ('u1p', 'plusleise', 'plus', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let blocked = engine.promo_blocked_by_plan_or_flag("plusleise").await;
+        assert!(blocked, "Plus plus Flag → Hinweise aus");
     }
 
     #[tokio::test]
@@ -6777,6 +6815,27 @@ mod db_tests {
         assert!(
             !blocked,
             "abgelaufener chat_quiet → Plan nicht effektiv → nicht blockiert"
+        );
+    }
+
+    #[tokio::test]
+    async fn abgelaufener_plan_mit_flag_blockiert_nicht() {
+        let pool = pool_or_skip!("promo_flag_abgelaufen");
+        let engine = make_engine(pool.clone());
+
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at, promo_disabled)
+             VALUES ('uq4', 'flagabgelaufen', 'plus',
+                     to_char((NOW() - INTERVAL '1 day') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00'), 1)"
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let blocked = engine.promo_blocked_by_plan_or_flag("flagabgelaufen").await;
+        assert!(
+            !blocked,
+            "abgelaufenes Plus mit Flag darf die Hinweise nicht dauerhaft aus lassen"
         );
     }
 

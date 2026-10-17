@@ -92,10 +92,15 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
   const oauthLink = useOAuthLink();
   const katalog = plans.filter((plan) => plan.id !== 'pro');
   const plus = katalog.find((plan) => plan.id === 'plus');
-  const studioPlaene = STUDIO_IDS.flatMap((id) => {
+  const giftedPro = plans.some((plan) => plan.id === 'pro' && plan.is_current);
+  const studioRoh = STUDIO_IDS.flatMap((id) => {
     const plan = katalog.find((eintrag) => eintrag.id === id);
     return plan ? [plan] : [];
   });
+  const studioAktuell = studioRoh.some((plan) => plan.is_current);
+  const studioPlaene = studioRoh.map((plan) =>
+    plan.id === 'studio' && giftedPro && !studioAktuell ? { ...plan, is_current: true } : plan,
+  );
   const laufend = studioPlaene.find((plan) => plan.is_current);
   const empfohlen = studioPlaene.find((plan) => plan.recommended) ?? studioPlaene[0];
   const [wahl, setWahl] = useState<string | null>(null);

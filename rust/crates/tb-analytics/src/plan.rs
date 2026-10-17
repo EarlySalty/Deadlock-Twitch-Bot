@@ -15,8 +15,8 @@ use sqlx::PgPool;
 
 /// Plan-Tier aus Plan-ID ableiten.
 ///
-/// Aktuell buchbar sind `free`, `plus`, `pro`. Die acht Vorgaenger-IDs bleiben
-/// lesbar, weil sie in der DB stehen; kaufbar sind sie nicht mehr.
+/// Aktuell buchbar sind `free` und `plus`. Studio-Sprossen und `pro` bleiben
+/// lesbar, kaufbar sind sie erst nach Stripe-Preisen.
 pub fn plan_tier(plan_id: &str) -> &'static str {
     match plan_id {
         "free" | "raid_free" => "free",

@@ -64,7 +64,8 @@ pub async fn get_handler(
     {
         Ok(Some(row)) => {
             let promo_disabled: i32 = row.try_get("promo_disabled").unwrap_or(0);
-            antwort(promo_disabled == 0, can_disable)
+            let effektiv_an = promo_disabled == 0 || !can_disable;
+            antwort(effektiv_an, can_disable)
         }
         Ok(None) => antwort(true, can_disable),
         Err(error) => {
@@ -275,6 +276,34 @@ mod tests {
         let (status, body) = body_of(
             get_handler(
                 partner("frei", "42"),
+                State(pool),
+                Query(CommunityHintsQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["enabled"], true);
+        assert_eq!(body["can_disable"], false);
+    }
+
+    #[tokio::test]
+    async fn abgelaufener_plan_zeigt_hinweise_an() {
+        let Some(pool) = make_pool("t_community_hints_expired").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at, promo_disabled) \
+             VALUES ('44', 'explus', 'plus', \
+                     to_char((NOW() - INTERVAL '1 day') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00'), 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (status, body) = body_of(
+            get_handler(
+                partner("explus", "44"),
                 State(pool),
                 Query(CommunityHintsQuery::default()),
             )
