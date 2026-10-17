@@ -2,9 +2,9 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 
 import { CalendarClock, Plus, X } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { platformIconUrl } from './platformIcon';
-import type { PolicyScope, ScheduleQueueApi, WeeklySlot } from './autopilot/schedule-queue/api';
+import type { PolicyPreview, PolicyScope, ScheduleQueueApi, WeeklySlot } from './autopilot/schedule-queue/api';
 import {
-  AI_MODES, HOLDS, PATHS, REVIEWS, SCOPES, SHARED_TEXT, TAB_ORDER, TEXT_SCOPES, WEEKDAYS, addTime, failureText, invalidPlatforms, isDirty, loadPlan, normalizeTime, planDraft,
+  AI_MODES, DISTRIBUTION_NOTES, HOLDS, PATHS, REVIEWS, SCOPES, SHARED_TEXT, TAB_ORDER, TEXT_SCOPES, WEEKDAYS, addTime, failureText, invalidPlatforms, isDirty, loadPlan, normalizeTime, planDraft, planPreview,
   planPlatformLabel as platformLabel, planText, savePlan, scopeMergeChanges, switchScope, validateDraft, type PlanDraft, type PlanState, type PlanText, type TextDraft,
 } from './pipelinePlan';
 
@@ -125,6 +125,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
   const invalid = invalidPlatforms(draft);
   const activeTab = tabs.includes(tab) ? tab : invalid[0] ?? tabs[0];
   const barShown = dirty || saving || saveError !== '';
+  const preview = planPreview(base.snapshot, draft.distribution_policy);
 
   return <section className="schedule-queue pp-plan" aria-labelledby={`${id}-heading`} data-unsaved={dirty || saving ? 'true' : undefined} data-saving={saving ? 'true' : undefined}>
     <header className="pp-head">
@@ -142,7 +143,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
               <input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} />
               <span>{text('h vor Termin')}</span>
             </label>
-            <NextSlots base={base} targets={draft.target_platforms} locale={locale} text={text} />
+            <NextSlots base={base} preview={preview} targets={draft.target_platforms} locale={locale} text={text} />
           </div>
           {merged && draft.schedule_scope === 'shared' && <p className="sq-help pp-merge-note">{text('Die Zeiten aller Plattformen wurden zusammengeführt. Mit „Verwerfen“ kannst du das rückgängig machen.')}</p>}
           {!draft.target_platforms.length && <p className="sq-help">{text('Noch keine Plattform für Auto-Posting aktiv. Aktiviere sie unter Einstellungen bei den Konten.')}</p>}
@@ -161,9 +162,10 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
             </div>}
           {(draft.target_platforms.length > 1 || draft.distribution_policy === 'independent_clips' || base.policy.distribution_policy === 'independent_clips') && <div className="sq-toggles pp-distribution">
             <label><input type="checkbox" role="switch" checked={draft.distribution_policy === 'independent_clips'} onChange={event => edit({ distribution_policy: event.target.checked ? 'independent_clips' : 'same_clip' })} />{text('Unterschiedliche Clips je Plattform posten')}</label>
+            <p className="sq-help pp-distribution-note">{text(DISTRIBUTION_NOTES[draft.distribution_policy])}</p>
           </div>}
           <p className="sq-help">{text('Sommerzeit wird berücksichtigt. Verpasste Termine werden nicht nachgeholt.')}</p>
-          {base.snapshot.production_hold && <p className="sq-help">{text(HOLDS[base.snapshot.production_hold])}</p>}
+          {preview.production_hold && <p className="sq-help">{text(HOLDS[preview.production_hold])}</p>}
         </Step>
         <Step id={`${id}-step-2`} number={2} title={text('Video-Vorbereitung')} question={text('Wie sollen Clips geschnitten & betextet werden?')} text={text}>
           <ChoiceGroup legend={text('Video-Vorbereitung')} hideLegend name={`${id}-path`} options={PATHS} value={aiPath ? 'ai' : 'template'} text={text} onChange={choosePath} compact
@@ -301,9 +303,9 @@ function WeekEditor({ label, slots, text, onChange }: { label: string; slots: We
   </div>;
 }
 
-function NextSlots({ base, targets, locale, text }: { base: PlanState; targets: string[]; locale: string; text: PlanText }) {
+function NextSlots({ base, preview, targets, locale, text }: { base: PlanState; preview: PolicyPreview; targets: string[]; locale: string; text: PlanText }) {
   const timezone = base.snapshot.settings.timezone;
-  const next = base.snapshot.next_slots ?? {};
+  const next = preview.next_slots;
   const shown = targets.filter(platform => base.snapshot.settings.target_platforms.includes(platform));
   const titleId = useId();
   return <div className="pp-info-item pp-next-block">
@@ -312,7 +314,7 @@ function NextSlots({ base, targets, locale, text }: { base: PlanState; targets: 
       {shown.length ? shown.map(platform => <div key={platform}>
         <dt><img src={platformIconUrl(platform)} width="14" height="14" alt={platformLabel(platform)} /></dt>
         <dd>{slotLabel(next[platform], timezone, locale, text)}</dd>
-      </div>) : <div><dt>{text('Alle Plattformen')}</dt><dd>{slotLabel(base.snapshot.next_slot ?? undefined, timezone, locale, text)}</dd></div>}
+      </div>) : <div><dt>{text('Alle Plattformen')}</dt><dd>{slotLabel(preview.next_slot ?? undefined, timezone, locale, text)}</dd></div>}
     </dl>
   </div>;
 }

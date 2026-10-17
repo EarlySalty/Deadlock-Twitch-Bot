@@ -114,6 +114,19 @@ impl QueueJob {
 }
 
 #[derive(Debug, Serialize)]
+pub struct PolicyPreview {
+    pub next_slot: Option<DateTime<Utc>>,
+    pub next_slots: BTreeMap<String, DateTime<Utc>>,
+    pub production_hold: Option<ProductionHold>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PolicyPreviews {
+    pub same_clip: PolicyPreview,
+    pub independent_clips: PolicyPreview,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ScheduleQueueSnapshot {
     pub settings: ScheduleSettings,
     pub persisted: bool,
@@ -124,6 +137,7 @@ pub struct ScheduleQueueSnapshot {
     pub jobs: Vec<QueueJob>,
     pub review_count: i64,
     pub production_hold: Option<ProductionHold>,
+    pub policy_previews: PolicyPreviews,
     pub connected_platforms: Vec<String>,
 }
 
@@ -188,7 +202,7 @@ pub(crate) struct Subject {
     pub video: Option<i64>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Occupancy {
     channel: Vec<DateTime<Utc>>,
     platforms: BTreeMap<String, Vec<DateTime<Utc>>>,
@@ -290,6 +304,7 @@ impl Allocation {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Allocator {
     settings: AutopilotSettings,
     policy: PipelinePolicy,
@@ -404,6 +419,12 @@ impl Allocator {
             slots.extend(self.next_for(now, platform)?);
         }
         Ok(slots)
+    }
+
+    fn with_distribution(&self, distribution: DistributionPolicy) -> Self {
+        let mut allocator = self.clone();
+        allocator.policy.distribution_policy = distribution;
+        allocator
     }
 
     pub(crate) fn independent(&self) -> bool {
@@ -843,6 +864,49 @@ async fn queue_jobs_on(
     Ok(queued)
 }
 
+struct PreviewContext<'a> {
+    settings: &'a AutopilotSettings,
+    review_required: bool,
+    reviews: i64,
+    empty_pool: bool,
+    now: DateTime<Utc>,
+}
+
+fn earliest_slot(
+    allocator: &Allocator,
+    next_slots: &BTreeMap<String, DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>, ScheduleError> {
+    if allocator.independent() && !next_slots.is_empty() {
+        return Ok(next_slots.values().min().copied());
+    }
+    Ok(allocator.plan(now)?.map(|plan| plan.reference))
+}
+
+fn preview(
+    allocator: &Allocator,
+    context: &PreviewContext<'_>,
+) -> Result<PolicyPreview, ScheduleError> {
+    let next_slots = allocator.next_slots(context.now)?;
+    let next_slot = earliest_slot(allocator, &next_slots, context.now)?;
+    let mut production_hold = hold(
+        context.settings,
+        context.review_required,
+        allocator.has_schedule(),
+        context.reviews,
+        next_slot,
+        context.now,
+    );
+    if production_hold.is_none() && context.empty_pool {
+        production_hold = Some(ProductionHold::EmptyPool);
+    }
+    Ok(PolicyPreview {
+        next_slot,
+        next_slots,
+        production_hold,
+    })
+}
+
 pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapshot, ScheduleError> {
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, owner).await?;
@@ -857,27 +921,30 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
         .fetch_one(&mut *tx)
         .await?;
     let allocator = Allocator::load_on(&mut tx, owner, &settings).await?;
-    let next_slot = allocator.plan(now)?.map(|plan| plan.reference);
-    let next_slots = allocator.next_slots(now)?;
     let review_count = review_count_on(&mut tx, owner).await?;
     let review_required = review_required_on(&mut tx, owner).await?;
     let jobs = queue_jobs_on(&mut tx, owner).await?;
-    let mut production_hold = hold(
-        &settings,
+    let empty_pool: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_autopilot_schedule_state
+        WHERE twitch_user_id = $1 AND production_hold = 'empty_pool' AND planned_at > $2 - INTERVAL '2 minutes')")
+        .bind(owner).bind(now).fetch_one(&mut *tx).await?;
+    let context = PreviewContext {
+        settings: &settings,
         review_required,
-        allocator.has_schedule(),
-        review_count,
-        next_slot,
+        reviews: review_count,
+        empty_pool,
         now,
-    );
-    if production_hold.is_none() {
-        let empty: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_autopilot_schedule_state
-            WHERE twitch_user_id = $1 AND production_hold = 'empty_pool' AND planned_at > $2 - INTERVAL '2 minutes')")
-            .bind(owner).bind(now).fetch_one(&mut *tx).await?;
-        if empty {
-            production_hold = Some(ProductionHold::EmptyPool);
-        }
-    }
+    };
+    let current = preview(&allocator, &context)?;
+    let policy_previews = PolicyPreviews {
+        same_clip: preview(
+            &allocator.with_distribution(DistributionPolicy::SameClip),
+            &context,
+        )?,
+        independent_clips: preview(
+            &allocator.with_distribution(DistributionPolicy::IndependentClips),
+            &context,
+        )?,
+    };
     let mut connected_platforms: Vec<String> =
         crate::autopilot_publish::connections_on(&mut tx, owner)
             .await?
@@ -891,11 +958,12 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
         persisted,
         schedule_scope: allocator.policy.schedule_scope,
         distribution_policy: allocator.policy.distribution_policy,
-        next_slot,
-        next_slots,
+        next_slot: current.next_slot,
+        next_slots: current.next_slots,
         jobs,
         review_count,
-        production_hold,
+        production_hold: current.production_hold,
+        policy_previews,
         connected_platforms,
     })
 }

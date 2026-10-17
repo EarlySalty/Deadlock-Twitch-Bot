@@ -1,5 +1,5 @@
 import type {
-  DistributionPolicy, PipelineMode, PipelinePolicy, PolicyScope, ProductionHold, ReviewPolicy,
+  DistributionPolicy, PipelineMode, PipelinePolicy, PolicyPreview, PolicyScope, ProductionHold, ReviewPolicy,
   SchedulePatch, ScheduleQueueApi, ScheduleQueueSnapshot, TextDefaults, WeeklySlot,
 } from './autopilot/schedule-queue/api';
 export const PLAN_PLATFORMS = [
@@ -47,6 +47,19 @@ export const HOLDS: Record<Exclude<ProductionHold, null>, string> = {
   no_schedule: 'Füge mindestens eine Zeit hinzu.',
   outside_lead: 'Der nächste freie Termin liegt noch außerhalb des Vorlaufs.',
 };
+
+export const DISTRIBUTION_NOTES: Record<DistributionPolicy, string> = {
+  same_clip: 'Aktiv: Derselbe Clip wird auf allen aktiven Plattformen veröffentlicht (empfohlen).',
+  independent_clips: 'Aktiv: Jede Plattform zieht sich einen eigenen, anderen Clip aus dem Vorrat (verbraucht mehr Clips).',
+};
+
+export function planPreview(snapshot: ScheduleQueueSnapshot, policy: DistributionPolicy): PolicyPreview {
+  return snapshot.policy_previews?.[policy] ?? {
+    next_slot: snapshot.next_slot,
+    next_slots: snapshot.next_slots ?? {},
+    production_hold: snapshot.production_hold,
+  };
+}
 
 export const PLAN_EN: Record<string, string> = {
   'Planen': 'Plan',
@@ -96,6 +109,8 @@ export const PLAN_EN: Record<string, string> = {
   'Vorlauf': 'Lead time',
   'h vor Termin': 'h before the slot',
   'Unterschiedliche Clips je Plattform posten': 'Post different clips on each platform',
+  'Aktiv: Derselbe Clip wird auf allen aktiven Plattformen veröffentlicht (empfohlen).': 'Active: The same clip is published on all active platforms (recommended).',
+  'Aktiv: Jede Plattform zieht sich einen eigenen, anderen Clip aus dem Vorrat (verbraucht mehr Clips).': 'Active: Each platform takes its own, different clip from the pool (uses more clips).',
   'Zeiten für {platform}': 'Times for {platform}',
   'Alle Plattformen': 'All platforms',
   'Noch kein Termin': 'No time yet',

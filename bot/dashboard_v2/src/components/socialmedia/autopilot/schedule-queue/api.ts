@@ -63,6 +63,12 @@ export interface QueueJob {
   review_explanation: string | null;
 }
 
+export interface PolicyPreview {
+  next_slot: string | null;
+  next_slots: Record<string, string>;
+  production_hold: ProductionHold;
+}
+
 export interface ScheduleQueueSnapshot {
   settings: ScheduleSettings;
   persisted: boolean;
@@ -73,6 +79,7 @@ export interface ScheduleQueueSnapshot {
   jobs: QueueJob[];
   review_count: number;
   production_hold: ProductionHold;
+  policy_previews?: Record<DistributionPolicy, PolicyPreview>;
   connected_platforms: string[];
 }
 
