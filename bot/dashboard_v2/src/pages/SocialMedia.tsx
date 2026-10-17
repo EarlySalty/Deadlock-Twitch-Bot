@@ -902,7 +902,7 @@ function VodArchiveCard({
               type="button"
               disabled={gesperrt || settings?.privacy_forced}
               onClick={() => onChange({ enabled, privacy: option })}
-              className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+              className={`flex h-auto min-h-10 items-center justify-center rounded-lg border px-2 py-2 text-center text-sm font-medium leading-tight transition-colors ${
                 privacy === option
                   ? 'border-ui-accent-strong/30 bg-ui-accent-strong/12 text-ui-accent-ink'
                   : 'border-border bg-white/[0.02] text-ui-muted hover:bg-white/[0.06] hover:text-white'

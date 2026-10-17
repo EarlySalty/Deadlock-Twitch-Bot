@@ -63,12 +63,22 @@ function RecentTile({ items, onNavigate }: { items: RecentItem[]; onNavigate: Na
   </Tile>;
 }
 
+function topReasons(items: DiscardedItem[]): { reason: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item.reason, (counts.get(item.reason) ?? 0) + 1);
+  return [...counts].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count).slice(0, 3);
+}
+
 function DiscardedTile({ items }: { items: DiscardedItem[] }) {
   const { t } = useLanguage();
   const id = useId();
   return <Tile icon={Ban} title={t('Von KI aussortiert')}>
     <p className="studio-tile-value">{items.length}</p>
     {items.length === 0 ? <p className="studio-overview-empty">{t('Nichts aussortiert.')}</p> : <>
+      <ul className="studio-tile-list studio-tile-top-reasons" aria-label={t('Häufigste Gründe')}>{topReasons(items).map(entry => <li key={entry.reason}>
+        <span className="studio-tile-item-title" title={entry.reason}>{entry.reason}</span>
+        <span className="studio-tile-item-meta">{entry.count}×</span>
+      </li>)}</ul>
       <button type="button" className="studio-overview-link" popoverTarget={id}>{t('Gründe ansehen')}<ArrowRight className="h-4 w-4" aria-hidden /></button>
       <div id={id} popover="auto" className="studio-import-popover studio-tile-popover">
         <h3>{t('Warum aussortiert wurde')}</h3>

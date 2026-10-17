@@ -105,3 +105,8 @@
 .pp-footer .sq-actions { margin-top: 0; }
 @media (max-width: 900px) { .pp-step-grid, .pp-wide { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 420px) { .pp-step { padding: 14px; } .pp-path-body { padding-left: 10px; } .pp-day { grid-template-columns: minmax(0, 1fr); gap: 4px; } .pp-compact { grid-template-columns: minmax(0, 1fr); } .pp-footer .sq-actions { width: 100%; } .pp-footer .sq-actions button { flex: 1 1 auto; } }
+.pp-timing { display: grid; gap: 14px; padding: 14px; border: 1px solid var(--sq-border); border-radius: 8px; }
+.pp-next-block { display: grid; gap: 8px; }
+.pp-next-title { font-size: 14px; font-weight: 600; }
+.pp-timing .pp-lead { margin-top: 0; padding-top: 14px; border-top: 1px solid var(--sq-border); max-width: none; }
+.pp-timing .pp-lead input { max-width: 200px; }

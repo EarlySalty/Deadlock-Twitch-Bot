@@ -9,7 +9,7 @@ import {
 } from './pipelinePlan';
 
 function slotLabel(value: string | undefined, timezone: string, locale: string, text: PlanText): string {
-  if (!value) return text('Noch kein Termin');
+  if (!value || !(Date.parse(value) > Date.now())) return text('Noch kein Termin');
   try {
     return new Intl.DateTimeFormat(locale, { timeZone: timezone, weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
   } catch {
@@ -134,8 +134,10 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
               <p className="sq-help">{text('Sommerzeit wird berücksichtigt. Verpasste Termine werden nicht nachgeholt.')}</p>
             </div>
             <div className="pp-column">
-              <NextSlots base={base} targets={draft.target_platforms} locale={locale} text={text} />
-              <label className="pp-lead" htmlFor={`${id}-lead`}>{text('Vorlauf in Stunden (Standard: 24 h vor Termin vorbereiten)')}<input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} /></label>
+              <div className="pp-timing">
+                <NextSlots base={base} targets={draft.target_platforms} locale={locale} text={text} />
+                <label className="pp-lead" htmlFor={`${id}-lead`}>{text('Vorlauf in Stunden (Standard: 24 h vor Termin vorbereiten)')}<input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} /></label>
+              </div>
               {base.snapshot.production_hold && <p className="sq-help">{text(HOLDS[base.snapshot.production_hold])}</p>}
             </div>
           </div>
@@ -291,10 +293,13 @@ function NextSlots({ base, targets, locale, text }: { base: PlanState; targets: 
   const timezone = base.snapshot.settings.timezone;
   const next = base.snapshot.next_slots ?? {};
   const shown = targets.filter(platform => base.snapshot.settings.target_platforms.includes(platform));
-  return <dl className="pp-next" aria-label={text('Nächster Termin')}>
+  return <div className="pp-next-block">
+    <span className="pp-next-title">{text('Nächster Termin')}</span>
+    <dl className="pp-next" aria-label={text('Nächster Termin')}>
     {shown.length ? shown.map(platform => <div key={platform}>
       <dt className="sq-platform-label"><img src={platformIconUrl(platform)} width="16" height="16" alt="" aria-hidden="true" />{PLAN_PLATFORMS.find(item => item.id === platform)?.label ?? platform}</dt>
       <dd>{slotLabel(next[platform], timezone, locale, text)}</dd>
-    </div>) : <div><dt>{text('Nächster Termin')}</dt><dd>{slotLabel(base.snapshot.next_slot ?? undefined, timezone, locale, text)}</dd></div>}
-  </dl>;
+    </div>) : <div><dt>{text('Alle Plattformen')}</dt><dd>{slotLabel(base.snapshot.next_slot ?? undefined, timezone, locale, text)}</dd></div>}
+    </dl>
+  </div>;
 }

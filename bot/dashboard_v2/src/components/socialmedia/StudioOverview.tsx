@@ -197,7 +197,7 @@ function LegacyClipsBanner({ count, onNavigate }: { count: number; onNavigate: (
   const { t } = useLanguage();
   return <div className="studio-overview-banner" data-tone="warning" role="status">
     <AlertTriangle className="h-4 w-4" aria-hidden />
-    <span className="studio-overview-banner-text"><strong>{t(count === 1 ? '{count} Clip freigeben aus der bisherigen Pipeline' : '{count} Clips freigeben aus der bisherigen Pipeline', { count })}</strong></span>
+    <span className="studio-overview-banner-text"><strong>{t(count === 1 ? '{count} Clip aus der bisherigen Pipeline wartet auf Freigabe' : '{count} Clips aus der bisherigen Pipeline warten auf Freigabe', { count })}</strong></span>
     <button type="button" className="studio-button" onClick={() => onNavigate('clips', 'review')}>{t('Zu den Clips')}</button>
   </div>;
 }

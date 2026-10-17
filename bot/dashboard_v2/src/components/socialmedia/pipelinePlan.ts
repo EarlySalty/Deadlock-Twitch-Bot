@@ -107,6 +107,7 @@ export const PLAN_EN: Record<string, string> = {
   'Jede Plattform eigene Clips': 'Each platform gets its own clips',
   'Jede Plattform bekommt ihre eigenen Clips.': 'Each platform gets its own clips.',
   'Nächster Termin': 'Next time',
+  'Alle Plattformen': 'All platforms',
   'Noch kein Termin': 'No time yet',
   'Termin nicht verfügbar': 'Time unavailable',
   'Ungespeicherte Änderungen': 'Unsaved changes',
