@@ -767,11 +767,39 @@ fn discord(b: &mut Builder) {
             ID_MAX,
         )
         .int(
+            "discord.oauth_followup.live_streamer_role_id",
+            "Live-Streamer-Rolle",
+            "Discord-Rolle für Streamer, die gerade Deadlock live streamen.",
+            1,
+            ID_MAX,
+        )
+        .int(
             "discord.oauth_followup.role_sync_interval_secs",
             "Takt des Rollenabgleichs",
             "Sekunden zwischen zwei Rollenabgleichen.",
             15,
             3_600,
+        )
+        .int(
+            "discord.oauth_followup.role_keep_window_days",
+            "Haltefenster der Streamer-Rolle",
+            "Tage, in denen ein Rolleninhaber mindestens einmal Deadlock gestreamt haben muss.",
+            1,
+            365,
+        )
+        .int(
+            "discord.oauth_followup.role_gain_window_days",
+            "Fenster für neue Streamer-Rollen",
+            "Tage, in denen die Deadlock-Streamtage für eine neue Rolle gezählt werden.",
+            1,
+            365,
+        )
+        .int(
+            "discord.oauth_followup.role_gain_min_days",
+            "Streamtage für neue Streamer-Rollen",
+            "Verschiedene Tage mit Deadlock-Stream, die für eine neue Rolle nötig sind.",
+            1,
+            365,
         )
         .opt_int(
             "discord.token_lifecycle.guild_id",
