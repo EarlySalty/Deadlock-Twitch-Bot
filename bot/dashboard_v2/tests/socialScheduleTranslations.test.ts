@@ -24,11 +24,10 @@ const englishValues = new Set(planDeclaration ? descendants(planDeclaration).fil
 const untranslated = new Set(['YouTube', 'TikTok', 'Instagram', 'Hashtags', 'Server-Fehler', 'zwischenzeitlich geändert']);
 
 test('plan editor text has an English entry with matching placeholders', () => {
-  const keys = [...nodes, ...logicNodes].filter(ts.isStringLiteral).filter(node => !englishValues.has(node)).map(node => node.text).concat('Zeitzone in Verwaltung ändern')
+  const keys = [...nodes, ...logicNodes].filter(ts.isStringLiteral).filter(node => !englishValues.has(node)).map(node => node.text)
     .filter(text => /[äöüß]|^[A-Z][a-z]|\{\w+\}/.test(text) && !text.includes('/') && !untranslated.has(text));
   assert.ok(planDeclaration);
   assert.ok(keys.length > 60);
-  assert.ok(panel.includes("text('Zeitzone in Verwaltung ändern')"));
   const english = planText('en');
   const german = planText('de');
   for (const key of keys) {
@@ -72,5 +71,5 @@ test('plan timestamps use the selected locale rather than a fixed German locale'
   assert.equal(calls.length, 2);
   assert.ok(calls.every(call => call.arguments[2].getText(tree) === 'locale'));
   const rawText = nodes.filter(ts.isJsxText).map(node => node.text.trim()).filter(Boolean);
-  assert.deepEqual(rawText, ['·']);
+  assert.deepEqual(rawText, []);
 });

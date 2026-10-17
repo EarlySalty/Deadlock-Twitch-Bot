@@ -1,6 +1,4 @@
-import { globalTimezoneOwner } from '@/utils/socialMediaChannel';
 import { useLanguage, useT } from '../context/LanguageContext';
-import { GlobalTimezone } from '@/components/verwaltung/GlobalTimezone';
 import { useEffect, useState, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import { Rise } from '../motion/Rise';
@@ -69,7 +67,6 @@ export function VerwaltungPage() {
   const t = useT();
   const { locale } = useLanguage();
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
-  const timezoneOwner = globalTimezoneOwner(window.location.search, authStatus?.twitchUserId ?? undefined);
   const onboarding = useOnboarding();
   const [connectionNotice, setConnectionNotice] = useState<'checking' | { discord: string; steam: string } | null>(null);
   const [returnMessage] = useState(() => {
@@ -182,7 +179,6 @@ export function VerwaltungPage() {
 
   const kontoTab = (
     <>
-      {timezoneOwner ? <GlobalTimezone owner={timezoneOwner} channelScoped={new URLSearchParams(window.location.search).has('twitch_user_id')} /> : <p role="alert">{t('Bitte einen gültigen Twitch-Kanal für die Zeitzone auswählen.')}</p>}
       <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(300px,1fr))]">
         <ConnectionCard
           icon={oauthConnected ? <ShieldCheck className="h-5 w-5 text-primary" /> : <ShieldAlert className="h-5 w-5 text-warning" />}

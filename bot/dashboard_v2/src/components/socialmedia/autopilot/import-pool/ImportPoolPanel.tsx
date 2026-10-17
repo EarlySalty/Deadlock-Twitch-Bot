@@ -1,4 +1,3 @@
-import { globalTimezoneUrl } from '@/utils/socialMediaChannel';
 import { ImportPopover } from '../../ImportPopover';
 import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -468,7 +467,6 @@ function OwnerImportPool({
                     </select>
                   </label>
                 </div>
-                <a href={globalTimezoneUrl(owner)}>{t("Zeitzone in Verwaltung ändern")}</a>
               </fieldset>
               <p id={`${id}-date-help`} className="import-pool-help">
                 {parsed?.preferences

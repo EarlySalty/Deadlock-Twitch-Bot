@@ -4105,6 +4105,7 @@ mod identity_regression_tests {
     async fn discord_profile_uses_verified_id_and_rolls_back_deduplication_on_failure() {
         let db = crate::test_database::Database::new().await;
         sqlx::raw_sql("CREATE TABLE twitch_streamers(twitch_login TEXT NOT NULL,twitch_user_id TEXT);
+            CREATE TABLE twitch_partners(twitch_login TEXT,twitch_user_id TEXT,status TEXT,departnered_at TIMESTAMPTZ,admin_archived_at TIMESTAMPTZ,partnered_at TIMESTAMPTZ);
             CREATE TABLE twitch_streamer_identities(twitch_user_id TEXT PRIMARY KEY,twitch_login TEXT,discord_user_id TEXT,discord_display_name TEXT CHECK(discord_display_name <> 'reject-test'),is_on_discord INTEGER,created_at TIMESTAMPTZ,updated_at TIMESTAMPTZ);
             INSERT INTO twitch_streamers VALUES('recycled','111'),('previous_name','222');
             INSERT INTO twitch_streamer_identities(twitch_user_id,twitch_login,discord_user_id) VALUES('111','recycled','888');")
@@ -4171,6 +4172,48 @@ mod identity_regression_tests {
         .await
         .unwrap();
         assert_eq!(count, 1);
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn discord_profile_links_trial_identity_without_streamer_row() {
+        let db = crate::test_database::Database::new().await;
+        sqlx::raw_sql("CREATE TABLE twitch_streamers(twitch_login TEXT NOT NULL,twitch_user_id TEXT);
+            CREATE TABLE twitch_partners(twitch_login TEXT,twitch_user_id TEXT,status TEXT,departnered_at TIMESTAMPTZ,admin_archived_at TIMESTAMPTZ,partnered_at TIMESTAMPTZ);
+            CREATE TABLE twitch_streamer_identities(twitch_user_id TEXT PRIMARY KEY,twitch_login TEXT,discord_user_id TEXT,discord_display_name TEXT,is_on_discord INTEGER,created_at TIMESTAMPTZ,updated_at TIMESTAMPTZ);
+            INSERT INTO twitch_partners VALUES('oldname','1442366829','departnered','2026-01-01',NULL,'2025-01-01'),('devouttothemoon','1442366829','active',NULL,NULL,'2026-10-17');
+            INSERT INTO twitch_streamer_identities(twitch_user_id,twitch_login) VALUES('1442366829','devouttothemoon');")
+            .execute(&db.pool).await.unwrap();
+        assert!(tb_analytics::streamers_crud::set_discord_profile(
+            &db.pool,
+            "devouttothemoon",
+            Some("555"),
+            Some("Trial"),
+            true,
+            Some("1442366829")
+        )
+        .await
+        .unwrap());
+        assert!(!tb_analytics::streamers_crud::set_discord_profile(
+            &db.pool,
+            "fresh",
+            Some("666"),
+            None,
+            true,
+            Some("444")
+        )
+        .await
+        .unwrap());
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT twitch_user_id, twitch_login, discord_user_id FROM twitch_streamer_identities ORDER BY twitch_user_id",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![("1442366829".into(), "devouttothemoon".into(), "555".into())]
+        );
         db.close().await;
     }
 }

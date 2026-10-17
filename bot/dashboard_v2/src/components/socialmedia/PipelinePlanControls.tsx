@@ -25,12 +25,11 @@ export interface PipelinePlanControlsProps {
   api: ScheduleQueueApi;
   onChanged?: () => void;
   reloadKey?: number;
-  timezoneLink?: ReactNode;
   layoutSlot?: ReactNode;
   aiOptionsSlot?: ReactNode;
 }
 
-export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey = 0, timezoneLink, layoutSlot, aiOptionsSlot }: PipelinePlanControlsProps) {
+export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey = 0, layoutSlot, aiOptionsSlot }: PipelinePlanControlsProps) {
   const { language, locale } = useLanguage();
   const text = planText(language);
   const id = useId();
@@ -137,7 +136,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
         <Step id={`${id}-step-1`} number={1} title={text('Postingplan')} question={text('Wann soll gepostet werden?')} text={text}
           actions={<ScopeSegment name={`${id}-scope`} value={draft.schedule_scope} text={text} onChange={scheduleScope} />}>
           <div className="pp-infoline">
-            <span className="pp-info-item pp-timezone">{text('Zeitzone: {timezone}', { timezone: base.snapshot.settings.timezone })} · {timezoneLink}</span>
+            <span className="pp-info-item pp-timezone">{text('Zeitzone: {timezone}', { timezone: base.snapshot.settings.timezone })}</span>
             <label className="pp-info-item pp-lead" htmlFor={`${id}-lead`}>
               <span>{text('Vorlauf')}</span>
               <input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} />

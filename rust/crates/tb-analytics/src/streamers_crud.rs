@@ -840,11 +840,39 @@ pub async fn set_discord_flag(
     Ok(rows > 0)
 }
 
-// ── POST /streamers/{login}/discord-profile ───────────────────────────────────
+fn is_numeric_id(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|c| c.is_ascii_digit())
+}
 
-/// Schreibt Discord-Profil und Deduplizierung in einer Transaktion.
-/// Eine übergebene Twitch-ID ist verbindlich; der Login dient dann nur als Anzeige.
-/// Der administrative Legacy-Pfad ohne ID löst zuerst eine bestehende Streamer-ID auf.
+async fn resolve_profile_target(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    login: &str,
+    twitch_user_id: Option<&str>,
+) -> Result<Option<(String, String)>, sqlx::Error> {
+    let Some(uid) = twitch_user_id.map(str::trim) else {
+        return Ok(sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1")
+            .bind(login).fetch_optional(&mut **tx).await?
+            .and_then(|(name, id)| id.map(|id| (name, id))));
+    };
+    if !is_numeric_id(uid) {
+        return Ok(None);
+    }
+    let partner = sqlx::query_as::<_, (String, String)>(
+        "SELECT COALESCE(NULLIF(TRIM(twitch_login), ''), $2), twitch_user_id FROM twitch_partners
+         WHERE twitch_user_id = $1
+         ORDER BY CASE COALESCE(status, '') WHEN 'active' THEN 0 WHEN 'archived' THEN 1 WHEN 'departnered' THEN 2 ELSE 3 END,
+             COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST
+         LIMIT 1")
+        .bind(uid).bind(login).fetch_optional(&mut **tx).await?;
+    if partner.is_some() {
+        return Ok(partner);
+    }
+    sqlx::query_as::<_, (String, String)>(
+        "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1")
+        .bind(uid).fetch_optional(&mut **tx).await
+}
+
 pub async fn set_discord_profile(
     pool: &PgPool,
     login: &str,
@@ -854,28 +882,13 @@ pub async fn set_discord_profile(
     twitch_user_id: Option<&str>,
 ) -> Result<bool, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let target = if let Some(uid) = twitch_user_id {
-        let uid = uid.trim();
-        if uid.is_empty() || !uid.bytes().all(|c| c.is_ascii_digit()) {
-            return Ok(false);
-        }
-        sqlx::query_as::<_, (String, String)>(
-            "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1")
-            .bind(uid).fetch_optional(&mut *tx).await?
-    } else {
-        sqlx::query_as::<_, (String, Option<String>)>(
-            "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1")
-            .bind(login).fetch_optional(&mut *tx).await?
-            .and_then(|(name, id)| id.map(|id| (name, id)))
-    };
-    let Some((name, uid)) = target else {
+    let Some((name, uid)) = resolve_profile_target(&mut tx, login, twitch_user_id).await? else {
         return Ok(false);
     };
-    if uid.is_empty() || !uid.bytes().all(|c| c.is_ascii_digit()) {
+    if !is_numeric_id(&uid) {
         return Ok(false);
     }
     if let Some(did) = discord_user_id.filter(|id| !id.is_empty()) {
-        // Gleiche Discord-ID auch bei gleichzeitigem Rücksprung aus zwei Tabs nur einmal binden.
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 92301))")
             .bind(did)
             .execute(&mut *tx)
@@ -1304,6 +1317,7 @@ mod tests {
                 status                   TEXT DEFAULT 'active',
                 admin_archived_at        TEXT,
                 departnered_at           TEXT,
+                partnered_at             TEXT,
                 technical_pause_reason   TEXT,
                 manual_partner_opt_out   INTEGER DEFAULT 0,
                 raid_bot_enabled         INTEGER DEFAULT 1,

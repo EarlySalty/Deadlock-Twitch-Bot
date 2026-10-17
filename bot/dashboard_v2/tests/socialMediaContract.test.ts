@@ -814,26 +814,3 @@ test('VOD-Archiv kehrt nach Ausblenden, Bestandsänderung und Kanalwechsel auf e
   assert.equal(navigation({ data: { total: 50 } }, 1), false);
   assert.equal(navigation({ data: { total: 51 } }, 1), true);
 });
-
-test('global timezone writes all existing stores and preserves import selection preferences', async () => {
-  const source = ts.createSourceFile('GlobalTimezone.tsx', lies('src/components/verwaltung/GlobalTimezone.tsx'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  let mutation = '';
-  const visit = (node: ts.Node) => {
-    if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'mutationFn') mutation = node.initializer.getText(source);
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  assert.ok(mutation);
-  for (const failSchedule of [false, true]) {
-    const calls: unknown[] = [];
-    const preferences = { timezone: 'Europe/Berlin', clip_sort: 'newest_first', clip_date_filter: { kind: 'year', year: 2025 } };
-    const save = new Function('savePostingPlanSettings', 'scheduleQueueApi', 'importPoolApi', 'owner', 'timezone', `return (${mutation});`)(
-      async (owner: string, payload: unknown) => { calls.push(['legacy', owner, payload]); },
-      { save: async (payload: unknown, owner: string) => { calls.push(['schedule', owner, payload]); if (failSchedule) throw new Error('test failure'); } },
-      { getPreferences: async () => preferences, savePreferences: async (owner: string, payload: unknown) => { calls.push(['import', owner, payload]); } },
-      '42', 'UTC',
-    );
-    if (failSchedule) await assert.rejects(save('UTC'), /nicht überall gespeichert/); else await save('UTC');
-    assert.deepEqual(calls, [['legacy', '42', { timezone: 'UTC' }], ['schedule', '42', { timezone: 'UTC' }], ['import', '42', { ...preferences, timezone: 'UTC' }]]);
-  }
-});
