@@ -42,7 +42,7 @@ const MATRIX: Array<{ gruppe?: string; name?: string; werte?: [Marke, Marke, Mar
   { name: 'Auto-Pilot: Freigabe oder Einspruch', werte: ['nein', 'nein', 'ja', 'ja', 'ja'] },
   { name: 'Vollautomatik, Titel, Hashtags', werte: ['nein', 'nein', 'nein', 'ja', 'ja'] },
   { name: 'KI-Schnitt, mehrere Videos, Prüfung', werte: ['nein', 'nein', 'nein', 'nein', 'ja'] },
-  { name: 'Clips im Monat', werte: ['nein', 'nein', '40', '80', 'ohne Limit'] },
+  { name: 'Clips im Monat', werte: ['3', '10', '40', '80', 'ohne Limit'] },
   { name: 'KI-Schnitte im Monat', werte: ['nein', 'nein', 'nein', 'nein', '12'] },
 ];
 

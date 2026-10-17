@@ -107,7 +107,7 @@ pub async fn post_handler(
              VALUES ($1, $2, $3) \
              ON CONFLICT (twitch_user_id) \
              DO UPDATE SET promo_disabled = EXCLUDED.promo_disabled, \
-                           twitch_login = COALESCE(streamer_plans.twitch_login, EXCLUDED.twitch_login)",
+                           twitch_login = EXCLUDED.twitch_login",
         )
         .bind(&user_id)
         .bind(&login)

@@ -134,9 +134,7 @@ async fn pool(schema: &str) -> Option<PgPool> {
     Some(pool)
 }
 
-/// Partner-Session ohne `twitch_user_id`: der Trial-Auto-Grant im Resolver
-/// braucht beide Werte und springt so nicht an, die Stufe kommt allein aus dem
-/// Manual-Override.
+/// Partner-Session mit numerischer Twitch-ID, damit `resolve_streamer_scope` den Login akzeptiert.
 fn partner(login: &str) -> DashboardAuthLevel {
     let twitch_user_id = match login {
         "plusstreamer" => "200",
@@ -285,8 +283,7 @@ async fn ki_analyse_erst_ab_plus() {
 /// `stufe::sperre_greift(Stufe::Pro)` und ist inaktiv.
 ///
 /// Geprueft werden alle drei Wege in die Upload-Warteschlange (Sammel-Upload,
-/// direktes Einreihen, Approval "approve"), und zwar auf Wirkung: es kommt
-/// wirklich etwas in der Warteschlange an.
+/// direktes Einreihen, Approval "approve"): keiner antwortet `plan_required`.
 #[tokio::test]
 async fn auto_posting_offen_solange_pro_nicht_buchbar() {
     // Die Voraussetzung des Tests, sichtbar statt stillschweigend.

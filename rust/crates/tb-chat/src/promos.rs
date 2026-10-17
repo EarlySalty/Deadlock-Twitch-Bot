@@ -5294,7 +5294,7 @@ mod db_tests {
         let promo_channels = engine.get_live_channels_for_promo().await.unwrap();
         assert!(
             promo_channels.is_empty(),
-            "Promo-Quelle bleibt Deadlock/promo_disabled-gefiltert"
+            "Promo-Quelle bleibt auf Deadlock, Just Chatting faellt raus"
         );
     }
 
@@ -5714,8 +5714,8 @@ mod db_tests {
         let pool = pool_or_skip!("promo_anlass_disabled_budget");
         seed_partner_channel(&pool, "c-dis", "diskanal").await;
         sqlx::query(
-            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, promo_disabled) \
-             VALUES ('c-dis', 'diskanal', 1)",
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, promo_disabled) \
+             VALUES ('c-dis', 'diskanal', 'plus', 1)",
         )
         .execute(&pool)
         .await
@@ -6454,8 +6454,8 @@ mod db_tests {
         seed_partner_channel(&pool, "c-pd", "pdkanal").await;
         seed_deadlock_candidate(&pool, "disabledlogin", "u-pd").await;
         sqlx::query(
-            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, promo_disabled)
-             VALUES ('c-pd', 'pdkanal', 1)",
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, promo_disabled)
+             VALUES ('c-pd', 'pdkanal', 'plus', 1)",
         )
         .execute(&pool)
         .await
@@ -6533,8 +6533,8 @@ mod db_tests {
         let pool = pool_or_skip!("promo_anlass_disabled");
         seed_partner_channel(&pool, "c-off", "offkanal").await;
         sqlx::query(
-            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, promo_disabled)
-             VALUES ('c-off', 'offkanal', 1)",
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, promo_disabled)
+             VALUES ('c-off', 'offkanal', 'plus', 1)",
         )
         .execute(&pool)
         .await
@@ -6696,7 +6696,7 @@ mod db_tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn plan_flag_blockiert_wenn_promo_disabled_gesetzt() {
+    async fn plan_flag_ohne_entitlement_blockiert_nicht() {
         let pool = pool_or_skip!("promo_plan_flag");
         let engine = make_engine(pool.clone());
 
