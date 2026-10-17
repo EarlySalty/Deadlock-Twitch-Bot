@@ -2,14 +2,15 @@ import type { ClipListResponseMitPosting, SocialClipMitPosting } from '@/api/soc
 import type { SocialPlatform } from '@/types/socialMedia';
 import type { PipelineSource, SourceEligibility } from './pipelineApi';
 
-export type QueueStage = 'all' | 'new' | 'review' | 'planned' | 'posted' | 'failed' | 'archive';
+export type QueueStage = 'all' | 'new' | 'preparing' | 'review' | 'planned' | 'posted' | 'failed' | 'archive';
 export const QUEUE_FILTERS: Array<{ id: QueueStage; label: string }> = [
   { id: 'all', label: 'Alle' },
   { id: 'new', label: 'Neu' },
-  { id: 'review', label: 'Freigabe' },
+  { id: 'preparing', label: 'In Vorbereitung' },
+  { id: 'review', label: 'Wartet auf Freigabe' },
   { id: 'planned', label: 'Geplant' },
   { id: 'posted', label: 'Gepostet' },
-  { id: 'failed', label: 'Fehler' },
+  { id: 'failed', label: 'Aussortiert / Fehler' },
   { id: 'archive', label: 'Archiv' },
 ];
 
@@ -135,10 +136,14 @@ export function partialResult(source: PipelineSource): boolean {
   return publishedPlatforms(source).length > 0 && failedPlatforms(source).length > 0;
 }
 
-function sourceActive(source: PipelineSource): boolean {
+function sourcePreparing(source: PipelineSource): boolean {
   return source.destinations.some((destination) => ACTIVE_DESTINATIONS.includes(destination.status ?? 'pending'))
     || source.jobs.some((job) => job.status === 'queued' || job.status === 'running')
-    || source.versions.some((version) => ['rendering', 'approved', 'scheduled'].includes(version.status));
+    || source.versions.some((version) => version.status === 'rendering');
+}
+
+function sourcePlanned(source: PipelineSource): boolean {
+  return source.versions.some((version) => ['approved', 'scheduled'].includes(version.status));
 }
 
 export function legacyUncertainPlatforms(source: PipelineSource): string[] {
@@ -155,11 +160,18 @@ function sourceInReview(source: PipelineSource): boolean {
 
 export function sourceStage(source: PipelineSource): Exclude<QueueStage, 'all'> {
   if (source.discarded_at) return 'archive';
-  if (sourceActive(source)) return 'planned';
+  if (sourcePreparing(source)) return 'preparing';
+  if (sourcePlanned(source)) return 'planned';
   if (sourceInReview(source)) return 'review';
   if (failedPlatforms(source).length > 0 || (publishedPlatforms(source).length === 0 && source.jobs.some((job) => job.status === 'failed'))) return 'failed';
   if (publishedPlatforms(source).length > 0 || source.published_at) return 'posted';
   return 'new';
+}
+
+export function sourceMatchesStage(source: PipelineSource, stage: QueueStage): boolean {
+  if (stage === 'all') return true;
+  const current = sourceStage(source);
+  return current === stage || (stage === 'failed' && current === 'archive');
 }
 
 export type EligibilityFilter = SourceEligibility | 'all';
@@ -172,7 +184,7 @@ export function filterSources(
   const needle = filter.search.trim().toLocaleLowerCase();
   return sources.filter((source) =>
     (filter.eligibility === 'all' || source.eligibility === filter.eligibility)
-    && (filter.stage === 'all' || sourceStage(source) === filter.stage)
+    && sourceMatchesStage(source, filter.stage)
     && (filter.platform === 'all' || sourcePlatforms(source).includes(filter.platform))
     && (!needle || `${title(source)} ${source.clip_id}`.toLocaleLowerCase().includes(needle)));
 }

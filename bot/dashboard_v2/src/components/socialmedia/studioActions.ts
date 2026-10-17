@@ -21,7 +21,7 @@ export function studioActions(data: StudioOverviewData, now: number, t: Translat
   const clipReviews = clips.filter(clip => queueStage(clip) === 'review').length;
   if (clipReviews) rows.push({ key: 'clips', title: t(clipReviews === 1 ? '{count} Clip freigeben' : '{count} Clips freigeben', { count: clipReviews }), meta: t('Freigabe aus der bisherigen Pipeline'), tone: 'warning', view: 'freigabe', stage: 'review' });
   const failedJobs = schedule?.jobs.filter(job => job.status === 'failed').length ?? 0;
-  if (failedJobs) rows.push({ key: 'jobs', title: t('{count} Produktionen fehlgeschlagen', { count: failedJobs }), meta: t('Auftrag prüfen oder entfernen'), tone: 'danger', view: 'clips', stage: 'failed' });
+  if (failedJobs) rows.push({ key: 'jobs', title: t(failedJobs === 1 ? '{count} Produktion fehlgeschlagen' : '{count} Produktionen fehlgeschlagen', { count: failedJobs }), meta: t('Auftrag prüfen oder entfernen'), tone: 'danger', view: 'clips', stage: 'failed' });
   const failedClips = clips.filter(clip => queueStage(clip) === 'failed').length;
   if (failedClips) rows.push({ key: 'failed', title: t('{count} Clips mit Fehler', { count: failedClips }), meta: t('Veröffentlichung erneut prüfen'), tone: 'danger', view: 'veroeffentlicht', stage: 'failed' });
   for (const video of publish?.videos ?? []) if (video.event?.destinations.some(destination => ['retry', 'held', 'uncertain', 'failed'].includes(destination.state))) rows.push({ key: `publish-${video.id}`, title: clips.find(clip => clip.clip_db_id === video.clip_id)?.title || t('Video {id}', { id: video.id }), meta: t('Veröffentlichung erneut prüfen'), tone: 'warning', view: 'clips', stage: 'failed' });
@@ -30,6 +30,5 @@ export function studioActions(data: StudioOverviewData, now: number, t: Translat
     const expiring = status.reauth_soon || Boolean(expiry && Date.parse(expiry) <= now + 7 * 86400000);
     if (connectionFact(status).state !== 'connected' || expiring) rows.push({ key: `platform-${status.platform}`, title: PLATFORM_LABELS[status.platform as SocialPlatform] ?? status.platform, meta: t(expiring && connectionFact(status).state === 'connected' ? 'Verbindung läuft bald ab' : connectionFact(status).label), tone: 'warning', view: 'einstellungen' });
   }
-  for (const clip of clips) if ((clip.status === 'approved' || clip.status === 'publishing') && ['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? '')) rows.push({ key: `tiktok-${clip.clip_db_id}`, title: t('TikTok für {title} vorbereiten', { title: clip.title }), meta: t('TikTok-Veröffentlichung vorbereiten'), tone: 'warning', view: 'freigabe', stage: 'planned' });
   return rows;
 }

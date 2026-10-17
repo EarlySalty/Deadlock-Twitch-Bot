@@ -14,11 +14,13 @@ import './autopilot/schedule-queue/schedule-queue.css';
 import { QUEUE_FILTERS, filterSources, legacyUncertainPlatforms, partialResult, publishedPlatforms, sourceStage, type EligibilityFilter, type QueueStage } from './queuePresentation';
 import { clipDuration, clipThumbnail, insideWindow, localTimestamp, sourceMetadata } from './autopilot/import-pool/presentation';
 import type { PoolPreferences } from './autopilot/import-pool/types';
+import { HOLD_REASONS } from './reviewReasons';
 
 const PAGE_SIZE = 24;
 const PLATFORMS: SocialPlatform[] = ['youtube', 'tiktok', 'instagram'];
 const STAGE_TONES: Record<Exclude<QueueStage, 'all'>, string> = {
   new: 'neutral',
+  preparing: 'info',
   review: 'warning',
   planned: 'info',
   posted: 'success',
@@ -32,14 +34,6 @@ const ELIGIBILITY_FILTERS: Array<{ id: EligibilityFilter; label: string }> = [
   { id: 'legacy_non_deadlock_visible', label: 'Andere Spiele' },
 ];
 
-const HOLD_REASONS: Record<string, string> = {
-  ai_editor_unavailable: 'Der KI-Editor ist noch nicht verfügbar. Es wird kein statisches Ersatzvideo erstellt.',
-  external_ai_consent_required: 'Die Zustimmung zur externen KI-Verarbeitung fehlt.',
-  attempts_exhausted: 'Das Versuchslimit ist erreicht. Bitte prüfe den Auftrag.',
-  production_interrupted: 'Die Produktion wurde unterbrochen und wird fortgesetzt.',
-  unsuitable_clip: 'Die KI hält diesen Clip möglicherweise für ungeeignet. Entscheide, ob er trotzdem verarbeitet werden soll.',
-  ai_production_failed: 'Die KI-Produktion ist fehlgeschlagen. Bitte prüfe den Auftrag.',
-};
 
 export type DetailMode = 'ai' | 'layout' | 'enrichment';
 
@@ -127,13 +121,6 @@ export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, b
     <div className="pipeline-clips">
       <div className="pipeline-clips-filters" role="group" aria-label={t('Clips filtern')}>
         <div className="studio-filters">
-          {ELIGIBILITY_FILTERS.map((item) => (
-            <button key={item.id} type="button" className="studio-filter" aria-pressed={eligibility === item.id} onClick={() => reset(setEligibility)(item.id)}>
-              {t(item.label)} <span className="pipeline-clips-count">{counts[item.id].toLocaleString(locale)}</span>
-            </button>
-          ))}
-        </div>
-        <div className="studio-filters">
           {QUEUE_FILTERS.map((item) => (
             <button key={item.id} type="button" className="studio-filter" aria-pressed={stage === item.id} onClick={() => reset(setStage)(item.id)}>
               {t(item.label)}
@@ -149,6 +136,11 @@ export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, b
             aria-label={t('Titel oder Clip-ID suchen')}
             onChange={(event) => reset(setSearch)(event.target.value)}
           />
+          <select className="studio-select" value={eligibility} aria-label={t('Quelle')} onChange={(event) => reset(setEligibility)(event.target.value as EligibilityFilter)}>
+            {ELIGIBILITY_FILTERS.map((item) => (
+              <option key={item.id} value={item.id}>{`${t(item.label)} (${counts[item.id].toLocaleString(locale)})`}</option>
+            ))}
+          </select>
           <select className="studio-select" value={platform} aria-label={t('Plattform')} onChange={(event) => reset(setPlatform)(event.target.value as SocialPlatform | 'all')}>
             <option value="all">{t('Alle Plattformen')}</option>
             {PLATFORMS.map((item) => <option key={item} value={item}>{PLATFORM_LABELS[item]}</option>)}

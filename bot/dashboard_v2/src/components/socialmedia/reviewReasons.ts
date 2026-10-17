@@ -1,0 +1,30 @@
+export const HOLD_REASONS: Record<string, string> = {
+  ai_editor_unavailable: 'Der KI-Editor ist noch nicht verfügbar. Es wird kein statisches Ersatzvideo erstellt.',
+  external_ai_consent_required: 'Die Zustimmung zur externen KI-Verarbeitung fehlt.',
+  attempts_exhausted: 'Das Versuchslimit ist erreicht. Bitte prüfe den Auftrag.',
+  production_interrupted: 'Die Produktion wurde unterbrochen und wird fortgesetzt.',
+  unsuitable_clip: 'Die KI hält diesen Clip möglicherweise für ungeeignet. Entscheide, ob er trotzdem verarbeitet werden soll.',
+  ai_production_failed: 'Die KI-Produktion ist fehlgeschlagen. Bitte prüfe den Auftrag.',
+};
+
+export const DESTINATION_REASONS: Record<string, string> = {
+  account_changed: 'Das verbundene Konto hat sich geändert. Bitte gib das Video erneut frei.',
+  account_missing: 'Das Konto ist nicht mehr verbunden. Bitte verbinde es neu und gib das Video erneut frei.',
+  exact_file_changed: 'Die Videodatei hat sich seit der Freigabe geändert. Bitte gib sie erneut frei.',
+  review_required: 'Dieses Ziel braucht deine Freigabe.',
+  tiktok_effect_boundary_pending: 'TikTok wartet noch auf den sicheren Veröffentlichungsweg.',
+  tiktok_consent_missing: 'Die TikTok-Einwilligung für diese Fassung fehlt.',
+  tiktok_caption_changed: 'Der TikTok-Text hat sich geändert. Bitte bestätige ihn erneut.',
+  tiktok_options_invalid: 'Die TikTok-Einstellungen passen nicht mehr. Bitte prüfe sie erneut.',
+  tiktok_file_invalid: 'TikTok hat die Videodatei nicht angenommen. Ein erneuter Versuch mit derselben Datei hilft nicht.',
+  tiktok_music_consent_missing: 'Die Zustimmung zur TikTok-Musiknutzung fehlt.',
+  tiktok_already_published: 'Dieses Video ist auf TikTok bereits veröffentlicht. Es wird kein zweites Mal hochgeladen.',
+  tiktok_transfer_active: 'Bei TikTok läuft für dieses Video schon eine Übertragung. Bitte warte, bis sie abgeschlossen ist.',
+  tiktok_init_unconfirmed: 'TikTok hat den Start der Übertragung nicht bestätigt. Wir laden nicht doppelt hoch.',
+  tiktok_init_uncertain: 'TikTok hat den Start der Übertragung nicht bestätigt. Wir laden nicht doppelt hoch.',
+  tiktok_transfer_uncertain: 'Ob die Übertragung zu TikTok vollständig war, ist unklar. Wir laden nicht doppelt hoch.',
+  tiktok_status_unconfirmed: 'TikTok hat den Status der Veröffentlichung nicht bestätigt. Bitte prüfe dein TikTok-Profil.',
+  tiktok_inbox_only: 'TikTok hat das Video nur in dein TikTok-Postfach gelegt. Es wurde nicht veröffentlicht.',
+  tiktok_rejected: 'TikTok hat die Veröffentlichung abgelehnt.',
+  tiktok_published_without_post_id: 'TikTok meldet die Veröffentlichung, aber ohne Link zum Beitrag.',
+};

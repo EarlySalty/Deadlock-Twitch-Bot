@@ -36,9 +36,11 @@ const STAGE_ALIASES: Record<string, QueueStage> = {
   freigabe: 'review',
   review: 'review',
   veroeffentlicht: 'posted',
+  vorbereitung: 'preparing',
+  aussortiert: 'failed',
 };
 
-const STAGES: QueueStage[] = ['all', 'new', 'review', 'planned', 'posted', 'failed', 'archive'];
+const STAGES: QueueStage[] = ['all', 'new', 'preparing', 'review', 'planned', 'posted', 'failed', 'archive'];
 
 export function socialViewFromSearch(search: string): SocialMediaView {
   const params = new URLSearchParams(search);
@@ -51,7 +53,7 @@ export function socialStageFromSearch(search: string): QueueStage | undefined {
   if (socialViewFromSearch(search) !== 'clips') return undefined;
   const stage = params.get('stage');
   if (stage && (STAGES as string[]).includes(stage)) return stage as QueueStage;
-  return STAGE_ALIASES[params.get('view') ?? ''];
+  return STAGE_ALIASES[stage ?? ''] ?? STAGE_ALIASES[params.get('view') ?? ''];
 }
 
 export function socialWorkspaceDepartureAllowed(

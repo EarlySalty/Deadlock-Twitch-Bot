@@ -2,7 +2,7 @@ import { globalTimezoneUrl } from '@/utils/socialMediaChannel';
 import { ImportPopover } from '../../ImportPopover';
 import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, Save } from "lucide-react";
+import { Archive, Download, Save } from "lucide-react";
 
 import { useLanguage, useT } from "@/context/LanguageContext";
 import { importPoolApi } from "./api";
@@ -259,6 +259,16 @@ function OwnerImportPool({
     !poolQuery.isFetching;
   const importKnown = latestQuery.isSuccess && !importQuery.isError;
   const selectionLocked = busy || blocked || !poolKnown;
+  const resumable = Boolean(job && ["error", "incomplete"].includes(job.status));
+  const importButtonLabel = resumeMutation.isPending
+    ? "Import wird fortgesetzt …"
+    : startMutation.isPending
+      ? "Import wird gestartet …"
+      : activeImport(job)
+        ? "Import läuft …"
+        : resumable
+          ? "Twitch-Clips weiter importieren"
+          : "Twitch-Clips importieren";
 
   function bulkSelect(clipIds: string[], selected: boolean) {
     if (selectionLocked || clipIds.length === 0) return;
@@ -319,74 +329,14 @@ function OwnerImportPool({
           <h2><Archive size={18} aria-hidden="true" />{t("Clip-Vorrat (Pool)")}</h2>
           <p>
             {page
-              ? t("{count} Clips erfasst", { count: page.total.toLocaleString(locale) })
+              ? t("{count} Clips im Vorrat", { count: page.total.toLocaleString(locale) })
               : t(poolQuery.isError ? "Clip-Pool nicht geladen" : "Clip-Pool laden …")}
-            {saved && ` · ${t(saved.clip_sort === "oldest_first" ? "Älteste Clips zuerst" : "Neueste Clips zuerst")}`}
+            {` · ${t("Spiel: Deadlock")}`}
+            {saved && ` · ${t(saved.clip_sort === "oldest_first" ? "Reihenfolge: Älteste zuerst" : "Reihenfolge: Neueste zuerst")}`}
+            {saved && saved.clip_date_filter.kind !== "all" && ` · ${filterDescription(saved.clip_date_filter, t)}`}
           </p>
         </div>
         <div className="import-pool-toolbar-actions">
-          <details className="import-pool-history">
-            <summary className="studio-button">
-              {job ? t("Historischer Import ({count} erfasst)", { count: job.persisted_count.toLocaleString(locale) }) : t("Historischer Import")}
-            </summary>
-            <div className="import-pool-history-panel" aria-label={t("Historischer Import")} role="group">
-              <p className="import-pool-help">
-                {t(
-                  "Verwendet den gespeicherten Zeitraum. Ein laufender Import behält seinen ursprünglichen Zeitraum.",
-                )}
-              </p>
-              {dirty && (
-                <p className="import-pool-help">
-                  {t("Änderungen vor dem Import speichern oder verwerfen.")}
-                </p>
-              )}
-              {latestQuery.isPending ? (
-                <p role="status">{t("Importstatus laden …")}</p>
-              ) : job ? (
-                <ImportProgress job={job} />
-              ) : (
-                latestQuery.isSuccess && (
-                  <p className="import-pool-help">
-                    {t("Noch kein historischer Import vorhanden.")}
-                  </p>
-                )
-              )}
-              {job && ["error", "incomplete"].includes(job.status) && (
-                <button
-                  type="button"
-                  className="studio-button"
-                  disabled={busy || blocked || !importKnown}
-                  onClick={() => {
-                    setFeedback("");
-                    resumeMutation.mutate({ jobId: job.id, after: onChanged });
-                  }}
-                >
-                  {t(
-                    resumeMutation.isPending
-                      ? "Import wird fortgesetzt …"
-                      : "Import fortsetzen",
-                  )}
-                </button>
-              )}
-            </div>
-          </details>
-          <button
-            type="button"
-            className="studio-button"
-            disabled={
-              busy || blocked || dirty || !importKnown || activeImport(job)
-            }
-            onClick={() => {
-              setFeedback("");
-              startMutation.mutate({ after: onChanged });
-            }}
-          >
-            {t(
-              startMutation.isPending
-                ? "Import wird gestartet …"
-                : "Import starten",
-            )}
-          </button>
           {current && (
             <ImportPopover><form
               className="import-pool-preferences"
@@ -565,7 +515,43 @@ function OwnerImportPool({
               </div>
             </form></ImportPopover>
           )}
+          <button
+            type="button"
+            className="studio-button studio-primary"
+            disabled={busy || blocked || !importKnown || activeImport(job) || (!resumable && dirty)}
+            onClick={() => {
+              setFeedback("");
+              if (job && resumable) resumeMutation.mutate({ jobId: job.id, after: onChanged });
+              else startMutation.mutate({ after: onChanged });
+            }}
+          >
+            <Download size={16} aria-hidden="true" />
+            {t(importButtonLabel)}
+          </button>
         </div>
+      </div>
+      <div className="import-pool-status" aria-label={t("Twitch-Clips importieren")} role="group">
+        <p className="import-pool-help">
+          {t(
+            "Verwendet den gespeicherten Zeitraum. Ein laufender Import behält seinen ursprünglichen Zeitraum.",
+          )}
+        </p>
+        {dirty && !resumable && (
+          <p className="import-pool-help">
+            {t("Änderungen vor dem Import speichern oder verwerfen.")}
+          </p>
+        )}
+        {latestQuery.isPending ? (
+          <p role="status">{t("Importstatus laden …")}</p>
+        ) : job ? (
+          <ImportProgress job={job} />
+        ) : (
+          latestQuery.isSuccess && (
+            <p className="import-pool-help">
+              {t("Noch kein historischer Import vorhanden.")}
+            </p>
+          )
+        )}
       </div>
       {errors.length > 0 && (
         <div role="alert" className="import-pool-error">

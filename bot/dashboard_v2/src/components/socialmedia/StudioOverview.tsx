@@ -1,10 +1,14 @@
 import { studioActions } from './studioActions';
-import type { ComponentType, ReactNode } from 'react';
+import { isValidElement, type ComponentType, type ReactNode } from 'react';
 import { AlertTriangle, ArrowRight, CalendarClock, CircleDot, Clock3, ListOrdered, Plug, Power } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import type { PlatformStatus, SocialClipMitPosting } from '@/api/socialMedia';
 import type { QueueJob, ScheduleQueueSnapshot } from './autopilot/schedule-queue';
-import type { PublishSnapshot, PublishVideo } from './autopilot/publish-review/api';
+import type { PublishReviewClient, PublishSnapshot, PublishVideo } from './autopilot/publish-review/api';
+import { ApprovalEntries } from './StudioApprovals';
+import { approvalVideos } from './approvalVideos';
+import { StudioOverviewTiles } from './StudioOverviewTiles';
+import type { SocialPlatform } from '@/types/socialMedia';
 import { upcomingTerms, upcomingTermView } from './upcomingTerms';
 import { connectionFact } from './platformPresentation';
 import { platformIconUrl } from './platformIcon';
@@ -142,24 +146,30 @@ interface OverviewRow {
   meta: string;
   tone?: Tone;
   platform?: string;
+  platforms?: string[];
+  badge?: { label: string; mode: string };
   onClick: () => void;
 }
 
-function OverviewColumn({ icon: Icon, title, count, rows, empty, footer, variant }: {
+function OverviewColumn({ icon: Icon, title, count, rows, empty, lead, footer, variant }: {
   icon: IconComponent;
   title: string;
   count: number | null;
   rows: OverviewRow[];
   empty: string;
+  lead?: ReactNode;
   footer?: ReactNode;
   variant?: 'actions' | 'now' | 'next';
 }) {
   return <section className="studio-overview-column" data-variant={variant}>
     <header className="studio-overview-column-head"><Icon className="h-4 w-4" aria-hidden /><h2>{title}</h2>{count !== null && count > 0 && <span>{count}</span>}</header>
-    {rows.length === 0 ? (empty ? <p className="studio-overview-empty">{empty}</p> : null) : <ul className="studio-overview-rows" data-scroll={rows.length > 8 ? 'true' : undefined}>{rows.map(row => <li key={row.key}>
+    {lead}
+    {rows.length === 0 ? (empty && !lead ? <p className="studio-overview-empty">{empty}</p> : null) : <ul className="studio-overview-rows" data-scroll={rows.length > 8 ? 'true' : undefined}>{rows.map(row => <li key={row.key}>
       <button type="button" className="studio-overview-row" data-tone={row.tone ?? 'neutral'} onClick={row.onClick}>
         {row.platform && <img className="studio-overview-platform" src={platformIconUrl(row.platform)} width="16" height="16" alt="" aria-hidden />}
         <span className="studio-overview-row-text"><strong title={row.title}>{row.title}</strong><span title={row.meta}>{row.meta}</span></span>
+        {row.badge && <span className="studio-mode-badge" data-mode={row.badge.mode}>{row.badge.label}</span>}
+        {row.platforms && row.platforms.length > 0 && <span className="studio-overview-platforms">{row.platforms.map(platform => <img key={platform} className="studio-overview-platform" src={platformIconUrl(platform)} width="16" height="16" alt={PLATFORM_LABELS[platform as SocialPlatform] ?? platform} />)}</span>}
         <ArrowRight className="h-4 w-4" aria-hidden />
       </button>
     </li>)}</ul>}
@@ -170,7 +180,7 @@ function OverviewColumn({ icon: Icon, title, count, rows, empty, footer, variant
 const PLATFORM_ICONS = new Set(['youtube', 'tiktok', 'instagram']);
 
 function rowPlatform(key: string): string | undefined {
-  const platform = key.startsWith('platform-') ? key.slice('platform-'.length) : key.startsWith('tiktok-') ? 'tiktok' : undefined;
+  const platform = key.startsWith('platform-') ? key.slice('platform-'.length) : undefined;
   return platform && PLATFORM_ICONS.has(platform) ? platform : undefined;
 }
 
@@ -183,11 +193,33 @@ function HoldBanner({ row, onNavigate }: { row: OverviewRow & { hold: 'empty_poo
   </div>;
 }
 
-export function PipelineOverview({ data, now, onNavigate, activity }: {
+function LegacyClipsBanner({ count, onNavigate }: { count: number; onNavigate: (view: SocialMediaViewTarget, stage?: QueueStage) => void }) {
+  const { t } = useLanguage();
+  return <div className="studio-overview-banner" data-tone="warning" role="status">
+    <AlertTriangle className="h-4 w-4" aria-hidden />
+    <span className="studio-overview-banner-text"><strong>{t(count === 1 ? '{count} Clip freigeben aus der bisherigen Pipeline' : '{count} Clips freigeben aus der bisherigen Pipeline', { count })}</strong></span>
+    <button type="button" className="studio-button" onClick={() => onNavigate('clips', 'review')}>{t('Zu den Clips')}</button>
+  </div>;
+}
+
+function termGroup(key: string, clipId: number | undefined, at: string): string {
+  return clipId === undefined ? key : `${clipId}@${Date.parse(at)}`;
+}
+
+function ownerFromActivity(activity: ReactNode): string | undefined {
+  return isValidElement<{ twitchUserId?: string }>(activity) ? activity.props.twitchUserId : undefined;
+}
+
+export function PipelineOverview({ data, now, onNavigate, activity, twitchUserId, streamer, isAdmin = false, statisticsPlatforms, publishClient }: {
   data: StudioOverviewData;
   now: number;
   activity?: ReactNode;
   onNavigate: (view: SocialMediaViewTarget, stage?: QueueStage) => void;
+  twitchUserId?: string;
+  streamer?: string;
+  isAdmin?: boolean;
+  statisticsPlatforms?: string[];
+  publishClient?: PublishReviewClient;
 }) {
   const { t, locale } = useLanguage();
   const { timezone } = data;
@@ -195,45 +227,73 @@ export function PipelineOverview({ data, now, onNavigate, activity }: {
   const publish = data.publishFailed ? undefined : data.publish;
   const clips = data.clipsFailed ? undefined : data.clips;
   const platforms = data.platformsFailed ? undefined : data.platforms;
+  const owner = twitchUserId ?? ownerFromActivity(activity);
   const zone = schedule?.settings.timezone ?? timezone;
   const when = (iso: string | null, timeZone = zone) => iso ? `${formatTerminInZone(iso, locale, timeZone)} · ${timeZone}` : t('Ohne Termin');
   const clipTitle = (job: QueueJob) => job.clip_title || t('Clip {id}', { id: job.clip_id });
   const videoTitle = (video: PublishVideo) => clips?.find(clip => clip.clip_db_id === video.clip_id)?.title || t('Video {id}', { id: video.id });
+  const modeBadge = (mode: 'static' | 'ai' | null | undefined) => mode ? { label: t(mode === 'ai' ? 'KI-Schnitt' : 'Standard-Vorlage'), mode } : undefined;
   const nowRows: OverviewRow[] = [
-    ...jobsWithStatus(schedule, 'running').map(job => ({ key: `job-${job.id}`, title: clipTitle(job), meta: job.mode === 'ai' ? t('KI-Bearbeitung läuft') : t('Produktion läuft'), tone: 'gold' as Tone, onClick: () => onNavigate('clips', 'planned') })),
+    ...jobsWithStatus(schedule, 'running').map(job => ({ key: `job-${job.id}`, title: clipTitle(job), meta: job.mode === 'ai' ? t('KI-Bearbeitung läuft') : t('Produktion läuft'), tone: 'gold' as Tone, badge: modeBadge(job.mode ?? job.requested_mode), onClick: () => onNavigate('clips', 'preparing') })),
     ...(clips ?? []).filter(clip => clip.status === 'publishing').map(clip => ({ key: `publish-${clip.clip_db_id}`, title: clip.title || clip.clip_id, meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('clips', queueStage(clip)) })),
-    ...(publish?.videos ?? []).filter(video => video.event?.destinations.some(destination => ['preparing', 'effect_started', 'processing'].includes(destination.state))).map(video => ({ key: `video-${video.id}`, title: videoTitle(video), meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('clips', 'planned') })),
+    ...(publish?.videos ?? []).filter(video => video.event?.destinations.some(destination => ['preparing', 'effect_started', 'processing'].includes(destination.state))).map(video => ({ key: `video-${video.id}`, title: videoTitle(video), meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, badge: modeBadge(video.mode), onClick: () => onNavigate('clips', 'planned') })),
   ];
-  const allActions: OverviewRow[] = studioActions(data, now, t).map(action => ({ ...action, platform: rowPlatform(action.key), onClick: () => onNavigate(action.view, action.stage) }));
-  const holdRow = allActions.find(row => row.key === 'hold');
+  const actions: OverviewRow[] = studioActions(data, now, t).map(action => ({ ...action, platform: rowPlatform(action.key), onClick: () => onNavigate(action.view, action.stage) }));
+  const holdRow = actions.find(row => row.key === 'hold');
   const hold = schedule?.production_hold === 'empty_pool' || schedule?.production_hold === 'no_schedule' ? schedule.production_hold : null;
-  const actionRows = allActions.filter(row => row.key !== 'hold');
+  const legacyReviews = actions.some(row => row.key === 'clips') ? countStage(clips, 'review') : 0;
+  const reviewsInPlan = schedule?.jobs.some(job => job.status === 'review') ?? false;
+  const warningRows = actions.filter(row => !['hold', 'clips', 'video-reviews'].includes(row.key) && (row.key !== 'reviews' || reviewsInPlan));
+  const approvals = approvalVideos(publish);
 
-  const nextRows: OverviewRow[] = upcomingTerms(data, now).slice(0, 8).map(term => {
+  const nextRows: OverviewRow[] = [];
+  const nextGroups = new Map<string, OverviewRow>();
+  const posts = upcomingPosts(clips, now);
+  for (const term of upcomingTerms(data, now)) {
     const video = publish?.videos.find(video => `video-${video.id}` === term.key);
     const job = schedule?.jobs.find(job => `job-${job.id}` === term.key);
-    const post = upcomingPosts(clips, now).find(post => post.key === term.key);
-    return {
+    const post = posts.find(post => post.key === term.key);
+    const clipId = post ? Number(term.key.slice(0, term.key.indexOf('-'))) : video?.clip_id ?? job?.clip_id;
+    const termPlatforms = post ? [post.platform] : video ? video.event?.destinations.map(destination => destination.platform) ?? [] : job ? (job.reservations ?? []).map(reservation => reservation.platform) : [];
+    const group = termGroup(term.key, clipId, term.at);
+    const existing = nextGroups.get(group);
+    if (existing) {
+      existing.platforms = [...new Set([...(existing.platforms ?? []), ...termPlatforms])];
+      continue;
+    }
+    if (nextRows.length >= 8) continue;
+    const row: OverviewRow = {
       key: term.key,
       title: video ? videoTitle(video) : job ? clipTitle(job) : post ? post.title : t('Nächster freier Auto-Pilot-Termin'),
-      meta: post ? `${PLATFORM_LABELS[post.platform]} · ${when(term.at, term.timezone)}` : when(term.at, term.timezone),
+      meta: when(term.at, term.timezone),
+      platforms: [...new Set<string>(termPlatforms)],
       onClick: () => post ? onNavigate('clips', post.stage) : onNavigate(upcomingTermView(term.key)),
     };
-  });
+    nextGroups.set(group, row);
+    nextRows.push(row);
+  }
 
   const failed = data.scheduleFailed || data.publishFailed || data.clipsFailed || data.platformsFailed;
   const loading = (!schedule || !publish || !clips || !platforms) && !failed;
   const unavailable = failed ? t('Nicht abrufbar') : loading ? t('Wird geladen') : null;
+  const statistics = statisticsPlatforms ?? (platforms ?? []).filter(status => status.capabilities?.statistics).map(status => status.platform);
+  const showHold = Boolean(holdRow && hold);
+  const lead = showHold || legacyReviews > 0 || (publish && approvals.length > 0) ? <>
+    {holdRow && hold && <HoldBanner row={{ ...holdRow, hold }} onNavigate={onNavigate} />}
+    {legacyReviews > 0 && <LegacyClipsBanner count={legacyReviews} onNavigate={onNavigate} />}
+    {publish && approvals.length > 0 && <ApprovalEntries videos={approvals} snapshot={publish} clips={clips} owner={owner} client={publishClient} timezone={zone} onNavigate={onNavigate} />}
+  </> : undefined;
   return <div className="studio-overview" aria-busy={loading || undefined}>
     {failed && <p className="studio-overview-notice" role="status">{t('Die Übersicht ist nicht vollständig abrufbar. Bereits geladene Einträge bleiben sichtbar.')}</p>}
-    {holdRow && hold && <HoldBanner row={{ ...holdRow, hold }} onNavigate={onNavigate} />}
     <div className="studio-overview-grid">
-      <OverviewColumn variant="actions" icon={AlertTriangle} title={t('Braucht dich')} count={actionRows.length} rows={actionRows} empty={unavailable ?? (holdRow ? t('Sonst ist nichts offen.') : t('Nichts offen. Du bist auf dem aktuellen Stand.'))} />
+      <OverviewColumn variant="actions" icon={AlertTriangle} title={t('Prüfung & Freigabe')} count={warningRows.length + approvals.length + (legacyReviews > 0 ? 1 : 0)} rows={warningRows} lead={lead}
+        empty={unavailable ?? t('Nichts offen. Du bist auf dem aktuellen Stand.')} />
       <div className="studio-overview-side">
         <OverviewColumn variant="now" icon={CircleDot} title={t('Läuft gerade')} count={null} rows={nowRows} empty={activity ? '' : unavailable ?? t('Gerade läuft nichts.')} footer={activity} />
         <OverviewColumn variant="next" icon={Clock3} title={t('Als Nächstes')} count={null} rows={nextRows} empty={unavailable ?? t('Noch nichts eingeplant.')}
           footer={<button type="button" className="studio-overview-link" onClick={() => onNavigate('planen')}>{t('Zeitplan öffnen')}<ArrowRight className="h-4 w-4" aria-hidden /></button>} />
       </div>
     </div>
+    <StudioOverviewTiles schedule={schedule} publish={publish} clips={clips} owner={owner} streamer={streamer ?? clips?.[0]?.streamer_login ?? ''} isAdmin={isAdmin} statisticsPlatforms={statistics} onNavigate={onNavigate} />
   </div>;
 }
