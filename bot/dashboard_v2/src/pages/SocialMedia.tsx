@@ -407,7 +407,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         className={activeView === 'clips' ? 'studio-pipeline min-w-0 space-y-4' : activeView === 'vod' ? 'studio-archive min-w-0' : 'studio-automation-workspace min-w-0'}
       >
         {activeView === 'heute' ? (
-          <PipelineOverview data={overviewData} now={now} onNavigate={openView} activity={<StudioActivity twitchUserId={twitchUserId} data={overviewData} now={now} onNavigate={openView} />} />
+          <PipelineOverview data={overviewData} now={now} onNavigate={openView} twitchUserId={twitchUserId} streamer={streamer} isAdmin={isAdmin} statisticsPlatforms={(platformStatusQuery.data?.platforms ?? []).filter((p) => p.capabilities?.statistics).map((p) => p.platform)} publishClient={publishClient} activity={<StudioActivity twitchUserId={twitchUserId} data={overviewData} now={now} onNavigate={openView} />} />
         ) : activeView === 'clips' ? (
           <div className="studio-library-import">
             {workspaceSlots?.libraryImport ?? <ImportPoolPanel twitchUserId={twitchUserId} reloadKey={reloadKey} onChanged={refreshSchedule} initialStage={clipStage ?? 'all'} />}
