@@ -618,4 +618,7 @@ export const SOCIAL_EN: Record<string, string> = {
   'KI-Einwilligung erteilt.': 'AI consent given.',
   'KI-Einwilligung fehlt. Ohne Einwilligung startet keine KI-Bearbeitung.': 'AI consent missing. Without consent no AI editing starts.',
   'Einwilligung in Einstellungen ändern': 'Change consent in settings',
+  'Auto-Posting': 'Auto-posting',
+  'Gemeinsames Konto': 'Shared account',
+  'Neu verbinden bis {datum}': 'Reconnect by {datum}',
 };

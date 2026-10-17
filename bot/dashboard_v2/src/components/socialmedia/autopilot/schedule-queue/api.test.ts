@@ -121,20 +121,20 @@ test('plan validation reports duplicate and empty times without a slot ceiling',
   assert.deepEqual(plan.validateDraft(draft, german), ['Jede Zeit braucht eine Uhrzeit.', 'Dienstag 08:00 ist doppelt.']);
 });
 
-test('switching scope copies shared times and asks before merging different platform times', () => {
+test('switching scope copies shared times and merges platform times without asking', () => {
   const fixture = createScheduleQueueFixture();
   const base = { snapshot: fixture.snapshot(), policy: fixture.policy() };
   const draft = { ...plan.planDraft(base), target_platforms: ['youtube', 'tiktok'] };
   const split = plan.switchScope(draft, 'per_platform');
-  assert.equal(split.choices, undefined);
-  assert.deepEqual(split.draft.per_platform.youtube, draft.shared);
-  assert.deepEqual(split.draft.per_platform.tiktok, draft.shared);
-  const back = plan.switchScope(split.draft, 'shared');
-  assert.equal(back.choices, undefined);
-  assert.equal(back.draft.schedule_scope, 'shared');
-  const different = { ...split.draft, per_platform: { ...split.draft.per_platform, tiktok: [{ weekday: 1, local_time: '08:00' }, { weekday: 1, local_time: '22:00' }] } };
-  const conflict = plan.switchScope(different, 'shared');
-  assert.equal(conflict.draft, different);
-  assert.deepEqual(conflict.choices?.map(choice => choice.platforms), [['youtube'], ['tiktok']]);
-  assert.equal(plan.policyChange(base, split.draft)?.schedule_scope, 'per_platform');
+  assert.deepEqual(split.per_platform.youtube, draft.shared);
+  assert.deepEqual(split.per_platform.tiktok, draft.shared);
+  const back = plan.switchScope(split, 'shared');
+  assert.equal(back.schedule_scope, 'shared');
+  assert.deepEqual(back.shared, plan.normalizeSlots(draft.shared));
+  const tiktok = [{ weekday: 1, local_time: '08:00' }, { weekday: 1, local_time: '22:00' }];
+  const different = { ...split, per_platform: { ...split.per_platform, tiktok } };
+  const merged = plan.switchScope(different, 'shared');
+  assert.equal(merged.schedule_scope, 'shared');
+  assert.deepEqual(merged.shared, plan.normalizeSlots([...draft.shared, ...tiktok]));
+  assert.equal(plan.policyChange(base, split)?.schedule_scope, 'per_platform');
 });

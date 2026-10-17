@@ -4,8 +4,8 @@ import { useLanguage } from '@/context/LanguageContext';
 import { platformIconUrl } from './platformIcon';
 import type { PolicyScope, ScheduleQueueApi, WeeklySlot } from './autopilot/schedule-queue/api';
 import {
-  AI_MODES, DISTRIBUTIONS, HOLDS, PATHS, PLAN_PLATFORMS, REVIEWS, SCOPES, SHARED_TEXT, TEXT_SCOPES, WEEKDAYS, addTime, failureText, isDirty, loadPlan, planDraft, planText,
-  savePlan, switchScope, validateDraft, type PlanDraft, type PlanState, type PlanText, type ScopeSwitch, type TextDraft,
+  AI_MODES, HOLDS, PATHS, PLAN_PLATFORMS, REVIEWS, SCOPES, SHARED_TEXT, TAB_ORDER, TEXT_SCOPES, WEEKDAYS, addTime, failureText, isDirty, loadPlan, normalizeTime, planDraft, planText,
+  savePlan, switchScope, validateDraft, type PlanDraft, type PlanState, type PlanText, type TextDraft,
 } from './pipelinePlan';
 
 function slotLabel(value: string | undefined, timezone: string, locale: string, text: PlanText): string {
@@ -14,10 +14,14 @@ function slotLabel(value: string | undefined, timezone: string, locale: string, 
   if (Number.isNaN(at)) return text('Termin nicht verfügbar');
   if (at <= Date.now()) return text('Noch kein Termin');
   try {
-    return new Intl.DateTimeFormat(locale, { timeZone: timezone, weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
+    return new Intl.DateTimeFormat(locale, { timeZone: timezone, weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(value));
   } catch {
     return text('Termin nicht verfügbar');
   }
+}
+
+function platformLabel(platform: string): string {
+  return PLAN_PLATFORMS.find(item => item.id === platform)?.label ?? platform;
 }
 
 export interface PipelinePlanControlsProps {
@@ -28,10 +32,9 @@ export interface PipelinePlanControlsProps {
   timezoneLink?: ReactNode;
   layoutSlot?: ReactNode;
   aiOptionsSlot?: ReactNode;
-  reviewStatusSlot?: ReactNode;
 }
 
-export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey = 0, timezoneLink, layoutSlot, aiOptionsSlot, reviewStatusSlot }: PipelinePlanControlsProps) {
+export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey = 0, timezoneLink, layoutSlot, aiOptionsSlot }: PipelinePlanControlsProps) {
   const { language, locale } = useLanguage();
   const text = planText(language);
   const id = useId();
@@ -41,7 +44,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
   const [saveError, setSaveError] = useState('');
   const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
-  const [choices, setChoices] = useState<ScopeSwitch['choices']>();
+  const [tab, setTab] = useState('');
   const dirtyRef = useRef(false);
   const savingRef = useRef(false);
   const changed = useRef(onChanged);
@@ -49,8 +52,12 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
 
   const dirty = base !== null && draft !== null && isDirty(base, draft);
   useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
-  const advancedNeeded = draft !== null && (draft.schedule_scope === 'per_platform' || draft.distribution_policy === 'independent_clips' || choices !== undefined);
-  const [advancedShown, setAdvancedShown] = useState(false);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   const reload = useCallback(async (force: boolean, signal?: AbortSignal) => {
     if (savingRef.current || (dirtyRef.current && !force)) return;
@@ -59,7 +66,6 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
       if (signal?.aborted || savingRef.current || (dirtyRef.current && !force)) return;
       setBase(state);
       setDraft(planDraft(state));
-      setChoices(undefined);
       setLoadError('');
       if (force) setSaveError('');
     } catch (failure) {
@@ -106,12 +112,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
     changed.current?.();
   }
 
-  const scheduleScope = (scope: PolicyScope) => {
-    const result = switchScope(draft, scope);
-    if (result.choices) { setChoices(result.choices); return; }
-    setChoices(undefined);
-    edit(result.draft);
-  };
+  const scheduleScope = (scope: PolicyScope) => edit(switchScope(draft, scope));
 
   const aiPath = draft.pipeline_mode !== 'upload';
   const choosePath = (path: 'template' | 'ai') => {
@@ -119,41 +120,47 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
     if (!aiPath) edit({ pipeline_mode: base.policy.pipeline_mode !== 'upload' ? base.policy.pipeline_mode : 'upload_text' });
   };
 
-  return <section className="studio-card schedule-queue pp-plan" aria-labelledby={`${id}-heading`} data-unsaved={dirty || saving ? 'true' : undefined} data-saving={saving ? 'true' : undefined}>
+  const tabs = TAB_ORDER.filter(platform => draft.target_platforms.includes(platform)).concat(draft.target_platforms.filter(platform => !TAB_ORDER.includes(platform)));
+  const activeTab = tabs.includes(tab) ? tab : tabs[0];
+  const barShown = dirty || saving || saveError !== '';
+
+  return <section className="schedule-queue pp-plan" aria-labelledby={`${id}-heading`} data-unsaved={dirty || saving ? 'true' : undefined} data-saving={saving ? 'true' : undefined}>
     <header className="pp-head">
-      <div>
-        <h2 id={`${id}-heading`}><CalendarClock size={18} aria-hidden="true" />{text('Planen')}</h2>
-        <p className="sq-help">{text('Lege fest, wie deine Clips vorbereitet werden, wer sie freigibt und wann sie erscheinen.')}</p>
-      </div>
+      <h2 id={`${id}-heading`}><CalendarClock size={18} aria-hidden="true" />{text('Planen')}</h2>
+      <p className="sq-help">{text('Lege fest, wie deine Clips vorbereitet werden, wer sie freigibt und wann sie erscheinen.')}</p>
     </header>
     <form className="pp-form" onSubmit={event => { event.preventDefault(); void submit(); }}>
       <fieldset className="pp-steps" disabled={saving}>
-        <Step id={`${id}-step-1`} number={1} title={text('Postingplan')} question={text('Wann soll gepostet werden?')} text={text}>
-          <div className="pp-step-grid">
-            <div className="pp-column">
-              <p className="sq-help pp-timezone">{text('Zeitzone: {timezone}', { timezone: base.snapshot.settings.timezone })} · {timezoneLink}</p>
-              {!draft.target_platforms.length && <p className="sq-help">{text('Noch keine Plattform für Auto-Posting aktiv. Aktiviere sie unter Einstellungen bei den Konten.')}</p>}
-              {draft.schedule_scope === 'shared' && <WeekEditor label={text('Gemeinsam')} slots={draft.shared} text={text} onChange={shared => edit({ shared })} />}
-              <p className="sq-help">{text('Sommerzeit wird berücksichtigt. Verpasste Termine werden nicht nachgeholt.')}</p>
-            </div>
-            <div className="pp-column">
-              <div className="pp-timing">
-                <NextSlots base={base} targets={draft.target_platforms} locale={locale} text={text} />
-                <label className="pp-lead" htmlFor={`${id}-lead`}>{text('Vorlauf in Stunden (Standard: 24 h vor Termin vorbereiten)')}<input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} /></label>
-              </div>
-              {base.snapshot.production_hold && <p className="sq-help">{text(HOLDS[base.snapshot.production_hold])}</p>}
-            </div>
+        <Step id={`${id}-step-1`} number={1} title={text('Postingplan')} question={text('Wann soll gepostet werden?')} text={text}
+          actions={<ScopeSegment name={`${id}-scope`} value={draft.schedule_scope} text={text} onChange={scheduleScope} />}>
+          <div className="pp-infoline">
+            <span className="pp-info-item pp-timezone">{text('Zeitzone: {timezone}', { timezone: base.snapshot.settings.timezone })} · {timezoneLink}</span>
+            <label className="pp-info-item pp-lead" htmlFor={`${id}-lead`}>
+              <span>{text('Vorlauf')}</span>
+              <input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} />
+              <span>{text('h vor Termin')}</span>
+            </label>
+            <NextSlots base={base} targets={draft.target_platforms} locale={locale} text={text} />
           </div>
-          <details className="pp-advanced" open={advancedShown || advancedNeeded} onToggle={event => setAdvancedShown(event.currentTarget.open)}>
-            <summary>{text('Erweiterte Plattform-Regeln (abweichende Zeiten / unterschiedliche Clips pro Kanal)')}</summary>
-            <div className="pp-column">
-              <ChoiceGroup legend={text('Wann soll gepostet werden?')} name={`${id}-scope`} options={SCOPES} value={draft.schedule_scope} text={text} onChange={scheduleScope} compact />
-              {choices && <SharedChoice choices={choices} text={text} onPick={slots => { setAdvancedShown(true); setChoices(undefined); edit({ schedule_scope: 'shared', shared: slots }); }} onCancel={() => setChoices(undefined)} />}
-              {draft.schedule_scope === 'per_platform' && draft.target_platforms.map(platform => <WeekEditor key={platform} platform={platform} label={PLAN_PLATFORMS.find(item => item.id === platform)?.label ?? platform} slots={draft.per_platform[platform] ?? []} text={text}
-                onChange={slots => edit({ per_platform: { ...draft.per_platform, [platform]: slots } })} />)}
-              <ChoiceGroup legend={text('Verteilung der Clips')} name={`${id}-distribution`} options={DISTRIBUTIONS} value={draft.distribution_policy} text={text} onChange={distribution_policy => edit({ distribution_policy })} compact />
-            </div>
-          </details>
+          {!draft.target_platforms.length && <p className="sq-help">{text('Noch keine Plattform für Auto-Posting aktiv. Aktiviere sie unter Einstellungen bei den Konten.')}</p>}
+          {draft.schedule_scope === 'shared'
+            ? <WeekEditor label={text('Gemeinsamer Plan (Standard)')} slots={draft.shared} text={text} onChange={shared => edit({ shared })} />
+            : activeTab && <div className="pp-platform-plan">
+              <div className="pp-tabs" role="tablist" aria-label={text('Plattform wählen')}>
+                {tabs.map(platform => <button type="button" role="tab" key={platform} id={`${id}-tab-${platform}`} aria-selected={platform === activeTab} aria-controls={`${id}-panel`} onClick={() => setTab(platform)}>
+                  <img src={platformIconUrl(platform)} width="16" height="16" alt="" aria-hidden="true" />{platformLabel(platform)}
+                </button>)}
+              </div>
+              <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${activeTab}`}>
+                <WeekEditor key={activeTab} label={text('Zeiten für {platform}', { platform: platformLabel(activeTab) })} slots={draft.per_platform[activeTab] ?? []} text={text}
+                  onChange={slots => edit({ per_platform: { ...draft.per_platform, [activeTab]: slots } })} />
+              </div>
+            </div>}
+          {draft.target_platforms.length > 1 && <div className="sq-toggles pp-distribution">
+            <label><input type="checkbox" role="switch" checked={draft.distribution_policy === 'independent_clips'} onChange={event => edit({ distribution_policy: event.target.checked ? 'independent_clips' : 'same_clip' })} />{text('Unterschiedliche Clips je Plattform posten')}</label>
+          </div>}
+          <p className="sq-help">{text('Sommerzeit wird berücksichtigt. Verpasste Termine werden nicht nachgeholt.')}</p>
+          {base.snapshot.production_hold && <p className="sq-help">{text(HOLDS[base.snapshot.production_hold])}</p>}
         </Step>
         <Step id={`${id}-step-2`} number={2} title={text('Video-Vorbereitung')} question={text('Wie sollen Clips geschnitten & betextet werden?')} text={text}>
           <ChoiceGroup legend={text('Video-Vorbereitung')} hideLegend name={`${id}-path`} options={PATHS} value={aiPath ? 'ai' : 'template'} text={text} onChange={choosePath} compact
@@ -163,7 +170,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
               <ChoiceGroup legend={text('Was soll die KI übernehmen?')} name={`${id}-mode`} options={AI_MODES} value={draft.pipeline_mode} text={text} onChange={pipeline_mode => edit({ pipeline_mode })} compact />
               {aiOptionsSlot}
             </div>
-            : layoutSlot && <div className="pp-path-body">{layoutSlot}</div>}
+            : layoutSlot}
           <details className="pp-advanced">
             <summary>{text('Standardtexte & Hashtags (Fallback)')}</summary>
             <TextDefaultsEditor id={id} draft={draft} text={text} onChange={edit} />
@@ -172,35 +179,47 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
         <Step id={`${id}-step-3`} number={3} title={text('Kontrolle')} question={text('Prüfen oder automatisch posten?')} text={text}>
           <ChoiceGroup legend={text('Kontrolle')} hideLegend name={`${id}-review`} options={REVIEWS} value={draft.review_policy} text={text} onChange={review_policy => edit({ review_policy })} wide
             hint={base.policy.review_policy !== 'off' && draft.review_policy !== base.policy.review_policy ? text('Clips, die schon auf deine Freigabe warten, bleiben dort, bis du entscheidest.') : undefined} />
-          {reviewStatusSlot}
         </Step>
       </fieldset>
-      <footer className="pp-footer">
+      {notice && !barShown && <p className="sq-notice pp-toast" role="status">{text(notice)}</p>}
+      {barShown && <footer className="pp-footer">
         <div className="pp-messages" aria-live="polite">
           {problems.map(problem => <p className="sq-error" key={problem}>{problem}</p>)}
           {saveError && <p className="sq-error" role="alert">{text(saveError)}</p>}
-          {notice && !dirty && <p className="sq-notice" role="status">{text(notice)}</p>}
-          {dirty && !saveError && <p className="pp-dirty">{text('Ungespeicherte Änderungen')}</p>}
+          {dirty && !saveError && !problems.length && <p className="pp-dirty">{text('Ungespeicherte Änderungen')}</p>}
         </div>
         <div className="sq-actions">
           {saveError && <button type="button" disabled={saving} onClick={() => { void reload(true); }}>{text('Gespeicherten Stand laden')}</button>}
-          <button type="button" disabled={!dirty || saving} onClick={() => { setDraft(planDraft(base)); setChoices(undefined); setSaveError(''); }}>{text('Verwerfen')}</button>
+          <button type="button" disabled={!dirty || saving} onClick={() => { setDraft(planDraft(base)); setSaveError(''); }}>{text('Verwerfen')}</button>
           <button className="sq-primary" type="submit" disabled={!dirty || saving || problems.length > 0}>{text(saving ? 'Wird gespeichert' : 'Speichern')}</button>
         </div>
-      </footer>
+      </footer>}
     </form>
   </section>;
 }
 
-function Step({ id, number, title, question, text, children }: { id: string; number: number; title: string; question: string; text: PlanText; children: ReactNode }) {
+function Step({ id, number, title, question, text, actions, children }: { id: string; number: number; title: string; question: string; text: PlanText; actions?: ReactNode; children: ReactNode }) {
   return <section className="pp-step" aria-labelledby={id}>
     <header className="pp-step-head">
-      <span className="pp-step-number">{text('Schritt {number}', { number })}</span>
-      <h3 id={id}>{title}</h3>
-      <p className="sq-help">{question}</p>
+      <div className="pp-step-title">
+        <span className="pp-step-number">{text('Schritt {number}', { number })}</span>
+        <h3 id={id}>{title}</h3>
+        <p className="sq-help">{question}</p>
+      </div>
+      {actions}
     </header>
     {children}
   </section>;
+}
+
+function ScopeSegment({ name, value, text, onChange }: { name: string; value: PolicyScope; text: PlanText; onChange: (value: PolicyScope) => void }) {
+  return <fieldset className="pp-segment">
+    <legend className="sq-sr-only">{text('Postingplan-Art')}</legend>
+    {SCOPES.map(option => <label key={option.id}>
+      <input type="radio" name={name} value={option.id} checked={value === option.id} onChange={() => onChange(option.id)} />
+      <span>{text(option.title)}</span>
+    </label>)}
+  </fieldset>;
 }
 
 interface ChoiceGroupProps<T extends string> {
@@ -242,7 +261,7 @@ function TextDefaultsEditor({ id, draft, text, onChange }: { id: string; draft: 
         <span><strong>{text(option.title)}</strong><small>{text(option.text)}</small></span>
       </label>)}
     </div>
-    {keys.map(key => <TextFields key={key} id={`${id}-text-${key}`} label={key === SHARED_TEXT ? text('Für alle Plattformen') : PLAN_PLATFORMS.find(item => item.id === key)?.label ?? key}
+    {keys.map(key => <TextFields key={key} id={`${id}-text-${key}`} label={key === SHARED_TEXT ? text('Für alle Plattformen') : platformLabel(key)}
       platform={key === SHARED_TEXT ? undefined : key} value={draft.texts[key] ?? EMPTY_TEXT} text={text} onChange={value => update(key, value)} />)}
   </fieldset>;
 }
@@ -257,9 +276,9 @@ function TextFields({ id, label, platform, value, text, onChange }: { id: string
   </div>;
 }
 
-function WeekEditor({ label, platform, slots, text, onChange }: { label: string; platform?: string; slots: WeeklySlot[]; text: PlanText; onChange: (slots: WeeklySlot[]) => void }) {
+function WeekEditor({ label, slots, text, onChange }: { label: string; slots: WeeklySlot[]; text: PlanText; onChange: (slots: WeeklySlot[]) => void }) {
+  const setTime = (index: number, local_time: string) => onChange(slots.map((value, i) => i === index ? { ...value, local_time } : value));
   return <div className="pp-week" role="group" aria-label={label}>
-    {platform && <h3 className="sq-platform-label"><img src={platformIconUrl(platform)} width="16" height="16" alt="" aria-hidden="true" />{label}</h3>}
     {WEEKDAYS.map((day, dayIndex) => {
       const weekday = dayIndex + 1;
       const dayName = text(day);
@@ -267,8 +286,8 @@ function WeekEditor({ label, platform, slots, text, onChange }: { label: string;
         <span className="pp-day-name">{dayName}</span>
         <div className="pp-times">
           {slots.map((slot, index) => slot.weekday !== weekday ? null : <span className="pp-time" key={index}>
-            <input type="time" required aria-label={text('Uhrzeit am {day}', { day: dayName })} value={slot.local_time}
-              onChange={event => onChange(slots.map((value, i) => i === index ? { ...value, local_time: event.target.value } : value))} />
+            <input type="text" inputMode="numeric" required maxLength={5} placeholder="18:00" pattern="([01][0-9]|2[0-3]):[0-5][0-9]" aria-label={text('Uhrzeit am {day}', { day: dayName })} value={slot.local_time}
+              onChange={event => setTime(index, event.target.value)} onBlur={event => setTime(index, normalizeTime(event.target.value))} />
             <button type="button" className="sq-icon" aria-label={text('{day} {time} entfernen', { day: dayName, time: slot.local_time })} onClick={() => onChange(slots.filter((_, i) => i !== index))}><X size={14} aria-hidden="true" /></button>
           </span>)}
           {!slots.some(slot => slot.weekday === weekday) && <span className="pp-empty">{text('Keine Zeit')}</span>}
@@ -279,31 +298,18 @@ function WeekEditor({ label, platform, slots, text, onChange }: { label: string;
   </div>;
 }
 
-function SharedChoice({ choices, text, onPick, onCancel }: { choices: NonNullable<ScopeSwitch['choices']>; text: PlanText; onPick: (slots: WeeklySlot[]) => void; onCancel: () => void }) {
-  const label = (platforms: string[]) => platforms.map(platform => PLAN_PLATFORMS.find(item => item.id === platform)?.label ?? platform).join(', ');
-  const summary = (slots: WeeklySlot[]) => slots.length ? slots.map(slot => `${text(WEEKDAYS[slot.weekday - 1]).slice(0, 2)} ${slot.local_time}`).join(' · ') : text('Keine Zeiten');
-  return <div className="sq-confirm pp-shared-choice" role="group" aria-label={text('Welche Zeiten sollen für alle gelten?')}>
-    <strong>{text('Welche Zeiten sollen für alle gelten?')}</strong>
-    <p className="sq-help">{text('Die Plattformen haben unterschiedliche Zeiten. Wähle aus, welche du behalten willst.')}</p>
-    {choices.map(choice => <button type="button" key={choice.platforms.join()} onClick={() => onPick(choice.slots)}>
-      <span><strong>{text('Zeiten von {platforms}', { platforms: label(choice.platforms) })}</strong><small>{summary(choice.slots)}</small></span>
-    </button>)}
-    <button type="button" onClick={onCancel}>{text('Abbrechen')}</button>
-  </div>;
-}
-
 function NextSlots({ base, targets, locale, text }: { base: PlanState; targets: string[]; locale: string; text: PlanText }) {
   const timezone = base.snapshot.settings.timezone;
   const next = base.snapshot.next_slots ?? {};
   const shown = targets.filter(platform => base.snapshot.settings.target_platforms.includes(platform));
   const titleId = useId();
-  return <div className="pp-next-block">
+  return <div className="pp-info-item pp-next-block">
     <span id={titleId} className="pp-next-title">{text('Nächster Termin')}</span>
     <dl className="pp-next" aria-labelledby={titleId}>
-    {shown.length ? shown.map(platform => <div key={platform}>
-      <dt className="sq-platform-label"><img src={platformIconUrl(platform)} width="16" height="16" alt="" aria-hidden="true" />{PLAN_PLATFORMS.find(item => item.id === platform)?.label ?? platform}</dt>
-      <dd>{slotLabel(next[platform], timezone, locale, text)}</dd>
-    </div>) : <div><dt>{text('Alle Plattformen')}</dt><dd>{slotLabel(base.snapshot.next_slot ?? undefined, timezone, locale, text)}</dd></div>}
+      {shown.length ? shown.map(platform => <div key={platform}>
+        <dt><img src={platformIconUrl(platform)} width="14" height="14" alt={platformLabel(platform)} /></dt>
+        <dd>{slotLabel(next[platform], timezone, locale, text)}</dd>
+      </div>) : <div><dt>{text('Alle Plattformen')}</dt><dd>{slotLabel(base.snapshot.next_slot ?? undefined, timezone, locale, text)}</dd></div>}
     </dl>
   </div>;
 }

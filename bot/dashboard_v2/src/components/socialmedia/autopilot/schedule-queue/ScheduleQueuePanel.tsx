@@ -14,14 +14,13 @@ export interface ScheduleQueuePanelProps {
   reloadKey?: number;
   layoutSlot?: ReactNode;
   aiOptionsSlot?: ReactNode;
-  reviewStatusSlot?: ReactNode;
 }
 
-export function ScheduleQueuePanel({ twitchUserId, api = scheduleQueueApi, onChanged, reloadKey = 0, layoutSlot, aiOptionsSlot, reviewStatusSlot }: ScheduleQueuePanelProps) {
+export function ScheduleQueuePanel({ twitchUserId, api = scheduleQueueApi, onChanged, reloadKey = 0, layoutSlot, aiOptionsSlot }: ScheduleQueuePanelProps) {
   const text = planText(useLanguage().language);
   return <div className="pp-stack">
     <PipelinePlanControls key={twitchUserId ?? 'self'} twitchUserId={twitchUserId} api={api} onChanged={onChanged} reloadKey={reloadKey}
-      layoutSlot={layoutSlot} aiOptionsSlot={aiOptionsSlot} reviewStatusSlot={reviewStatusSlot}
+      layoutSlot={layoutSlot} aiOptionsSlot={aiOptionsSlot}
       timezoneLink={<a href={globalTimezoneUrl(twitchUserId)}>{text('Zeitzone in Verwaltung ändern')}</a>} />
   </div>;
 }
