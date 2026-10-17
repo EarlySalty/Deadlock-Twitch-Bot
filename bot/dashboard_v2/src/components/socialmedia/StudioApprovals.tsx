@@ -84,6 +84,9 @@ function ApprovalActions({ video, snapshot, owner, client, onNavigate }: {
   const feedbackId = useId();
   const [revising, setRevising] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const [pending, setPending] = useState<AiJobView | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+  const feedbackBytes = new TextEncoder().encode(feedback).length;
   const platforms = quickApprovalPlatforms(snapshot, video);
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['social-media', 'autopilot-publish', owner] });
@@ -107,14 +110,25 @@ function ApprovalActions({ video, snapshot, owner, client, onNavigate }: {
       if (!version) throw new Error(t('Für dieses Video ist keine bearbeitbare Version vorhanden.'));
       return reviseAiVersion(owner, job.id, version.id, text);
     },
-    onSuccess: () => {
+    onSuccess: job => {
       setRevising(false);
       setFeedback('');
+      setConfirmed(false);
+      setPending(job.status === 'awaiting_confirmation' && job.revision_proposal ? job : null);
       refresh();
     },
   });
-  const busy = approve.isPending || revise.isPending;
-  const error = approve.error ?? revise.error;
+  const decide = useMutation({
+    mutationFn: async ({ id, accept }: { id: number; accept: boolean }) => (await import('./ai/api')).decideAiProposal(owner, id, accept),
+    onSuccess: () => {
+      setPending(null);
+      setConfirmed(false);
+      refresh();
+    },
+  });
+  const busy = approve.isPending || revise.isPending || decide.isPending;
+  const error = approve.error ?? revise.error ?? decide.error;
+  const proposal = pending?.revision_proposal;
   return <div className="studio-approval-actions" data-unsaved={feedback.trim() || busy ? 'true' : undefined} data-saving={busy ? 'true' : undefined}>
     <div className="studio-approval-buttons">
       <button type="button" className="studio-button studio-primary" disabled={busy || platforms.length === 0} title={platforms.length === 0 ? t('Kein verbundenes Ziel ohne weitere Angaben verfügbar') : undefined} onClick={() => approve.mutate()}>
@@ -125,20 +139,34 @@ function ApprovalActions({ video, snapshot, owner, client, onNavigate }: {
         <MessageSquareText className="h-4 w-4" aria-hidden />{t('Änderung wünschen')}
       </button>
     </div>
+    {videoPlatforms(snapshot, video).includes('tiktok') && <p className="studio-approval-note">{t('TikTok braucht eigene Angaben und wird beim Prüfen freigegeben.')}</p>}
     {approve.isSuccess && <p className="studio-approval-note" role="status">{t('Freigegeben.')}</p>}
-    {revising && <form id={feedbackId} className="studio-approval-feedback" onSubmit={event => { event.preventDefault(); if (feedback.trim()) revise.mutate(feedback.trim()); }}>
+    {revising && <form id={feedbackId} className="studio-approval-feedback" onSubmit={event => { event.preventDefault(); if (feedback.trim() && feedbackBytes <= 2000) revise.mutate(feedback.trim()); }}>
       <label>
         <span>{t('Was soll die KI ändern?')}</span>
         <textarea className="studio-input" rows={3} maxLength={2000} value={feedback} disabled={busy}
           placeholder={t('Zum Beispiel: Kürze den Einstieg, aber behalte die ursprüngliche Reaktion.')}
           onChange={event => setFeedback(event.target.value)} />
       </label>
+      {feedbackBytes > 2000 && <p className="studio-approval-error" role="alert">{t('Bitte kürze deine Anweisung, bevor du sie abschickst.')}</p>}
       <div className="studio-approval-buttons">
-        <button type="submit" className="studio-button studio-primary" disabled={busy || !feedback.trim()}>{t(revise.isPending ? 'Wird gesendet …' : 'Änderung senden')}</button>
+        <button type="submit" className="studio-button studio-primary" disabled={busy || !feedback.trim() || feedbackBytes > 2000}>{t(revise.isPending ? 'Wird gesendet …' : 'Änderung senden')}</button>
         <button type="button" className="studio-button" disabled={busy} onClick={() => { setRevising(false); setFeedback(''); revise.reset(); }}>{t('Abbrechen')}</button>
       </div>
     </form>}
-    {revise.isSuccess && <p className="studio-approval-note" role="status">{t('Änderungswunsch gesendet. Die neue Version erscheint hier zur Freigabe.')}</p>}
+    {pending && proposal && <div className="studio-approval-feedback" role="group" aria-label={t('Aufwendige Änderung bestätigen')}>
+      <strong>{t('Vor dem nächsten Schritt bestätigen')}</strong>
+      <p>{proposal.summary}</p>
+      <p>{proposal.impact}</p>
+      <p>{proposal.reanalyze ? t('Dafür ist eine erneute KI-Analyse nötig.') : t('Der geplante Schnitt verändert die bisherige Fassung deutlich.')}</p>
+      <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={event => setConfirmed(event.target.checked)} />{t('Ich bestätige den vorgeschlagenen nächsten Bearbeitungsschritt und mögliche zusätzliche KI-Kosten.')}</label>
+      <div className="studio-approval-buttons">
+        <button type="button" className="studio-button studio-primary" disabled={busy || !confirmed} onClick={() => decide.mutate({ id: pending.id, accept: true })}>{t('Änderung bestätigen')}</button>
+        <button type="button" className="studio-button" disabled={busy} onClick={() => decide.mutate({ id: pending.id, accept: false })}>{t('Änderung verwerfen')}</button>
+      </div>
+    </div>}
+    {revise.isSuccess && !pending && !decide.isSuccess && <p className="studio-approval-note" role="status">{t('Änderungswunsch gesendet. Die neue Version erscheint hier zur Freigabe.')}</p>}
+    {decide.isSuccess && <p className="studio-approval-note" role="status">{t(decide.variables?.accept ? 'Änderung bestätigt. Die Bearbeitung wird fortgesetzt.' : 'Änderung verworfen. Die vorherige Fassung bleibt erhalten.')}</p>}
     {error && <p className="studio-approval-error" role="alert">{error instanceof Error ? error.message : t('Die Aktion ist fehlgeschlagen.')}</p>}
   </div>;
 }

@@ -9,7 +9,9 @@ import {
   queueStats,
   filterQueue,
   loadQueueSnapshot,
+  sourceStage,
 } from '../src/components/socialmedia/queuePresentation';
+import type { PipelineSource } from '../src/components/socialmedia/pipelineApi';
 import type { SocialClipMitPosting } from '../src/api/socialMedia';
 import { upcomingTerms, upcomingTermView } from '../src/components/socialmedia/upcomingTerms';
 import { DEFAULT_LAYOUT } from '../src/types/socialMedia';
@@ -319,4 +321,15 @@ test('upcoming produced videos open video review while production jobs keep thei
   assert.equal(studioActions(data, 0, key => key)[0].view, 'freigabe');
   schedule.jobs = [{ status: 'review' }] as typeof schedule.jobs;
   assert.equal(studioActions(data, 0, key => key)[0].view, 'planen');
+});
+
+test('eingeplante Ziele landen in Geplant, laufende Produktion in Vorbereitung', () => {
+  const source = (patch: Partial<PipelineSource>) => ({ discarded_at: null, published_at: null, jobs: [], versions: [], destinations: [], legacy_publications: [], ...patch }) as unknown as PipelineSource;
+  const destination = (status: string | null) => ({ platform: 'youtube', status, produced_video_id: 1 });
+  for (const status of [null, 'pending', 'waiting_schedule', 'waiting_tiktok_approval', 'waiting_connection', 'autopilot_processing']) {
+    assert.equal(sourceStage(source({ destinations: [destination(status)] } as Partial<PipelineSource>)), 'planned', String(status));
+  }
+  assert.equal(sourceStage(source({ versions: [{ status: 'scheduled' }] } as Partial<PipelineSource>)), 'planned');
+  assert.equal(sourceStage(source({ jobs: [{ status: 'queued', reservations: [] }] } as Partial<PipelineSource>)), 'preparing');
+  assert.equal(sourceStage(source({ versions: [{ status: 'rendering' }] } as Partial<PipelineSource>)), 'preparing');
 });

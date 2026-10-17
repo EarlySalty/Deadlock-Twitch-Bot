@@ -127,7 +127,7 @@ export function StudioStatusStrip({ data, onNavigate }: {
     <StatusItem icon={ListOrdered} label={t('Warteschlange')}
       value={!schedule ? unavailable(data.scheduleFailed).value : String(running + queued)}
       detail={!schedule ? unavailable(data.scheduleFailed).detail : running > 0 ? t('{count} in Produktion', { count: running }) : t('Keine Produktion aktiv')}
-      tone={running > 0 ? 'gold' : 'neutral'} onClick={() => onNavigate('clips', 'planned')} />
+      tone={running > 0 ? 'gold' : 'neutral'} onClick={() => onNavigate('clips', 'preparing')} />
     <StatusItem icon={AlertTriangle} label={t('Prüfungen offen')}
       value={reviewsKnown ? String(productionReviews + clipReviews) : reviews.value}
       detail={reviewsKnown ? t('{productions} Produktionen & Videos · {clips} Clip-Freigaben', { productions: productionReviews, clips: clipReviews }) : reviews.detail}

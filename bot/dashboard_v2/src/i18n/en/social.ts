@@ -569,6 +569,8 @@ export const SOCIAL_EN: Record<string, string> = {
   'Reihenfolge: Neueste zuerst': 'Order: newest first',
   'Twitch-Clips importieren': 'Import Twitch clips',
   'Twitch-Clips weiter importieren': 'Continue importing Twitch clips',
+  'Neu importieren statt fortsetzen': 'Start a new import instead',
+  'TikTok braucht eigene Angaben und wird beim Prüfen freigegeben.': 'TikTok needs its own details and is approved during review.',
   'Prüfung & Freigabe': 'Review & approval',
   'Zu den Clips': 'Go to clips',
   '{count} Clip freigeben aus der bisherigen Pipeline': 'Approve {count} clip from the previous pipeline',

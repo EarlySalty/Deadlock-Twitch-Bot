@@ -137,13 +137,13 @@ export function partialResult(source: PipelineSource): boolean {
 }
 
 function sourcePreparing(source: PipelineSource): boolean {
-  return source.destinations.some((destination) => ACTIVE_DESTINATIONS.includes(destination.status ?? 'pending'))
-    || source.jobs.some((job) => job.status === 'queued' || job.status === 'running')
+  return source.jobs.some((job) => job.status === 'queued' || job.status === 'running')
     || source.versions.some((version) => version.status === 'rendering');
 }
 
 function sourcePlanned(source: PipelineSource): boolean {
-  return source.versions.some((version) => ['approved', 'scheduled'].includes(version.status));
+  return source.destinations.some((destination) => ACTIVE_DESTINATIONS.includes(destination.status ?? 'pending'))
+    || source.versions.some((version) => ['approved', 'scheduled'].includes(version.status));
 }
 
 export function legacyUncertainPlatforms(source: PipelineSource): string[] {
@@ -160,8 +160,8 @@ function sourceInReview(source: PipelineSource): boolean {
 
 export function sourceStage(source: PipelineSource): Exclude<QueueStage, 'all'> {
   if (source.discarded_at) return 'archive';
-  if (sourcePreparing(source)) return 'preparing';
   if (sourcePlanned(source)) return 'planned';
+  if (sourcePreparing(source)) return 'preparing';
   if (sourceInReview(source)) return 'review';
   if (failedPlatforms(source).length > 0 || (publishedPlatforms(source).length === 0 && source.jobs.some((job) => job.status === 'failed'))) return 'failed';
   if (publishedPlatforms(source).length > 0 || source.published_at) return 'posted';

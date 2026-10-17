@@ -536,7 +536,7 @@ function OwnerImportPool({
             "Verwendet den gespeicherten Zeitraum. Ein laufender Import behält seinen ursprünglichen Zeitraum.",
           )}
         </p>
-        {dirty && !resumable && (
+        {dirty && (
           <p className="import-pool-help">
             {t("Änderungen vor dem Import speichern oder verwerfen.")}
           </p>
@@ -551,6 +551,19 @@ function OwnerImportPool({
               {t("Noch kein historischer Import vorhanden.")}
             </p>
           )
+        )}
+        {job && resumable && (
+          <button
+            type="button"
+            className="studio-button"
+            disabled={busy || blocked || dirty || !importKnown}
+            onClick={() => {
+              setFeedback("");
+              startMutation.mutate({ after: onChanged });
+            }}
+          >
+            {t(startMutation.isPending ? "Import wird gestartet …" : "Neu importieren statt fortsetzen")}
+          </button>
         )}
       </div>
       {errors.length > 0 && (

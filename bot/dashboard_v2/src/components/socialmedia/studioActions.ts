@@ -30,5 +30,6 @@ export function studioActions(data: StudioOverviewData, now: number, t: Translat
     const expiring = status.reauth_soon || Boolean(expiry && Date.parse(expiry) <= now + 7 * 86400000);
     if (connectionFact(status).state !== 'connected' || expiring) rows.push({ key: `platform-${status.platform}`, title: PLATFORM_LABELS[status.platform as SocialPlatform] ?? status.platform, meta: t(expiring && connectionFact(status).state === 'connected' ? 'Verbindung läuft bald ab' : connectionFact(status).label), tone: 'warning', view: 'einstellungen' });
   }
+  for (const clip of clips) if ((clip.status === 'approved' || clip.status === 'publishing') && ['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? '')) rows.push({ key: `tiktok-${clip.clip_db_id}`, title: t('TikTok für {title} vorbereiten', { title: clip.title }), meta: t('TikTok-Veröffentlichung vorbereiten'), tone: 'warning', view: 'freigabe', stage: 'planned' });
   return rows;
 }

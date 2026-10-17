@@ -34,7 +34,6 @@ const ELIGIBILITY_FILTERS: Array<{ id: EligibilityFilter; label: string }> = [
   { id: 'legacy_non_deadlock_visible', label: 'Andere Spiele' },
 ];
 
-
 export type DetailMode = 'ai' | 'layout' | 'enrichment';
 
 type Translate = (text: string, params?: Record<string, string | number>) => string;
