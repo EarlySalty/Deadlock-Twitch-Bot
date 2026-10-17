@@ -202,6 +202,32 @@ function LegacyClipsBanner({ count, onNavigate }: { count: number; onNavigate: (
   </div>;
 }
 
+interface IssueChip { key: string; label: string; detail?: string; tone: Tone; onClick: () => void }
+
+type Translate = (key: string, params?: Record<string, string | number>) => string;
+
+function issueChips(actions: OverviewRow[], reviewsInPlan: boolean, t: Translate): IssueChip[] {
+  const chips: IssueChip[] = [];
+  for (const row of actions) {
+    if (row.key === 'jobs' || row.key === 'failed' || (row.key === 'reviews' && reviewsInPlan)) chips.push({ key: row.key, label: row.title, detail: row.meta, tone: row.tone ?? 'warning', onClick: row.onClick });
+  }
+  const published = actions.filter(row => row.key.startsWith('publish-'));
+  if (published[0]) chips.push({ key: 'publish', label: t(published.length === 1 ? '{count} Veröffentlichung prüfen' : '{count} Veröffentlichungen prüfen', { count: published.length }), detail: published.map(row => row.title).join(', '), tone: 'warning', onClick: published[0].onClick });
+  for (const row of actions.filter(item => item.key.startsWith('platform-'))) {
+    const expiring = row.meta === t('Verbindung läuft bald ab');
+    chips.push({ key: row.key, label: t(expiring ? '{platform}: Verbindung läuft bald ab' : '{platform} nicht verbunden', { platform: row.title }), detail: row.meta, tone: 'warning', onClick: row.onClick });
+  }
+  return chips;
+}
+
+function IssueChips({ chips }: { chips: IssueChip[] }) {
+  const { t } = useLanguage();
+  if (chips.length === 0) return null;
+  return <ul className="studio-issue-chips" aria-label={t('Weitere offene Punkte')}>{chips.map(chip => <li key={chip.key}>
+    <button type="button" className="studio-issue-chip" data-tone={chip.tone} title={chip.detail} onClick={chip.onClick}>{chip.label}<ArrowRight className="h-3 w-3" aria-hidden /></button>
+  </li>)}</ul>;
+}
+
 function termGroup(key: string, clipId: number | undefined, at: string): string {
   return clipId === undefined ? key : `${clipId}@${Date.parse(at)}`;
 }
@@ -243,7 +269,7 @@ export function PipelineOverview({ data, now, onNavigate, activity, twitchUserId
   const hold = schedule?.production_hold === 'empty_pool' || schedule?.production_hold === 'no_schedule' ? schedule.production_hold : null;
   const legacyReviews = actions.some(row => row.key === 'clips') ? countStage(clips, 'review') : 0;
   const reviewsInPlan = schedule?.jobs.some(job => job.status === 'review') ?? false;
-  const warningRows = actions.filter(row => !['hold', 'clips', 'video-reviews'].includes(row.key) && (row.key !== 'reviews' || reviewsInPlan));
+  const chips = issueChips(actions, reviewsInPlan, t);
   const approvals = approvalVideos(publish);
 
   const nextRows: OverviewRow[] = [];
@@ -261,7 +287,7 @@ export function PipelineOverview({ data, now, onNavigate, activity, twitchUserId
       existing.platforms = [...new Set([...(existing.platforms ?? []), ...termPlatforms])];
       continue;
     }
-    if (nextRows.length >= 8) continue;
+    if (nextRows.length >= 4) continue;
     const row: OverviewRow = {
       key: term.key,
       title: video ? videoTitle(video) : job ? clipTitle(job) : post ? post.title : t('Nächster freier Auto-Pilot-Termin'),
@@ -278,22 +304,23 @@ export function PipelineOverview({ data, now, onNavigate, activity, twitchUserId
   const unavailable = failed ? t('Nicht abrufbar') : loading ? t('Wird geladen') : null;
   const statistics = statisticsPlatforms ?? (platforms ?? []).filter(status => status.capabilities?.statistics).map(status => status.platform);
   const showHold = Boolean(holdRow && hold);
-  const lead = showHold || legacyReviews > 0 || (publish && approvals.length > 0) ? <>
+  const lead = showHold || legacyReviews > 0 || chips.length > 0 || (publish && approvals.length > 0) ? <>
     {holdRow && hold && <HoldBanner row={{ ...holdRow, hold }} onNavigate={onNavigate} />}
     {legacyReviews > 0 && <LegacyClipsBanner count={legacyReviews} onNavigate={onNavigate} />}
     {publish && approvals.length > 0 && <ApprovalEntries videos={approvals} snapshot={publish} clips={clips} owner={owner} client={publishClient} timezone={zone} onNavigate={onNavigate} />}
+    <IssueChips chips={chips} />
   </> : undefined;
   return <div className="studio-overview" aria-busy={loading || undefined}>
     {failed && <p className="studio-overview-notice" role="status">{t('Die Übersicht ist nicht vollständig abrufbar. Bereits geladene Einträge bleiben sichtbar.')}</p>}
     <div className="studio-overview-grid">
-      <OverviewColumn variant="actions" icon={AlertTriangle} title={t('Prüfung & Freigabe')} count={warningRows.length + approvals.length + (legacyReviews > 0 ? 1 : 0)} rows={warningRows} lead={lead}
+      <OverviewColumn variant="actions" icon={AlertTriangle} title={t('Prüfung & Freigabe')} count={chips.length + approvals.length + (legacyReviews > 0 ? 1 : 0)} rows={[]} lead={lead}
         empty={unavailable ?? t('Nichts offen. Du bist auf dem aktuellen Stand.')} />
       <div className="studio-overview-side">
         <OverviewColumn variant="now" icon={CircleDot} title={t('Läuft gerade')} count={null} rows={nowRows} empty={activity ? '' : unavailable ?? t('Gerade läuft nichts.')} footer={activity} />
         <OverviewColumn variant="next" icon={Clock3} title={t('Als Nächstes')} count={null} rows={nextRows} empty={unavailable ?? t('Noch nichts eingeplant.')}
           footer={<button type="button" className="studio-overview-link" onClick={() => onNavigate('planen')}>{t('Zeitplan öffnen')}<ArrowRight className="h-4 w-4" aria-hidden /></button>} />
       </div>
+      <StudioOverviewTiles schedule={schedule} publish={publish} clips={clips} owner={owner} streamer={streamer ?? clips?.[0]?.streamer_login ?? ''} isAdmin={isAdmin} statisticsPlatforms={statistics} onNavigate={onNavigate} />
     </div>
-    <StudioOverviewTiles schedule={schedule} publish={publish} clips={clips} owner={owner} streamer={streamer ?? clips?.[0]?.streamer_login ?? ''} isAdmin={isAdmin} statisticsPlatforms={statistics} onNavigate={onNavigate} />
   </div>;
 }

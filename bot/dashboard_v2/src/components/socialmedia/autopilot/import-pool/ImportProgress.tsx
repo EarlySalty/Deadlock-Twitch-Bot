@@ -1,5 +1,6 @@
 import { useLanguage, useT } from "@/context/LanguageContext";
 import {
+  activeImport,
   filterDescription,
   importStatusLabel,
   localTimestamp,
@@ -11,20 +12,22 @@ export function ImportProgress({ job }: { job: ImportJob }) {
   const { locale } = useLanguage();
   const incomplete =
     job.incomplete_windows.length > 0 || job.status === "incomplete";
+  const problem = incomplete || job.status === "error";
+  const visibleStatus = problem || activeImport(job);
+  const status = (
+    <p
+      className={problem ? "import-pool-warning" : "import-pool-progress-title"}
+      role="status"
+    >
+      {t(importStatusLabel(job))}
+    </p>
+  );
   return (
     <div className="import-pool-progress" data-import-status={job.status}>
-      <p className="import-pool-result">{t("{count} Clips im Clip-Vorrat erfasst", { count: job.persisted_count })}</p>
-      <details><summary>{t("Importdetails")}</summary>
-      <p
-        className={
-          incomplete || job.status === "error"
-            ? "import-pool-warning"
-            : "import-pool-progress-title"
-        }
-        role="status"
-      >
-        {t(importStatusLabel(job))}
-      </p>
+      {visibleStatus && status}
+      <details className="import-pool-summary">
+      <summary>{t("{count} erfasst", { count: job.persisted_count })} · {t("Importdetails")}</summary>
+      {!visibleStatus && status}
       <p className="import-pool-help">
         {t("Festgelegter Zeitraum")}:{" "}
         {filterDescription(job.clip_date_filter, t)}. {job.timezone}

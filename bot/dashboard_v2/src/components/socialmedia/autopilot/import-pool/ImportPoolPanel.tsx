@@ -518,6 +518,7 @@ function OwnerImportPool({
           <button
             type="button"
             className="studio-button studio-primary"
+            title={t("Verwendet den gespeicherten Zeitraum. Ein laufender Import behält seinen ursprünglichen Zeitraum.")}
             disabled={busy || blocked || !importKnown || activeImport(job) || (!resumable && dirty)}
             onClick={() => {
               setFeedback("");
@@ -531,11 +532,6 @@ function OwnerImportPool({
         </div>
       </div>
       <div className="import-pool-status" aria-label={t("Twitch-Clips importieren")} role="group">
-        <p className="import-pool-help">
-          {t(
-            "Verwendet den gespeicherten Zeitraum. Ein laufender Import behält seinen ursprünglichen Zeitraum.",
-          )}
-        </p>
         {dirty && (
           <p className="import-pool-help">
             {t("Änderungen vor dem Import speichern oder verwerfen.")}
@@ -543,15 +539,7 @@ function OwnerImportPool({
         )}
         {latestQuery.isPending ? (
           <p role="status">{t("Importstatus laden …")}</p>
-        ) : job ? (
-          <ImportProgress job={job} />
-        ) : (
-          latestQuery.isSuccess && (
-            <p className="import-pool-help">
-              {t("Noch kein historischer Import vorhanden.")}
-            </p>
-          )
-        )}
+        ) : job && <ImportProgress job={job} />}
         {job && resumable && (
           <button
             type="button"

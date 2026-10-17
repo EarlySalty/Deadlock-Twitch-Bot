@@ -15,6 +15,12 @@ export const SOCIAL_STUDIO_EN: Record<string, string> = {
   'Importdetails': 'Import details',
   'TikTok für {title} vorbereiten': 'Prepare TikTok for {title}',
   'Läuft gerade': 'Running now',
+  '{count} Veröffentlichung prüfen': 'Check {count} publication',
+  '{count} Veröffentlichungen prüfen': 'Check {count} publications',
+  '{platform}: Verbindung läuft bald ab': '{platform}: connection expires soon',
+  '{platform} nicht verbunden': '{platform} not connected',
+  'Weitere offene Punkte': 'Other open items',
+  '{count} erfasst': '{count} captured',
 
   'Clip-Vorrat': 'Clip supply',
   'Vorziehen': 'Prioritize',

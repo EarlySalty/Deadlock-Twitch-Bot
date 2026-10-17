@@ -2027,3 +2027,24 @@ select.studio-select {
 .studio-link-button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .social-ai-plan-options { display: grid; gap: 12px; }
 .social-ai-consent-status { font-size: 14px; color: var(--color-text-secondary); }
+
+.studio-issue-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.studio-issue-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 4px 10px; border: 1px solid var(--color-border-strong); border-radius: 999px; background: transparent; color: var(--color-warning); font-size: 12px; font-weight: 600; line-height: 1.3; cursor: pointer; }
+.studio-issue-chip[data-tone='danger'] { color: var(--color-danger); }
+.studio-issue-chip:hover { border-color: currentColor; }
+.studio-issue-chip:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
+.social-studio .import-pool-status { gap: 4px; padding: 0; border: 0; background: none; }
+.social-studio .import-pool-status:empty { display: none; }
+.social-studio .import-pool-status .import-pool-progress { gap: 4px; }
+.social-studio .import-pool-summary > summary { min-height: 32px; color: var(--color-text-secondary); font-size: 13px; text-decoration-color: var(--color-border-strong); }
+.social-studio .import-pool-summary[open] { display: grid; gap: 8px; padding-bottom: 8px; }
+
+.social-studio .pipeline-clips .import-pool-clips { grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; }
+.social-studio .pipeline-clips .import-pool-thumb { width: 100%; min-height: 0; max-height: none; aspect-ratio: 9 / 16; border-top-right-radius: 10px; }
+.social-studio .pipeline-clips .import-pool-clip-body { display: grid; grid-template-rows: auto auto 1fr; padding: 10px; }
+.social-studio .pipeline-clips .import-pool-clip-foot { flex-wrap: wrap; row-gap: 6px; margin-top: 8px; }
+@media (max-width: 560px) {
+  .social-studio .pipeline-clips .import-pool-clips { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .social-studio .pipeline-clips .import-pool-clip-body { padding: 8px; }
+}
