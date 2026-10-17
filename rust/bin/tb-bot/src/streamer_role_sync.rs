@@ -4,6 +4,11 @@ use tb_transport_discord::{relay::TwitchLink, BrokerRelay};
 
 static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+const LIVE_FRESH_SECS: i64 = 300;
+const HOME_GUILD_ID: u64 = 1_289_721_245_281_292_288;
+const HOME_LIVE_ROLE_ID: u64 = 1_560_993_753_643_098_153;
+const MAX_WINDOW_DAYS: u32 = 365;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Entitlement {
     Active,
@@ -11,7 +16,123 @@ enum Entitlement {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Targets {
+    pub guild_id: u64,
+    pub streamer_role_id: u64,
+}
+
+impl Targets {
+    pub fn from_config(config: &tb_config::discord::OAuthFollowup) -> Self {
+        Self {
+            guild_id: config.guild_id,
+            streamer_role_id: config.streamer_role_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivityMethod {
+    DeadlockDays,
+    AnyStreamDays,
+    None,
+}
+
+impl ActivityMethod {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "deadlock_days" => Some(Self::DeadlockDays),
+            "any_stream_days" => Some(Self::AnyStreamDays),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Policy {
+    live_role_id: Option<u64>,
+    method: ActivityMethod,
+    keep_window_days: u32,
+    gain_window_days: u32,
+    gain_min_days: u32,
+    require_bot_access: bool,
+}
+
+impl Policy {
+    fn fallback(guild_id: u64) -> Self {
+        Self {
+            live_role_id: (guild_id == HOME_GUILD_ID).then_some(HOME_LIVE_ROLE_ID),
+            method: ActivityMethod::DeadlockDays,
+            keep_window_days: 28,
+            gain_window_days: 30,
+            gain_min_days: 4,
+            require_bot_access: true,
+        }
+    }
+}
+
 #[derive(sqlx::FromRow)]
+struct PolicyRow {
+    live_role_id: Option<i64>,
+    role_activity_method: String,
+    role_keep_window_days: i32,
+    role_gain_window_days: i32,
+    role_gain_min_days: i32,
+    role_require_bot_access: bool,
+}
+
+fn window(days: i32) -> Option<u32> {
+    u32::try_from(days)
+        .ok()
+        .filter(|days| (1..=MAX_WINDOW_DAYS).contains(days))
+}
+
+impl PolicyRow {
+    fn policy(&self) -> Option<Policy> {
+        let gain_window_days = window(self.role_gain_window_days)?;
+        let live_role_id = match self.live_role_id {
+            Some(id) => Some(u64::try_from(id).ok().filter(|id| *id > 0)?),
+            None => None,
+        };
+        Some(Policy {
+            live_role_id,
+            method: ActivityMethod::parse(&self.role_activity_method)?,
+            keep_window_days: window(self.role_keep_window_days)?,
+            gain_window_days,
+            gain_min_days: window(self.role_gain_min_days)
+                .filter(|days| *days <= gain_window_days)?,
+            require_bot_access: self.role_require_bot_access,
+        })
+    }
+}
+
+async fn load_policy(pool: &PgPool, guild_id: u64) -> Policy {
+    let Ok(guild) = i64::try_from(guild_id) else {
+        return Policy::fallback(guild_id);
+    };
+    let row = sqlx::query_as::<_, PolicyRow>(
+        "SELECT live_role_id, role_activity_method, role_keep_window_days,
+                role_gain_window_days, role_gain_min_days, role_require_bot_access
+           FROM discord_guilds WHERE guild_id = $1",
+    )
+    .bind(guild)
+    .fetch_optional(pool)
+    .await;
+    match row {
+        Ok(Some(row)) => row.policy().unwrap_or_else(|| {
+            tracing::warn!(guild_id, "Ungültige Rollen-Richtlinie, Standardwerte aktiv");
+            Policy::fallback(guild_id)
+        }),
+        Ok(None) => Policy::fallback(guild_id),
+        Err(error) => {
+            tracing::warn!(%error, guild_id, "Rollen-Richtlinie nicht lesbar, Standardwerte aktiv");
+            Policy::fallback(guild_id)
+        }
+    }
+}
+
+#[derive(sqlx::FromRow, Default)]
 struct Channel {
     twitch_user_id: String,
     discord_user_id: Option<String>,
@@ -21,12 +142,23 @@ struct Channel {
     technical_pause_reason: Option<String>,
     departnered_at: Option<String>,
     admin_archived_at: Option<String>,
+    bot_unmodded: bool,
     denied: bool,
+    kept_active: bool,
+    active_days: i64,
 }
 
 impl Channel {
-    fn entitlement(&self) -> Entitlement {
-        if self.denied
+    fn bot_unavailable(&self) -> bool {
+        self.bot_unmodded
+            || self
+                .technical_pause_reason
+                .as_deref()
+                .is_some_and(|reason| reason == "bot_banned" || reason.starts_with("token_error"))
+    }
+
+    fn excluded(&self) -> bool {
+        self.denied
             || self.manual_partner_opt_out.is_some_and(|value| value != 0)
             || self.departnered_at.is_some()
             || self.admin_archived_at.is_some()
@@ -35,70 +167,128 @@ impl Channel {
                 Some("departnered" | "archived" | "blocked")
             )
             || self.technical_pause_reason.as_deref() == Some("blocked")
-        {
+    }
+
+    fn availability(&self, require_bot_access: bool) -> Entitlement {
+        if self.excluded() || (require_bot_access && self.bot_unavailable()) {
             return Entitlement::Inactive;
         }
-        if self.status.as_deref() == Some("active")
-            && self.has_bot_auth
-            && self.manual_partner_opt_out == Some(0)
-        {
+        if self.status.as_deref() != Some("active") || self.manual_partner_opt_out != Some(0) {
+            Entitlement::Unknown
+        } else if self.has_bot_auth || !require_bot_access {
             Entitlement::Active
         } else {
-            Entitlement::Unknown
+            Entitlement::Inactive
+        }
+    }
+
+    fn active_enough(&self, holder: bool, policy: &Policy) -> bool {
+        match policy.method {
+            ActivityMethod::None => true,
+            _ if holder => self.kept_active,
+            _ => self.active_days >= i64::from(policy.gain_min_days),
+        }
+    }
+
+    fn entitlement(&self, holder: bool, policy: &Policy) -> Entitlement {
+        match self.availability(policy.require_bot_access) {
+            Entitlement::Active if !self.active_enough(holder, policy) => Entitlement::Inactive,
+            state => state,
         }
     }
 }
 
-async fn channels(pool: &PgPool) -> Result<Vec<Channel>, sqlx::Error> {
+async fn channels(pool: &PgPool, policy: &Policy) -> Result<Vec<Channel>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT COALESCE(p.twitch_user_id, i.twitch_user_id) AS twitch_user_id,
+        "WITH activity AS (
+             SELECT s.twitch_user_id,
+                    BOOL_OR(s.started_at >= NOW() - make_interval(days => $1)) AS kept_active,
+                    COUNT(DISTINCT (s.started_at AT TIME ZONE 'Europe/Berlin')::date)
+                        FILTER (WHERE s.started_at >= NOW() - make_interval(days => $2)) AS active_days
+               FROM twitch_stream_sessions s
+              WHERE ($3 OR COALESCE(s.had_deadlock_in_session, false))
+                AND s.started_at >= NOW() - make_interval(days => GREATEST($1, $2))
+              GROUP BY s.twitch_user_id)
+         SELECT COALESCE(p.twitch_user_id, i.twitch_user_id) AS twitch_user_id,
                 NULLIF(TRIM(i.discord_user_id), '') AS discord_user_id,
                 LOWER(TRIM(p.status)) AS status, p.manual_partner_opt_out,
                 LOWER(TRIM(p.technical_pause_reason)) AS technical_pause_reason,
                 NULLIF(TRIM(p.departnered_at), '') AS departnered_at,
                 NULLIF(TRIM(p.admin_archived_at), '') AS admin_archived_at,
+                p.deadlock_pause_unmodded_at IS NOT NULL AS bot_unmodded,
                 EXISTS (SELECT 1 FROM twitch_raid_auth a
-                         WHERE a.twitch_user_id = COALESCE(p.twitch_user_id, i.twitch_user_id)) AS has_bot_auth,
+                         WHERE a.twitch_user_id = COALESCE(p.twitch_user_id, i.twitch_user_id)
+                           AND NOT COALESCE(a.needs_reauth, false)) AS has_bot_auth,
                 EXISTS (SELECT 1 FROM twitch_partner_signup_denylist d
-                         WHERE d.twitch_user_id = COALESCE(p.twitch_user_id, i.twitch_user_id)) AS denied
-           FROM twitch_partners p FULL OUTER JOIN twitch_streamer_identities i USING (twitch_user_id)"
-    ).fetch_all(pool).await
+                         WHERE d.twitch_user_id = COALESCE(p.twitch_user_id, i.twitch_user_id)) AS denied,
+                COALESCE(act.kept_active, false) AS kept_active,
+                COALESCE(act.active_days, 0) AS active_days
+           FROM twitch_partners p FULL OUTER JOIN twitch_streamer_identities i USING (twitch_user_id)
+           LEFT JOIN activity act ON act.twitch_user_id = COALESCE(p.twitch_user_id, i.twitch_user_id)",
+    )
+    .bind(window_days(policy.keep_window_days))
+    .bind(window_days(policy.gain_window_days))
+    .bind(policy.method == ActivityMethod::AnyStreamDays)
+    .fetch_all(pool)
+    .await
 }
 
-fn entitlements(
-    channels: &[Channel],
+fn window_days(days: u32) -> i32 {
+    i32::try_from(days).unwrap_or(i32::MAX)
+}
+
+#[derive(sqlx::FromRow)]
+struct LiveRow {
+    twitch_user_id: String,
+    last_seen_at: Option<String>,
+}
+
+async fn live_deadlock_channels(pool: &PgPool) -> Result<BTreeSet<String>, sqlx::Error> {
+    let rows: Vec<LiveRow> = sqlx::query_as(
+        "SELECT twitch_user_id, last_seen_at FROM twitch_live_state
+          WHERE COALESCE(is_live, 0) <> 0
+            AND LOWER(TRIM(COALESCE(last_game, ''))) = 'deadlock'",
+    )
+    .fetch_all(pool)
+    .await?;
+    let now = chrono::Utc::now();
+    Ok(rows
+        .into_iter()
+        .filter(|row| fresh_live(row.last_seen_at.as_deref(), now))
+        .map(|row| row.twitch_user_id)
+        .collect())
+}
+
+fn fresh_live(last_seen_at: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> bool {
+    last_seen_at
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value.trim()).ok())
+        .is_some_and(|stamp| {
+            let age = now.signed_duration_since(stamp);
+            age >= chrono::Duration::zero() && age <= chrono::Duration::seconds(LIVE_FRESH_SECS)
+        })
+}
+
+fn discord_id(value: &str, error: &'static str) -> Result<u64, String> {
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|id| *id > 0)
+        .ok_or_else(|| error.to_string())
+}
+
+fn linked_channels<'a>(
+    channels: &'a [Channel],
     links: &[TwitchLink],
-) -> Result<BTreeMap<u64, Entitlement>, String> {
-    let mut result = BTreeMap::new();
-    let mut merge = |id: u64, state: Entitlement| {
-        result
-            .entry(id)
-            .and_modify(|previous| {
-                *previous = match (*previous, state) {
-                    (Entitlement::Active, _) | (_, Entitlement::Active) => Entitlement::Active,
-                    (Entitlement::Unknown, _) | (_, Entitlement::Unknown) => Entitlement::Unknown,
-                    _ => Entitlement::Inactive,
-                };
-            })
-            .or_insert(state);
-    };
+) -> Result<BTreeMap<u64, Vec<Option<&'a Channel>>>, String> {
+    let mut result: BTreeMap<u64, Vec<Option<&Channel>>> = BTreeMap::new();
     for channel in channels {
         if let Some(id) = &channel.discord_user_id {
-            let id = id
-                .parse::<u64>()
-                .ok()
-                .filter(|id| *id > 0)
-                .ok_or("Ungültige Discord-Verknüpfung")?;
-            merge(id, channel.entitlement());
+            let id = discord_id(id, "Ungültige Discord-Verknüpfung")?;
+            result.entry(id).or_default().push(Some(channel));
         }
     }
     for link in links {
-        let id = link
-            .discord_id
-            .parse::<u64>()
-            .ok()
-            .filter(|id| *id > 0)
-            .ok_or("Ungültige Plattform-Verknüpfung")?;
+        let id = discord_id(&link.discord_id, "Ungültige Plattform-Verknüpfung")?;
         let matching: Vec<_> = channels
             .iter()
             .filter(|channel| channel.twitch_user_id == link.twitch_user_id)
@@ -116,25 +306,156 @@ fn entitlements(
                     && other.twitch_user_id == link.twitch_user_id
                     && other.discord_id.parse::<u64>().ok() == Some(id)
             });
+        let entry = result.entry(id).or_default();
         if !reliably_linked || matching.is_empty() {
-            merge(id, Entitlement::Unknown);
+            entry.push(None);
         } else {
-            for channel in matching {
-                merge(id, channel.entitlement());
-            }
+            entry.extend(matching.into_iter().map(Some));
         }
     }
     Ok(result)
 }
 
+fn merge(previous: Entitlement, state: Entitlement) -> Entitlement {
+    match (previous, state) {
+        (Entitlement::Active, _) | (_, Entitlement::Active) => Entitlement::Active,
+        (Entitlement::Unknown, _) | (_, Entitlement::Unknown) => Entitlement::Unknown,
+        _ => Entitlement::Inactive,
+    }
+}
+
+fn entitlements(
+    channels: &[Channel],
+    links: &[TwitchLink],
+    holders: &BTreeSet<u64>,
+    policy: &Policy,
+) -> Result<BTreeMap<u64, Entitlement>, String> {
+    Ok(linked_channels(channels, links)?
+        .into_iter()
+        .filter_map(|(id, linked)| {
+            let holder = holders.contains(&id);
+            linked
+                .into_iter()
+                .map(|channel| {
+                    channel.map_or(Entitlement::Unknown, |channel| {
+                        channel.entitlement(holder, policy)
+                    })
+                })
+                .reduce(merge)
+                .map(|state| (id, state))
+        })
+        .collect())
+}
+
+fn live_desired(
+    channels: &[Channel],
+    links: &[TwitchLink],
+    desired: &BTreeMap<u64, Entitlement>,
+    live: &BTreeSet<String>,
+) -> Result<BTreeSet<u64>, String> {
+    Ok(linked_channels(channels, links)?
+        .into_iter()
+        .filter(|(id, linked)| {
+            desired.get(id) == Some(&Entitlement::Active)
+                && linked
+                    .iter()
+                    .flatten()
+                    .any(|channel| live.contains(&channel.twitch_user_id))
+        })
+        .map(|(id, _)| id)
+        .collect())
+}
+
+struct Counters {
+    changed: usize,
+    unknown: usize,
+    nonmembers: usize,
+    failures: Vec<String>,
+}
+
+async fn write_role(
+    relay: &BrokerRelay,
+    guild_id: u64,
+    user_id: u64,
+    role_id: u64,
+    enabled: bool,
+    counters: &mut Counters,
+) -> bool {
+    match relay
+        .set_member_role_current(
+            guild_id,
+            user_id,
+            role_id,
+            enabled,
+            "Streamer-Bot Rollenabgleich",
+        )
+        .await
+    {
+        Ok(()) => {
+            counters.changed += 1;
+            tracing::info!(user_id, role_id, enabled, "Streamer-Rolle abgeglichen");
+            true
+        }
+        Err(error) => {
+            tracing::warn!(%error, user_id, role_id, enabled, "Streamer-Rollenabgleich wird wiederholt");
+            counters.failures.push(error.to_string());
+            false
+        }
+    }
+}
+
+struct LiveTarget<'a> {
+    guild_id: u64,
+    role_id: u64,
+    members: &'a BTreeSet<u64>,
+    unknown: &'a BTreeSet<u64>,
+    only_user: Option<u64>,
+}
+
+async fn sync_live_role(
+    relay: &BrokerRelay,
+    target: LiveTarget<'_>,
+    desired: &BTreeSet<u64>,
+    counters: &mut Counters,
+) -> Result<(), String> {
+    let holders = relay
+        .live_role_members(target.guild_id, target.role_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let users: BTreeSet<_> = match target.only_user {
+        Some(id) => BTreeSet::from([id]),
+        None => holders.union(desired).copied().collect(),
+    };
+    for user_id in users
+        .into_iter()
+        .filter(|id| target.members.contains(id) && !target.unknown.contains(id))
+    {
+        let enabled = desired.contains(&user_id);
+        if enabled != holders.contains(&user_id) {
+            write_role(
+                relay,
+                target.guild_id,
+                user_id,
+                target.role_id,
+                enabled,
+                counters,
+            )
+            .await;
+        }
+    }
+    Ok(())
+}
+
 pub async fn reconcile(
     pool: &PgPool,
     relay: &BrokerRelay,
-    guild_id: u64,
-    role_id: u64,
+    targets: &Targets,
     only_user: Option<u64>,
 ) -> Result<Option<bool>, String> {
     let _guard = SYNC_LOCK.lock().await;
+    let guild_id = targets.guild_id;
+    let role_id = targets.streamer_role_id;
+    let policy = load_policy(pool, guild_id).await;
     let members = relay
         .live_role_members(guild_id, guild_id)
         .await
@@ -147,10 +468,10 @@ pub async fn reconcile(
         .twitch_links()
         .await
         .map_err(|error| error.to_string())?;
-    let desired = entitlements(
-        &channels(pool).await.map_err(|error| error.to_string())?,
-        &links,
-    )?;
+    let snapshot = channels(pool, &policy)
+        .await
+        .map_err(|error| error.to_string())?;
+    let desired = entitlements(&snapshot, &links, &holders, &policy)?;
     let users: BTreeSet<_> = match only_user {
         Some(id) => BTreeSet::from([id]),
         None => holders
@@ -160,13 +481,15 @@ pub async fn reconcile(
             .collect(),
     };
     let mut outcome = None;
-    let mut changed = 0;
-    let mut unknown = 0;
-    let mut nonmembers = 0;
-    let mut failures = Vec::new();
+    let mut counters = Counters {
+        changed: 0,
+        unknown: 0,
+        nonmembers: 0,
+        failures: Vec::new(),
+    };
     for user_id in users {
         if !members.contains(&user_id) {
-            nonmembers += 1;
+            counters.nonmembers += 1;
             continue;
         }
         let state = desired
@@ -177,14 +500,18 @@ pub async fn reconcile(
             Entitlement::Active => true,
             Entitlement::Inactive => false,
             Entitlement::Unknown => {
-                unknown += 1;
+                counters.unknown += 1;
                 continue;
             }
         };
         if enabled != holders.contains(&user_id) {
             let current = entitlements(
-                &channels(pool).await.map_err(|error| error.to_string())?,
+                &channels(pool, &policy)
+                    .await
+                    .map_err(|error| error.to_string())?,
                 &links,
+                &holders,
+                &policy,
             )?;
             if current
                 .get(&user_id)
@@ -194,63 +521,58 @@ pub async fn reconcile(
             {
                 continue;
             }
-            match relay
-                .set_member_role_current(
-                    guild_id,
-                    user_id,
-                    role_id,
-                    enabled,
-                    "Streamer-Bot Rollenabgleich",
-                )
-                .await
-            {
-                Ok(()) => {
-                    changed += 1;
-                    tracing::info!(user_id, enabled, "Streamer-Rolle abgeglichen");
-                }
-                Err(error) => {
-                    tracing::warn!(%error, user_id, enabled, "Streamer-Rollenabgleich wird wiederholt");
-                    failures.push(error.to_string());
-                    continue;
-                }
+            if !write_role(relay, guild_id, user_id, role_id, enabled, &mut counters).await {
+                continue;
             }
         }
         if only_user == Some(user_id) {
             outcome = Some(enabled);
         }
     }
+    if let Some(live_role_id) = policy.live_role_id {
+        let live = live_deadlock_channels(pool)
+            .await
+            .map_err(|error| error.to_string())?;
+        let desired_live = live_desired(&snapshot, &links, &desired, &live)?;
+        let unknown: BTreeSet<u64> = desired
+            .iter()
+            .filter(|(_, state)| **state == Entitlement::Unknown)
+            .map(|(id, _)| *id)
+            .collect();
+        let target = LiveTarget {
+            guild_id,
+            role_id: live_role_id,
+            members: &members,
+            unknown: &unknown,
+            only_user,
+        };
+        sync_live_role(relay, target, &desired_live, &mut counters).await?;
+    }
     tracing::info!(
         holders = holders.len(),
         linked = desired.len(),
-        changed,
-        unknown,
-        nonmembers,
-        failed = failures.len(),
+        changed = counters.changed,
+        unknown = counters.unknown,
+        nonmembers = counters.nonmembers,
+        failed = counters.failures.len(),
         "Streamer-Rollenabgleich abgeschlossen"
     );
-    if failures.is_empty() {
+    if counters.failures.is_empty() {
         Ok(outcome)
     } else {
-        Err(failures.join("; "))
+        Err(counters.failures.join("; "))
     }
 }
 
 pub async fn task(pool: PgPool, relay: BrokerRelay, config: tb_config::discord::OAuthFollowup) {
+    let targets = Targets::from_config(&config);
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(
         config.role_sync_interval_secs,
     ));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         interval.tick().await;
-        if let Err(error) = reconcile(
-            &pool,
-            &relay,
-            config.guild_id,
-            config.streamer_role_id,
-            None,
-        )
-        .await
-        {
+        if let Err(error) = reconcile(&pool, &relay, &targets, None).await {
             tracing::warn!(%error, "Streamer-Rollenabgleich ausgesetzt, nächster Lauf versucht erneut");
         }
     }

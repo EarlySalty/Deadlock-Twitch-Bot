@@ -146,14 +146,11 @@ impl TokenLifecycleNotifier for BrokerTokenLifecycleNotifier {
         let Ok(user_id) = discord_user_id.parse::<u64>() else {
             return false;
         };
-        match crate::streamer_role_sync::reconcile(
-            &self.pool,
-            relay,
+        let targets = crate::streamer_role_sync::Targets {
             guild_id,
-            self.role_id,
-            Some(user_id),
-        )
-        .await
+            streamer_role_id: self.role_id,
+        };
+        match crate::streamer_role_sync::reconcile(&self.pool, relay, &targets, Some(user_id)).await
         {
             Ok(Some(false)) => true,
             Ok(state) => {

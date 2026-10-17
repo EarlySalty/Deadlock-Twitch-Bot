@@ -37,8 +37,9 @@ const STALE_LIVE_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
 const STALE_LIVE_MAX_AGE_SECS: i64 = 30 * 60;
 /// Auto-Archiv-Drossel (Python: max. alle 15 Minuten).
 const AUTO_ARCHIVE_THROTTLE: Duration = Duration::from_secs(900);
-/// Inaktivität in Tagen, ab der ein Partner automatisch archiviert wird.
-const AUTO_ARCHIVE_DAYS: i64 = 10;
+const INACTIVITY_FLAG_DAYS: i64 = 28;
+const REACTIVATION_WINDOW_DAYS: i64 = 30;
+const REACTIVATION_MIN_DAYS: i64 = 4;
 /// Gemeinsame Offline-Drossel mit EventSub gegen doppelte Auto-Raid-Trigger.
 const POLL_OFFLINE_RAID_THROTTLE_SECONDS: f64 = 120.0;
 /// Statische Poll-Konfiguration (Env-getrieben, wie die Python-Konstanten).
@@ -656,10 +657,10 @@ impl PollEngine {
                 && !self.target_game_lower.is_empty()
                 && game_name.to_lowercase() == self.target_game_lower;
 
-            // Informativ inaktiver Partner streamt wieder Deadlock → Flag loeschen.
             if is_live
                 && entry.is_inactivity_flagged
                 && is_deadlock
+                && self.reactivated(&login_lower).await
                 && self.hooks.on_auto_unarchive(&login_lower).await
             {
                 tracing::info!(login = %login_lower, "Partner-Inaktivitaetsflag geloescht");
@@ -1003,9 +1004,21 @@ impl PollEngine {
         }
     }
 
-    /// Informative Inaktivitaetsmarkierung (> 10 Tage keine bekannte Stream-
-    /// Aktivitaet, gedrosselt auf alle 15 Minuten). Die eigentliche Lifecycle-
-    /// Op macht der Hook; sie deaktiviert Partner nicht.
+    async fn reactivated(&self, login: &str) -> bool {
+        let since = Utc::now() - chrono::Duration::days(REACTIVATION_WINDOW_DAYS);
+        match self
+            .tracked
+            .deadlock_days_including_today(login, since)
+            .await
+        {
+            Ok(days) => days >= REACTIVATION_MIN_DAYS,
+            Err(error) => {
+                tracing::debug!(%error, login, "Reaktivierung: Deadlock-Tage nicht ladbar");
+                false
+            }
+        }
+    }
+
     async fn auto_archive_inactive(&self) {
         {
             let mut state = self.state.lock().expect("tick state lock");
@@ -1017,7 +1030,7 @@ impl PollEngine {
             }
             state.last_archive_check = Some(Instant::now());
         }
-        let cutoff = Utc::now() - chrono::Duration::days(AUTO_ARCHIVE_DAYS);
+        let cutoff = Utc::now() - chrono::Duration::days(INACTIVITY_FLAG_DAYS);
         let candidates = match self
             .tracked
             .archive_candidates(&self.config.target_game, cutoff)

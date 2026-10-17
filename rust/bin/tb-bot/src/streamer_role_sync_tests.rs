@@ -2,9 +2,19 @@ use super::*;
 use std::sync::{Arc, Mutex};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
+const TARGETS: Targets = Targets {
+    guild_id: 1,
+    streamer_role_id: 2,
+};
+
+fn policy() -> Policy {
+    Policy::fallback(TARGETS.guild_id)
+}
+
 #[derive(Default)]
 struct DiscordState {
     holders: BTreeSet<u64>,
+    live_holders: BTreeSet<u64>,
     members: BTreeSet<u64>,
     membership_error: bool,
     membership_complete: bool,
@@ -27,10 +37,19 @@ impl Respond for Discord {
                     .url
                     .query_pairs()
                     .any(|(key, value)| key == "live" && value == "true"));
-                let membership = request
-                    .url
-                    .query_pairs()
-                    .any(|(key, value)| key == "role_id" && value == "1");
+                let role = |id: &str| {
+                    request
+                        .url
+                        .query_pairs()
+                        .any(|(key, value)| key == "role_id" && value == id)
+                };
+                let membership = role("1");
+                if role("3") {
+                    return ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "ok": true, "complete": true, "guild_id": "1", "role_id": "3",
+                        "members": state.live_holders.iter().map(|id| serde_json::json!({"id": id.to_string()})).collect::<Vec<_>>()
+                    }));
+                }
                 if membership && state.membership_error || !membership && state.role_error {
                     return ResponseTemplate::new(503);
                 }
@@ -54,11 +73,20 @@ impl Respond for Discord {
             path => {
                 assert!(request.headers.contains_key("x-internal-token"));
                 let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
-                assert_eq!(body["role_id"], 2);
                 assert_eq!(body["guild_id"], 1);
                 let id = body["user_id"].as_u64().unwrap();
                 let enabled = path.ends_with("add-role");
                 assert!(enabled || path.ends_with("remove-role"));
+                if body["role_id"] == 3 {
+                    if enabled {
+                        state.live_holders.insert(id);
+                    } else {
+                        state.live_holders.remove(&id);
+                    }
+                    return ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"ok": true, "result": {"user_id": id}}));
+                }
+                assert_eq!(body["role_id"], 2);
                 state.writes.push((
                     id,
                     enabled,
@@ -89,13 +117,18 @@ async fn fixture() -> (
     Discord,
 ) {
     let db = crate::role_test_postgres::TestPostgres::start().await;
-    sqlx::raw_sql("CREATE TABLE twitch_partners (twitch_user_id TEXT PRIMARY KEY, status TEXT, raid_admin_enabled BOOL, raid_bot_enabled INT, manual_partner_opt_out INT, technical_pause_reason TEXT, departnered_at TEXT, admin_archived_at TEXT);
+    sqlx::raw_sql("CREATE TABLE twitch_partners (twitch_user_id TEXT PRIMARY KEY, status TEXT, raid_admin_enabled BOOL, raid_bot_enabled INT, manual_partner_opt_out INT, technical_pause_reason TEXT, departnered_at TEXT, admin_archived_at TEXT, deadlock_pause_unmodded_at TEXT);
         CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT PRIMARY KEY, discord_user_id TEXT);
         CREATE TABLE twitch_partner_signup_denylist (twitch_user_id TEXT);
-        CREATE TABLE twitch_raid_auth (twitch_user_id TEXT PRIMARY KEY);
-        INSERT INTO twitch_raid_auth VALUES ('100');
+        CREATE TABLE twitch_raid_auth (twitch_user_id TEXT PRIMARY KEY, needs_reauth BOOL DEFAULT false);
+        INSERT INTO twitch_raid_auth (twitch_user_id) VALUES ('100');
         INSERT INTO twitch_partners VALUES ('100','active',true,1,0,NULL,NULL,NULL);
-        INSERT INTO twitch_streamer_identities VALUES ('100','10');")
+        INSERT INTO twitch_streamer_identities VALUES ('100','10');
+        CREATE TABLE twitch_stream_sessions (twitch_user_id TEXT, started_at TIMESTAMPTZ, had_deadlock_in_session BOOL);
+        INSERT INTO twitch_stream_sessions
+            SELECT id, NOW() - make_interval(days => day), true
+              FROM unnest(ARRAY['100','101','102','103','104','105','106','107','200','405']) AS id,
+                   generate_series(1, 4) AS day;")
         .execute(&db.pool).await.unwrap();
     let server = MockServer::start().await;
     let discord = Discord(Arc::new(Mutex::new(DiscordState {
@@ -120,14 +153,16 @@ async fn fixture() -> (
 async fn activation_deactivation_reactivation_and_unchanged_state() {
     let (db, _server, relay, discord) = fixture().await;
     discord.0.lock().unwrap().members.remove(&10);
-    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
     assert_eq!(
-        reconcile(&db.pool, &relay, 1, 2, Some(10)).await.unwrap(),
+        reconcile(&db.pool, &relay, &TARGETS, Some(10))
+            .await
+            .unwrap(),
         None
     );
     assert!(discord.0.lock().unwrap().writes.is_empty());
     discord.0.lock().unwrap().members.insert(10);
-    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
     assert_eq!(discord.0.lock().unwrap().holders, BTreeSet::from([10]));
     sqlx::query(
         "UPDATE twitch_partners SET status=' ACTIVE ',departnered_at='',admin_archived_at='  '",
@@ -136,17 +171,21 @@ async fn activation_deactivation_reactivation_and_unchanged_state() {
     .await
     .unwrap();
     assert_eq!(
-        reconcile(&db.pool, &relay, 1, 2, Some(10)).await.unwrap(),
+        reconcile(&db.pool, &relay, &TARGETS, Some(10))
+            .await
+            .unwrap(),
         Some(true)
     );
-    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
     assert_eq!(discord.0.lock().unwrap().writes.len(), 1);
     sqlx::query("UPDATE twitch_partners SET raid_admin_enabled=false,raid_bot_enabled=0")
         .execute(&db.pool)
         .await
         .unwrap();
     assert_eq!(
-        reconcile(&db.pool, &relay, 1, 2, Some(10)).await.unwrap(),
+        reconcile(&db.pool, &relay, &TARGETS, Some(10))
+            .await
+            .unwrap(),
         Some(true)
     );
     assert_eq!(discord.0.lock().unwrap().writes.len(), 1);
@@ -155,7 +194,9 @@ async fn activation_deactivation_reactivation_and_unchanged_state() {
         .await
         .unwrap();
     assert_eq!(
-        reconcile(&db.pool, &relay, 1, 2, Some(10)).await.unwrap(),
+        reconcile(&db.pool, &relay, &TARGETS, Some(10))
+            .await
+            .unwrap(),
         Some(false)
     );
     sqlx::query(
@@ -165,7 +206,9 @@ async fn activation_deactivation_reactivation_and_unchanged_state() {
     .await
     .unwrap();
     assert_eq!(
-        reconcile(&db.pool, &relay, 1, 2, Some(10)).await.unwrap(),
+        reconcile(&db.pool, &relay, &TARGETS, Some(10))
+            .await
+            .unwrap(),
         Some(true)
     );
     let state = discord.0.lock().unwrap();
@@ -194,17 +237,19 @@ async fn multiple_mappings_verified_fallback_and_legacy_drift() {
         state.links =
             vec![serde_json::json!({"discord_id":"20","twitch_user_id":"103","verified":true})];
     }
-    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
     assert_eq!(discord.0.lock().unwrap().holders, BTreeSet::from([10, 20]));
     let count = discord.0.lock().unwrap().writes.len();
-    reconcile(&db.pool, &relay, 1, 2, Some(10)).await.unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, Some(10))
+        .await
+        .unwrap();
     assert_eq!(discord.0.lock().unwrap().writes.len(), count);
     {
         let mut state = discord.0.lock().unwrap();
         state.holders.remove(&10);
         state.holders.insert(99);
     }
-    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
     assert_eq!(discord.0.lock().unwrap().holders, BTreeSet::from([10, 20]));
 }
 
@@ -242,7 +287,7 @@ async fn redundant_unverified_links_do_not_override_reliable_inactivity() {
             serde_json::json!({"discord_id":"11","twitch_user_id":"101","verified":true}),
         ];
     }
-    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
     {
         let state = discord.0.lock().unwrap();
         assert_eq!(state.holders, BTreeSet::from([12, 13, 14, 15, 16]));
@@ -258,27 +303,32 @@ async fn redundant_unverified_links_do_not_override_reliable_inactivity() {
     discord.0.lock().unwrap().links.reverse();
     for id in [10, 11] {
         assert_eq!(
-            reconcile(&db.pool, &relay, 1, 2, Some(id)).await.unwrap(),
+            reconcile(&db.pool, &relay, &TARGETS, Some(id))
+                .await
+                .unwrap(),
             Some(false)
         );
     }
     for id in [12, 13, 14] {
         assert_eq!(
-            reconcile(&db.pool, &relay, 1, 2, Some(id)).await.unwrap(),
+            reconcile(&db.pool, &relay, &TARGETS, Some(id))
+                .await
+                .unwrap(),
             None
         );
     }
-    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
     assert_eq!(discord.0.lock().unwrap().writes.len(), 2);
 }
 
 #[tokio::test]
-async fn missing_state_temporary_pause_unverified_links_and_failures_do_not_revoke() {
+async fn missing_state_maintenance_pause_unverified_links_and_failures_do_not_revoke() {
     let (db, _server, relay, discord) = fixture().await;
     sqlx::raw_sql(
-        "UPDATE twitch_partners SET raid_bot_enabled=0,technical_pause_reason='token_error';
+        "UPDATE twitch_partners SET raid_bot_enabled=0,technical_pause_reason='maintenance';
         INSERT INTO twitch_streamer_identities VALUES ('404','14'),('405','17');
-        INSERT INTO twitch_partners VALUES ('405','active',true,1,0,NULL,NULL,NULL);",
+        INSERT INTO twitch_partners VALUES ('405','active',true,1,0,NULL,NULL,NULL);
+        INSERT INTO twitch_raid_auth VALUES ('405');",
     )
     .execute(&db.pool)
     .await
@@ -291,7 +341,7 @@ async fn missing_state_temporary_pause_unverified_links_and_failures_do_not_revo
             serde_json::json!({"discord_id":"16","twitch_user_id":"999","verified":true}),
         ];
     }
-    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
     assert!(discord.0.lock().unwrap().writes.is_empty());
     discord.0.lock().unwrap().holders.insert(99);
     for error in 0..5 {
@@ -303,7 +353,7 @@ async fn missing_state_temporary_pause_unverified_links_and_failures_do_not_revo
             state.membership_error = error == 3;
             state.membership_complete = error != 4;
         }
-        assert!(reconcile(&db.pool, &relay, 1, 2, None).await.is_err());
+        assert!(reconcile(&db.pool, &relay, &TARGETS, None).await.is_err());
         assert!(discord.0.lock().unwrap().writes.is_empty());
     }
     discord.0.lock().unwrap().complete = true;
@@ -312,7 +362,7 @@ async fn missing_state_temporary_pause_unverified_links_and_failures_do_not_revo
         .execute(&db.pool)
         .await
         .unwrap();
-    assert!(reconcile(&db.pool, &relay, 1, 2, None).await.is_err());
+    assert!(reconcile(&db.pool, &relay, &TARGETS, None).await.is_err());
     assert!(discord.0.lock().unwrap().writes.is_empty());
 }
 
@@ -320,16 +370,16 @@ async fn missing_state_temporary_pause_unverified_links_and_failures_do_not_revo
 async fn failed_write_retries_on_next_sync_and_signup_denial_revokes() {
     let (db, _server, relay, discord) = fixture().await;
     discord.0.lock().unwrap().write_error = true;
-    assert!(reconcile(&db.pool, &relay, 1, 2, None).await.is_err());
+    assert!(reconcile(&db.pool, &relay, &TARGETS, None).await.is_err());
     assert!(discord.0.lock().unwrap().holders.is_empty());
     discord.0.lock().unwrap().write_error = false;
-    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
     assert_eq!(discord.0.lock().unwrap().holders, BTreeSet::from([10]));
     sqlx::query("INSERT INTO twitch_partner_signup_denylist VALUES ('100')")
         .execute(&db.pool)
         .await
         .unwrap();
-    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
     assert!(discord.0.lock().unwrap().holders.is_empty());
 }
 
@@ -353,8 +403,7 @@ impl tb_raid::token_lifecycle::TokenLifecycleNotifier for GraceNotifier {
             reconcile(
                 &self.pool,
                 &self.relay,
-                1,
-                2,
+                &TARGETS,
                 Some(discord_user_id.parse().unwrap())
             )
             .await
@@ -368,9 +417,9 @@ impl tb_raid::token_lifecycle::TokenLifecycleNotifier for GraceNotifier {
 #[tokio::test]
 async fn grace_expiry_reconciles_after_persistent_deactivation() {
     let (db, _server, relay, discord) = fixture().await;
-    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
     sqlx::raw_sql("ALTER TABLE twitch_streamer_identities ADD twitch_login TEXT DEFAULT 'test', ADD updated_at TIMESTAMPTZ DEFAULT NOW();
-        ALTER TABLE twitch_raid_auth ADD twitch_login TEXT DEFAULT 'test', ADD raid_enabled BOOL DEFAULT true, ADD needs_reauth BOOL DEFAULT false;
+        ALTER TABLE twitch_raid_auth ADD twitch_login TEXT DEFAULT 'test', ADD raid_enabled BOOL DEFAULT true;
         CREATE TABLE twitch_token_blacklist (twitch_user_id TEXT, twitch_login TEXT, error_count INT, grace_expires_at TEXT, role_removed INT, reminder_sent INT);
         INSERT INTO twitch_token_blacklist VALUES ('100','test',3,'2000-01-01T00:00:00+00:00',0,0);")
         .execute(&db.pool).await.unwrap();
@@ -385,4 +434,335 @@ async fn grace_expiry_reconciles_after_persistent_deactivation() {
     assert!(discord.0.lock().unwrap().holders.is_empty());
     assert_eq!(reactor.check_grace_periods().await, 0);
     assert_eq!(discord.0.lock().unwrap().writes.len(), 2);
+}
+
+fn partner(id: &str, discord: &str) -> Channel {
+    Channel {
+        twitch_user_id: id.into(),
+        discord_user_id: Some(discord.into()),
+        status: Some("active".into()),
+        has_bot_auth: true,
+        manual_partner_opt_out: Some(0),
+        kept_active: true,
+        active_days: 4,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn unavailable_bot_makes_partner_inactive() {
+    assert_eq!(partner("1", "10").availability(true), Entitlement::Active);
+    for reason in [
+        "bot_banned",
+        "token_error",
+        "token_error_expired",
+        "blocked",
+    ] {
+        let channel = Channel {
+            technical_pause_reason: Some(reason.into()),
+            ..partner("1", "10")
+        };
+        assert_eq!(channel.entitlement(true, &policy()), Entitlement::Inactive);
+    }
+    let unmodded = Channel {
+        bot_unmodded: true,
+        ..partner("1", "10")
+    };
+    assert_eq!(unmodded.entitlement(true, &policy()), Entitlement::Inactive);
+    let without_auth = Channel {
+        has_bot_auth: false,
+        ..partner("1", "10")
+    };
+    assert_eq!(
+        without_auth.entitlement(true, &policy()),
+        Entitlement::Inactive
+    );
+    let maintenance = Channel {
+        technical_pause_reason: Some("maintenance".into()),
+        ..partner("1", "10")
+    };
+    assert_eq!(
+        maintenance.entitlement(true, &policy()),
+        Entitlement::Active
+    );
+    let unknown_status = Channel {
+        status: Some("pending".into()),
+        bot_unmodded: true,
+        ..partner("1", "10")
+    };
+    assert_eq!(unknown_status.availability(true), Entitlement::Inactive);
+    let relaxed = Policy {
+        require_bot_access: false,
+        ..policy()
+    };
+    assert_eq!(
+        without_auth.entitlement(true, &relaxed),
+        Entitlement::Active
+    );
+    assert_eq!(unmodded.entitlement(true, &relaxed), Entitlement::Active);
+    let blocked = Channel {
+        technical_pause_reason: Some("blocked".into()),
+        ..partner("1", "10")
+    };
+    assert_eq!(blocked.entitlement(true, &relaxed), Entitlement::Inactive);
+}
+
+#[test]
+fn holders_keep_with_recent_session_and_newcomers_need_enough_days() {
+    let quiet_holder = Channel {
+        kept_active: false,
+        active_days: 0,
+        ..partner("1", "10")
+    };
+    assert_eq!(
+        quiet_holder.entitlement(true, &policy()),
+        Entitlement::Inactive
+    );
+    let recent_holder = Channel {
+        active_days: 1,
+        ..partner("1", "10")
+    };
+    assert_eq!(
+        recent_holder.entitlement(true, &policy()),
+        Entitlement::Active
+    );
+    assert_eq!(
+        recent_holder.entitlement(false, &policy()),
+        Entitlement::Inactive
+    );
+    let three_days = Channel {
+        active_days: 3,
+        ..partner("1", "10")
+    };
+    assert_eq!(
+        three_days.entitlement(false, &policy()),
+        Entitlement::Inactive
+    );
+    assert_eq!(
+        partner("1", "10").entitlement(false, &policy()),
+        Entitlement::Active
+    );
+    let without_check = Policy {
+        method: ActivityMethod::None,
+        ..policy()
+    };
+    assert_eq!(
+        quiet_holder.entitlement(false, &without_check),
+        Entitlement::Active
+    );
+}
+
+fn policy_row() -> PolicyRow {
+    PolicyRow {
+        live_role_id: Some(3),
+        role_activity_method: "any_stream_days".into(),
+        role_keep_window_days: 14,
+        role_gain_window_days: 21,
+        role_gain_min_days: 2,
+        role_require_bot_access: false,
+    }
+}
+
+#[test]
+fn guild_policy_rows_parse_and_reject_invalid_values() {
+    assert_eq!(
+        policy_row().policy(),
+        Some(Policy {
+            live_role_id: Some(3),
+            method: ActivityMethod::AnyStreamDays,
+            keep_window_days: 14,
+            gain_window_days: 21,
+            gain_min_days: 2,
+            require_bot_access: false,
+        })
+    );
+    let without_live_role = PolicyRow {
+        live_role_id: None,
+        role_activity_method: "none".into(),
+        ..policy_row()
+    };
+    let parsed = without_live_role.policy().unwrap();
+    assert_eq!(parsed.live_role_id, None);
+    assert_eq!(parsed.method, ActivityMethod::None);
+    for invalid in [
+        PolicyRow {
+            role_activity_method: "weekly".into(),
+            ..policy_row()
+        },
+        PolicyRow {
+            role_gain_min_days: 22,
+            ..policy_row()
+        },
+        PolicyRow {
+            role_keep_window_days: 0,
+            ..policy_row()
+        },
+        PolicyRow {
+            role_gain_window_days: 366,
+            ..policy_row()
+        },
+        PolicyRow {
+            live_role_id: Some(0),
+            ..policy_row()
+        },
+    ] {
+        assert_eq!(invalid.policy(), None);
+    }
+    assert_eq!(
+        Policy::fallback(HOME_GUILD_ID).live_role_id,
+        Some(HOME_LIVE_ROLE_ID)
+    );
+    assert_eq!(Policy::fallback(1).live_role_id, None);
+}
+
+#[tokio::test]
+async fn guild_policy_falls_back_without_table_or_row() {
+    let db = crate::role_test_postgres::TestPostgres::start().await;
+    assert_eq!(
+        load_policy(&db.pool, HOME_GUILD_ID).await,
+        Policy::fallback(HOME_GUILD_ID)
+    );
+    sqlx::raw_sql(GUILD_TABLE).execute(&db.pool).await.unwrap();
+    assert_eq!(
+        load_policy(&db.pool, HOME_GUILD_ID).await,
+        Policy::fallback(HOME_GUILD_ID)
+    );
+    sqlx::raw_sql(
+        "INSERT INTO discord_guilds VALUES (1, NULL, 'any_stream_days', 14, 21, 2, false)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        load_policy(&db.pool, 1).await,
+        policy_row()
+            .policy()
+            .map(|policy| Policy {
+                live_role_id: None,
+                ..policy
+            })
+            .unwrap()
+    );
+}
+
+const GUILD_TABLE: &str = "CREATE TABLE discord_guilds (guild_id BIGINT PRIMARY KEY, live_role_id BIGINT, role_activity_method TEXT NOT NULL, role_keep_window_days INT NOT NULL, role_gain_window_days INT NOT NULL, role_gain_min_days INT NOT NULL, role_require_bot_access BOOL NOT NULL);";
+
+#[tokio::test]
+async fn stale_raid_auth_and_any_stream_method_follow_guild_policy() {
+    let (db, _server, relay, discord) = fixture().await;
+    sqlx::raw_sql(GUILD_TABLE).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO discord_guilds VALUES (1, NULL, 'deadlock_days', 28, 30, 4, true);
+        INSERT INTO twitch_partners VALUES ('101','active',true,1,0,NULL,NULL,NULL);
+        INSERT INTO twitch_streamer_identities VALUES ('101','11');
+        INSERT INTO twitch_raid_auth VALUES ('101', false);
+        UPDATE twitch_stream_sessions SET had_deadlock_in_session = false WHERE twitch_user_id = '101';
+        UPDATE twitch_raid_auth SET needs_reauth = true WHERE twitch_user_id = '100';",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
+    assert!(discord.0.lock().unwrap().holders.is_empty());
+    sqlx::raw_sql("UPDATE discord_guilds SET role_activity_method = 'any_stream_days'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
+    assert_eq!(discord.0.lock().unwrap().holders, BTreeSet::from([11]));
+}
+
+#[test]
+fn channels_of_one_member_merge_with_active_winning() {
+    let channels = [
+        Channel {
+            kept_active: false,
+            active_days: 0,
+            ..partner("1", "10")
+        },
+        partner("2", "10"),
+        Channel {
+            status: Some("pending".into()),
+            ..partner("3", "11")
+        },
+        Channel {
+            technical_pause_reason: Some("bot_banned".into()),
+            ..partner("4", "11")
+        },
+    ];
+    let desired = entitlements(&channels, &[], &BTreeSet::from([10]), &policy()).unwrap();
+    assert_eq!(desired.get(&10), Some(&Entitlement::Active));
+    assert_eq!(desired.get(&11), Some(&Entitlement::Unknown));
+}
+
+#[test]
+fn live_role_needs_fresh_deadlock_stream_and_active_entitlement() {
+    let now = chrono::Utc::now();
+    let stamp = |seconds: i64| (now - chrono::Duration::seconds(seconds)).to_rfc3339();
+    assert!(fresh_live(Some(&stamp(60)), now));
+    assert!(!fresh_live(Some(&stamp(LIVE_FRESH_SECS + 60)), now));
+    assert!(!fresh_live(Some(&stamp(-60)), now));
+    assert!(!fresh_live(Some("kaputt"), now));
+    assert!(!fresh_live(None, now));
+    let channels = [
+        partner("1", "10"),
+        partner("2", "11"),
+        partner("3", "12"),
+        partner("4", "13"),
+    ];
+    let desired = BTreeMap::from([
+        (10, Entitlement::Active),
+        (11, Entitlement::Unknown),
+        (12, Entitlement::Inactive),
+        (13, Entitlement::Active),
+    ]);
+    let live = BTreeSet::from(["1".to_string(), "2".to_string(), "3".to_string()]);
+    assert_eq!(
+        live_desired(&channels, &[], &desired, &live).unwrap(),
+        BTreeSet::from([10])
+    );
+}
+
+#[tokio::test]
+async fn live_role_follows_fresh_deadlock_streams_of_entitled_members() {
+    let (db, _server, relay, discord) = fixture().await;
+    sqlx::raw_sql(
+        "INSERT INTO twitch_partners VALUES ('101','active',true,1,0,NULL,NULL,NULL);
+        INSERT INTO twitch_streamer_identities VALUES ('101','11');
+        CREATE TABLE twitch_live_state (twitch_user_id TEXT, is_live INT, last_game TEXT, last_seen_at TEXT);
+        INSERT INTO twitch_partners VALUES ('102','pending',true,1,0,NULL,NULL,NULL);
+        INSERT INTO twitch_streamer_identities VALUES ('102','12');",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO twitch_live_state VALUES ('100',1,' Deadlock ',$1),('101',1,'Deadlock',$1)",
+    )
+    .bind(&now)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    discord.0.lock().unwrap().live_holders = BTreeSet::from([11, 12]);
+    sqlx::raw_sql(GUILD_TABLE).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql("INSERT INTO discord_guilds VALUES (1, 3, 'deadlock_days', 28, 30, 4, true)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let targets = TARGETS;
+    reconcile(&db.pool, &relay, &targets, None).await.unwrap();
+    {
+        let state = discord.0.lock().unwrap();
+        assert_eq!(state.holders, BTreeSet::from([10]));
+        assert_eq!(state.live_holders, BTreeSet::from([10, 12]));
+    }
+    sqlx::query("UPDATE twitch_live_state SET last_game='Just Chatting'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    reconcile(&db.pool, &relay, &targets, None).await.unwrap();
+    let state = discord.0.lock().unwrap();
+    assert_eq!(state.holders, BTreeSet::from([10]));
+    assert_eq!(state.live_holders, BTreeSet::from([12]));
 }
