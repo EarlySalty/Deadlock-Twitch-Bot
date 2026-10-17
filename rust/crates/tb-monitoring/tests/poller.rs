@@ -1264,10 +1264,10 @@ async fn deadlock_live_cleart_inaktivitaetsflag_ohne_admin_archiv() {
 }
 
 #[tokio::test]
-async fn archive_candidates_markiert_nach_28_tagen_ohne_deadlock() {
+async fn archive_candidates_markiert_unter_vier_deadlock_tagen_in_60_tagen() {
     let pool = pool_or_skip!("t4c_archive_deadlock_window");
     let now = Utc::now();
-    let cutoff = now - Duration::days(28);
+    let since = now - Duration::days(60);
     sqlx::query(
         "INSERT INTO twitch_streamers_partner_state
             (twitch_login, twitch_user_id, is_partner_active, is_partner, operational_state)
@@ -1282,20 +1282,30 @@ async fn archive_candidates_markiert_nach_28_tagen_ohne_deadlock() {
         "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, game_name, had_deadlock_in_session)
          VALUES
             ('variety', $1, $1, 'Deadlock', true),
-            ('variety', $2, $2, 'Just Chatting', false),
+            ('variety', $2, $2, 'Deadlock', true),
+            ('variety', $3, $3, 'Deadlock', true),
+            ('variety', $4, $4, 'Deadlock', true),
+            ('variety', $6, $6, 'Just Chatting', false),
             ('regular', $1, $1, 'Deadlock', true),
+            ('regular', $2, $2, 'Deadlock', true),
             ('regular', $3, $3, 'Deadlock', true),
-            ('newbie', $2, $2, 'Just Chatting', false)",
+            ('regular', $4, $4, 'Deadlock', true),
+            ('regular', $5, $5, 'Deadlock', true),
+            ('newbie', $3, $3, 'Deadlock', true),
+            ('newbie', $6, $6, 'Just Chatting', false)",
     )
-    .bind((now - Duration::days(40)).to_rfc3339())
+    .bind((now - Duration::days(70)).to_rfc3339())
+    .bind((now - Duration::days(45)).to_rfc3339())
+    .bind((now - Duration::days(30)).to_rfc3339())
+    .bind((now - Duration::days(15)).to_rfc3339())
+    .bind((now - Duration::days(5)).to_rfc3339())
     .bind((now - Duration::days(1)).to_rfc3339())
-    .bind((now - Duration::days(27)).to_rfc3339())
     .execute(&pool)
     .await
     .unwrap();
 
     let candidates = TrackedStore::new(pool)
-        .archive_candidates("Deadlock", cutoff)
+        .archive_candidates("Deadlock", since, 4)
         .await
         .unwrap();
     assert_eq!(candidates, vec!["variety".to_string()]);

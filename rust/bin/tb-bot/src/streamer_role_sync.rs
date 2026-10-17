@@ -54,6 +54,7 @@ struct Policy {
     live_role_id: Option<u64>,
     method: ActivityMethod,
     keep_window_days: u32,
+    keep_min_days: u32,
     gain_window_days: u32,
     gain_min_days: u32,
     require_bot_access: bool,
@@ -64,7 +65,8 @@ impl Policy {
         Self {
             live_role_id: (guild_id == HOME_GUILD_ID).then_some(HOME_LIVE_ROLE_ID),
             method: ActivityMethod::DeadlockDays,
-            keep_window_days: 28,
+            keep_window_days: 60,
+            keep_min_days: 4,
             gain_window_days: 30,
             gain_min_days: 4,
             require_bot_access: true,
@@ -77,6 +79,7 @@ struct PolicyRow {
     live_role_id: Option<i64>,
     role_activity_method: String,
     role_keep_window_days: i32,
+    role_keep_min_days: i32,
     role_gain_window_days: i32,
     role_gain_min_days: i32,
     role_require_bot_access: bool,
@@ -90,6 +93,7 @@ fn window(days: i32) -> Option<u32> {
 
 impl PolicyRow {
     fn policy(&self) -> Option<Policy> {
+        let keep_window_days = window(self.role_keep_window_days)?;
         let gain_window_days = window(self.role_gain_window_days)?;
         let live_role_id = match self.live_role_id {
             Some(id) => Some(u64::try_from(id).ok().filter(|id| *id > 0)?),
@@ -98,7 +102,9 @@ impl PolicyRow {
         Some(Policy {
             live_role_id,
             method: ActivityMethod::parse(&self.role_activity_method)?,
-            keep_window_days: window(self.role_keep_window_days)?,
+            keep_window_days,
+            keep_min_days: window(self.role_keep_min_days)
+                .filter(|days| *days <= keep_window_days)?,
             gain_window_days,
             gain_min_days: window(self.role_gain_min_days)
                 .filter(|days| *days <= gain_window_days)?,
@@ -113,7 +119,7 @@ async fn load_policy(pool: &PgPool, guild_id: u64) -> Policy {
     };
     let row = sqlx::query_as::<_, PolicyRow>(
         "SELECT live_role_id, role_activity_method, role_keep_window_days,
-                role_gain_window_days, role_gain_min_days, role_require_bot_access
+                role_keep_min_days, role_gain_window_days, role_gain_min_days, role_require_bot_access
            FROM discord_guilds WHERE guild_id = $1",
     )
     .bind(guild)
@@ -144,7 +150,7 @@ struct Channel {
     admin_archived_at: Option<String>,
     bot_unmodded: bool,
     denied: bool,
-    kept_active: bool,
+    kept_days: i64,
     active_days: i64,
 }
 
@@ -185,7 +191,7 @@ impl Channel {
     fn active_enough(&self, holder: bool, policy: &Policy) -> bool {
         match policy.method {
             ActivityMethod::None => true,
-            _ if holder => self.kept_active,
+            _ if holder => self.kept_days >= i64::from(policy.keep_min_days),
             _ => self.active_days >= i64::from(policy.gain_min_days),
         }
     }
@@ -202,7 +208,8 @@ async fn channels(pool: &PgPool, policy: &Policy) -> Result<Vec<Channel>, sqlx::
     sqlx::query_as(
         "WITH activity AS (
              SELECT s.twitch_user_id,
-                    BOOL_OR(s.started_at >= NOW() - make_interval(days => $1)) AS kept_active,
+                    COUNT(DISTINCT (s.started_at AT TIME ZONE 'Europe/Berlin')::date)
+                        FILTER (WHERE s.started_at >= NOW() - make_interval(days => $1)) AS kept_days,
                     COUNT(DISTINCT (s.started_at AT TIME ZONE 'Europe/Berlin')::date)
                         FILTER (WHERE s.started_at >= NOW() - make_interval(days => $2)) AS active_days
                FROM twitch_stream_sessions s
@@ -221,7 +228,7 @@ async fn channels(pool: &PgPool, policy: &Policy) -> Result<Vec<Channel>, sqlx::
                            AND NOT COALESCE(a.needs_reauth, false)) AS has_bot_auth,
                 EXISTS (SELECT 1 FROM twitch_partner_signup_denylist d
                          WHERE d.twitch_user_id = COALESCE(p.twitch_user_id, i.twitch_user_id)) AS denied,
-                COALESCE(act.kept_active, false) AS kept_active,
+                COALESCE(act.kept_days, 0) AS kept_days,
                 COALESCE(act.active_days, 0) AS active_days
            FROM twitch_partners p FULL OUTER JOIN twitch_streamer_identities i USING (twitch_user_id)
            LEFT JOIN activity act ON act.twitch_user_id = COALESCE(p.twitch_user_id, i.twitch_user_id)",

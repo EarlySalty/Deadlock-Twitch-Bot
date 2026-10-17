@@ -443,7 +443,7 @@ fn partner(id: &str, discord: &str) -> Channel {
         status: Some("active".into()),
         has_bot_auth: true,
         manual_partner_opt_out: Some(0),
-        kept_active: true,
+        kept_days: 4,
         active_days: 4,
         ..Default::default()
     }
@@ -508,9 +508,9 @@ fn unavailable_bot_makes_partner_inactive() {
 }
 
 #[test]
-fn holders_keep_with_recent_session_and_newcomers_need_enough_days() {
+fn holders_keep_with_enough_keep_days_and_newcomers_need_enough_days() {
     let quiet_holder = Channel {
-        kept_active: false,
+        kept_days: 0,
         active_days: 0,
         ..partner("1", "10")
     };
@@ -552,11 +552,64 @@ fn holders_keep_with_recent_session_and_newcomers_need_enough_days() {
     );
 }
 
+#[test]
+fn holders_need_four_deadlock_days_in_keep_window() {
+    let fallback = policy();
+    assert_eq!((fallback.keep_window_days, fallback.keep_min_days), (60, 4));
+    assert_eq!((fallback.gain_window_days, fallback.gain_min_days), (30, 4));
+    let three_days = Channel {
+        kept_days: 3,
+        active_days: 0,
+        ..partner("1", "10")
+    };
+    assert_eq!(
+        three_days.entitlement(true, &fallback),
+        Entitlement::Inactive
+    );
+    let four_days = Channel {
+        kept_days: 4,
+        active_days: 0,
+        ..partner("1", "10")
+    };
+    assert_eq!(four_days.entitlement(true, &fallback), Entitlement::Active);
+    assert_eq!(
+        four_days.entitlement(false, &fallback),
+        Entitlement::Inactive
+    );
+}
+
+#[tokio::test]
+async fn holder_with_three_deadlock_days_in_sixty_loses_and_four_keeps() {
+    let (db, _server, relay, discord) = fixture().await;
+    sqlx::raw_sql(
+        "DELETE FROM twitch_stream_sessions WHERE twitch_user_id = '100';
+        INSERT INTO twitch_stream_sessions
+            SELECT '100', NOW() - make_interval(days => day), true
+              FROM unnest(ARRAY[35, 42, 49, 56]) AS day;",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    discord.0.lock().unwrap().holders = BTreeSet::from([10]);
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
+    assert_eq!(discord.0.lock().unwrap().holders, BTreeSet::from([10]));
+    sqlx::raw_sql(
+        "DELETE FROM twitch_stream_sessions
+          WHERE twitch_user_id = '100' AND started_at < NOW() - make_interval(days => 50)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
+    assert!(discord.0.lock().unwrap().holders.is_empty());
+}
+
 fn policy_row() -> PolicyRow {
     PolicyRow {
         live_role_id: Some(3),
         role_activity_method: "any_stream_days".into(),
         role_keep_window_days: 14,
+        role_keep_min_days: 3,
         role_gain_window_days: 21,
         role_gain_min_days: 2,
         role_require_bot_access: false,
@@ -571,6 +624,7 @@ fn guild_policy_rows_parse_and_reject_invalid_values() {
             live_role_id: Some(3),
             method: ActivityMethod::AnyStreamDays,
             keep_window_days: 14,
+            keep_min_days: 3,
             gain_window_days: 21,
             gain_min_days: 2,
             require_bot_access: false,
@@ -595,6 +649,14 @@ fn guild_policy_rows_parse_and_reject_invalid_values() {
         },
         PolicyRow {
             role_keep_window_days: 0,
+            ..policy_row()
+        },
+        PolicyRow {
+            role_keep_min_days: 0,
+            ..policy_row()
+        },
+        PolicyRow {
+            role_keep_min_days: 15,
             ..policy_row()
         },
         PolicyRow {
@@ -628,7 +690,7 @@ async fn guild_policy_falls_back_without_table_or_row() {
         Policy::fallback(HOME_GUILD_ID)
     );
     sqlx::raw_sql(
-        "INSERT INTO discord_guilds VALUES (1, NULL, 'any_stream_days', 14, 21, 2, false)",
+        "INSERT INTO discord_guilds VALUES (1, NULL, 'any_stream_days', 14, 3, 21, 2, false)",
     )
     .execute(&db.pool)
     .await
@@ -645,14 +707,14 @@ async fn guild_policy_falls_back_without_table_or_row() {
     );
 }
 
-const GUILD_TABLE: &str = "CREATE TABLE discord_guilds (guild_id BIGINT PRIMARY KEY, live_role_id BIGINT, role_activity_method TEXT NOT NULL, role_keep_window_days INT NOT NULL, role_gain_window_days INT NOT NULL, role_gain_min_days INT NOT NULL, role_require_bot_access BOOL NOT NULL);";
+const GUILD_TABLE: &str = "CREATE TABLE discord_guilds (guild_id BIGINT PRIMARY KEY, live_role_id BIGINT, role_activity_method TEXT NOT NULL, role_keep_window_days INT NOT NULL, role_keep_min_days INT NOT NULL, role_gain_window_days INT NOT NULL, role_gain_min_days INT NOT NULL, role_require_bot_access BOOL NOT NULL);";
 
 #[tokio::test]
 async fn stale_raid_auth_and_any_stream_method_follow_guild_policy() {
     let (db, _server, relay, discord) = fixture().await;
     sqlx::raw_sql(GUILD_TABLE).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(
-        "INSERT INTO discord_guilds VALUES (1, NULL, 'deadlock_days', 28, 30, 4, true);
+        "INSERT INTO discord_guilds VALUES (1, NULL, 'deadlock_days', 60, 4, 30, 4, true);
         INSERT INTO twitch_partners VALUES ('101','active',true,1,0,NULL,NULL,NULL);
         INSERT INTO twitch_streamer_identities VALUES ('101','11');
         INSERT INTO twitch_raid_auth VALUES ('101', false);
@@ -676,7 +738,7 @@ async fn stale_raid_auth_and_any_stream_method_follow_guild_policy() {
 fn channels_of_one_member_merge_with_active_winning() {
     let channels = [
         Channel {
-            kept_active: false,
+            kept_days: 0,
             active_days: 0,
             ..partner("1", "10")
         },
@@ -746,7 +808,7 @@ async fn live_role_follows_fresh_deadlock_streams_of_entitled_members() {
     .unwrap();
     discord.0.lock().unwrap().live_holders = BTreeSet::from([11, 12]);
     sqlx::raw_sql(GUILD_TABLE).execute(&db.pool).await.unwrap();
-    sqlx::raw_sql("INSERT INTO discord_guilds VALUES (1, 3, 'deadlock_days', 28, 30, 4, true)")
+    sqlx::raw_sql("INSERT INTO discord_guilds VALUES (1, 3, 'deadlock_days', 60, 4, 30, 4, true)")
         .execute(&db.pool)
         .await
         .unwrap();

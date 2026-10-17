@@ -37,7 +37,8 @@ const STALE_LIVE_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
 const STALE_LIVE_MAX_AGE_SECS: i64 = 30 * 60;
 /// Auto-Archiv-Drossel (Python: max. alle 15 Minuten).
 const AUTO_ARCHIVE_THROTTLE: Duration = Duration::from_secs(900);
-const INACTIVITY_FLAG_DAYS: i64 = 28;
+const INACTIVITY_WINDOW_DAYS: i64 = 60;
+const INACTIVITY_MIN_DAYS: i64 = 4;
 const REACTIVATION_WINDOW_DAYS: i64 = 30;
 const REACTIVATION_MIN_DAYS: i64 = 4;
 /// Gemeinsame Offline-Drossel mit EventSub gegen doppelte Auto-Raid-Trigger.
@@ -1030,10 +1031,10 @@ impl PollEngine {
             }
             state.last_archive_check = Some(Instant::now());
         }
-        let cutoff = Utc::now() - chrono::Duration::days(INACTIVITY_FLAG_DAYS);
+        let since = Utc::now() - chrono::Duration::days(INACTIVITY_WINDOW_DAYS);
         let candidates = match self
             .tracked
-            .archive_candidates(&self.config.target_game, cutoff)
+            .archive_candidates(&self.config.target_game, since, INACTIVITY_MIN_DAYS)
             .await
         {
             Ok(candidates) => candidates,

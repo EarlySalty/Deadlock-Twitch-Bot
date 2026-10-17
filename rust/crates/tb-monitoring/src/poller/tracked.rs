@@ -33,13 +33,12 @@ struct ArchiveCandidateRow {
     archived_at: Option<String>,
     operational_state: Option<String>,
     first_stream_at: Option<DateTime<Utc>>,
-    last_deadlock_at: Option<DateTime<Utc>>,
+    deadlock_days: i64,
 }
 
 impl ArchiveCandidateRow {
-    fn inactive_since(&self, cutoff: DateTime<Utc>) -> bool {
-        self.first_stream_at.is_some_and(|first| first < cutoff)
-            && self.last_deadlock_at.is_none_or(|last| last < cutoff)
+    fn inactive_since(&self, since: DateTime<Utc>, min_days: i64) -> bool {
+        self.first_stream_at.is_some_and(|first| first < since) && self.deadlock_days < min_days
     }
 }
 
@@ -139,7 +138,8 @@ impl TrackedStore {
     pub async fn archive_candidates(
         &self,
         _target_game: &str,
-        cutoff: DateTime<Utc>,
+        since: DateTime<Utc>,
+        min_days: i64,
     ) -> Result<Vec<String>, sqlx::Error> {
         let rows: Vec<ArchiveCandidateRow> = sqlx::query_as(
             r#"
@@ -147,8 +147,9 @@ impl TrackedStore {
                    s.archived_at::text AS archived_at,
                    s.operational_state,
                    MIN(NULLIF(sess.started_at::text, '')::timestamptz) AS first_stream_at,
-                   MAX(NULLIF(COALESCE(sess.ended_at::text, sess.started_at::text), '')::timestamptz)
-                       FILTER (WHERE COALESCE(sess.had_deadlock_in_session, false)) AS last_deadlock_at
+                   COUNT(DISTINCT (NULLIF(sess.started_at::text, '')::timestamptz AT TIME ZONE 'Europe/Berlin')::date)
+                       FILTER (WHERE COALESCE(sess.had_deadlock_in_session, false)
+                                 AND NULLIF(sess.started_at::text, '')::timestamptz >= $1) AS deadlock_days
               FROM twitch_streamers_partner_state s
               LEFT JOIN twitch_stream_sessions sess
                 ON LOWER(sess.streamer_login) = LOWER(s.twitch_login)
@@ -157,13 +158,14 @@ impl TrackedStore {
              GROUP BY s.twitch_login, s.archived_at, s.operational_state
             "#,
         )
+        .bind(since)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
             .into_iter()
             .filter_map(|row| {
                 let login = row.twitch_login.trim().to_lowercase();
-                if login.is_empty() || !row.inactive_since(cutoff) {
+                if login.is_empty() || !row.inactive_since(since, min_days) {
                     return None;
                 }
                 if row.archived_at.is_some_and(|a| !a.trim().is_empty()) {
