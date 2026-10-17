@@ -35,7 +35,7 @@ tokio       = { workspace = true, features = ["time", "sync"] }
 tracing     = { workspace = true }
 tracing-subscriber = { workspace = true }
 sqlx = { version = "=0.9.0", default-features = false, features = ["postgres", "runtime-tokio"] }
-jsonschema = { version = "=0.33.0", default-features = false }
+jsonschema = { version = "=0.52.0", default-features = false }
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }
