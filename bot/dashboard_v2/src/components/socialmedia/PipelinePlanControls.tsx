@@ -9,7 +9,10 @@ import {
 } from './pipelinePlan';
 
 function slotLabel(value: string | undefined, timezone: string, locale: string, text: PlanText): string {
-  if (!value || !(Date.parse(value) > Date.now())) return text('Noch kein Termin');
+  if (!value) return text('Noch kein Termin');
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return text('Termin nicht verfügbar');
+  if (at <= Date.now()) return text('Noch kein Termin');
   try {
     return new Intl.DateTimeFormat(locale, { timeZone: timezone, weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
   } catch {
@@ -293,9 +296,10 @@ function NextSlots({ base, targets, locale, text }: { base: PlanState; targets: 
   const timezone = base.snapshot.settings.timezone;
   const next = base.snapshot.next_slots ?? {};
   const shown = targets.filter(platform => base.snapshot.settings.target_platforms.includes(platform));
+  const titleId = useId();
   return <div className="pp-next-block">
-    <span className="pp-next-title">{text('Nächster Termin')}</span>
-    <dl className="pp-next" aria-label={text('Nächster Termin')}>
+    <span id={titleId} className="pp-next-title">{text('Nächster Termin')}</span>
+    <dl className="pp-next" aria-labelledby={titleId}>
     {shown.length ? shown.map(platform => <div key={platform}>
       <dt className="sq-platform-label"><img src={platformIconUrl(platform)} width="16" height="16" alt="" aria-hidden="true" />{PLAN_PLATFORMS.find(item => item.id === platform)?.label ?? platform}</dt>
       <dd>{slotLabel(next[platform], timezone, locale, text)}</dd>
