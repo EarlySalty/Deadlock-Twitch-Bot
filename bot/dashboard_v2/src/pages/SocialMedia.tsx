@@ -767,7 +767,7 @@ function PlatformConnectionsCard({
                 )}
                 <AutoPostingSwitch
                   active={targetPlatforms?.includes(platform) ?? false}
-                  usable={!standUnbekannt && uploadAvailable && connected && !abgelaufen}
+                  blocker={standUnbekannt ? 'unknown' : !uploadAvailable ? 'no_upload' : connected && !abgelaufen ? null : 'disconnected'}
                   disabled={gesperrt || targetPlatforms === null || targetSaving}
                   onChange={(active) => onToggleTarget(platform, active)}
                 />
@@ -813,18 +813,27 @@ function PlatformConnectionsCard({
   );
 }
 
-function AutoPostingSwitch({ active, usable, disabled, onChange }: {
+type AutoPostingBlocker = 'unknown' | 'no_upload' | 'disconnected' | null;
+
+function autoPostingHint(blocker: AutoPostingBlocker, active: boolean): string | null {
+  if (blocker === 'no_upload') return 'Automatisches Posten ist für diese Plattform noch nicht verfügbar.';
+  if (blocker === 'disconnected') return active ? 'Verbinde das Konto erneut, sonst wird hier nichts gepostet.' : 'Erst nach dem Verbinden verfügbar.';
+  return null;
+}
+
+function AutoPostingSwitch({ active, blocker, disabled, onChange }: {
   active: boolean;
-  usable: boolean;
+  blocker: AutoPostingBlocker;
   disabled: boolean;
   onChange: (active: boolean) => void;
 }) {
   const t = useT();
+  const hint = autoPostingHint(blocker, active);
   return (
     <label className="studio-switch studio-target-switch">
-      <input type="checkbox" role="switch" checked={active} disabled={disabled || (!usable && !active)} onChange={(event) => onChange(event.target.checked)} />
+      <input type="checkbox" role="switch" checked={active} disabled={disabled || (blocker !== null && !active)} onChange={(event) => onChange(event.target.checked)} />
       <span>{t('Für Auto-Posting aktiv')}</span>
-      {!usable && <small>{t(active ? 'Verbinde das Konto erneut, sonst wird hier nichts gepostet.' : 'Erst nach dem Verbinden verfügbar.')}</small>}
+      {hint && <small>{t(hint)}</small>}
     </label>
   );
 }

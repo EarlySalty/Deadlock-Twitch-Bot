@@ -10,6 +10,7 @@ import { chooseUsableVersion } from './versions';
 import { findChannelClip, isSelectableClip } from './clipLookup';
 import { canRetryJob, failureExplanation } from './failure';
 import { RevisionControls } from './RevisionControls';
+import { ProductionSwitch } from '../ProductionSwitch';
 import { removedSections } from './timeline';
 import { attachSyncedPlayback } from './playback';
 import './AiEditorPanel.css';
@@ -173,7 +174,7 @@ export function AiEditorPanel(props: AiEditorPanelProps) {
   return <AiEditorContent key={`${props.twitchUserId}-${props.clipDbId ?? ''}`} {...props} />;
 }
 
-function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = false, clipOnly = false }: AiEditorPanelProps) {
+function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = false, clipOnly = false, scheduleApi }: AiEditorPanelProps) {
   const t = useT();
   const { locale } = useLanguage();
   const client = useQueryClient();
@@ -276,7 +277,7 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = fals
   const clipCount = clips.data?.total ?? 0;
   return <section className="social-ai" aria-labelledby={settingsOnly ? undefined : "social-ai-title"} data-saving={savingConsent.isPending || start.isPending || retry.isPending || detailsLocked ? "true" : undefined} data-unsaved={confirmChannel !== null && confirmed ? "true" : undefined}>
     {!settingsOnly && !clipOnly && <header className="social-ai-header"><div><h2 id="social-ai-title"><Film aria-hidden="true" size={25} />{t("KI-Videoschnitt")}</h2><p>{t('Wähle einen Clip aus deinem Kanal')} {streamer ? <strong>{streamer}</strong> : null} {t('und starte eine einzelne Bearbeitung. Dafür muss der Auto-Pilot nicht aktiviert sein.')}</p></div><span className="social-ai-manual"><ShieldCheck aria-hidden="true" size={16} />{t("Manuelle Sichtung")}</span></header>}
-    {settingsOnly && <header className="studio-production-head"><h2 id="studio-production-title"><Sparkles aria-hidden="true" size={18} />{t("Rechtliches & KI-Einwilligung")}</h2></header>}
+    {settingsOnly && <header className="studio-production-head"><h2 id="studio-production-title"><Sparkles aria-hidden="true" size={18} />{t("Rechtliches & KI-Einwilligung")}</h2>{hasChannel && <ProductionSwitch owner={twitchUserId} disabled={!consent.isSuccess || !consent.data.global_allowed} api={scheduleApi} />}</header>}
     {!settingsOnly && <p className="social-ai-notice">{t("Ein fertiges Video wird hier zur Sichtung bereitgestellt. Es wird durch diesen Auftrag nicht automatisch veröffentlicht oder in den Zeitplan übernommen.")}</p>}
     {!hasChannel ? <EditorError>{t("Bitte wähle zuerst einen Kanal, um Clips und Freigaben zu laden.")}</EditorError> : <>
       <section className="social-ai-setup" aria-label={t("Freigabe und Clipauswahl")}>

@@ -23,7 +23,7 @@ export const AI_MODES: { id: PipelineMode; title: string; text: string }[] = [
 
 export const REVIEWS: { id: ReviewPolicy; title: string; text: string }[] = [
   { id: 'off', title: 'Vollautomatisch', text: 'Fertige Clips werden ohne deine Freigabe eingeplant.' },
-  { id: 'required', title: 'Vorab prüfen', text: 'Nichts geht raus, bevor du es freigibst.' },
+  { id: 'required', title: 'Freigabe nötig', text: 'Nichts geht raus, bevor du es freigibst.' },
   { id: 'veto_until_deadline', title: 'Veto bis Frist', text: 'Geht zur Frist automatisch raus, wenn du nicht stoppst.' },
 ];
 
@@ -73,7 +73,7 @@ export const PLAN_EN: Record<string, string> = {
   'Kontrolle': 'Review',
   'Prüfen oder automatisch posten?': 'Review first or post automatically?',
   'Vollautomatisch': 'Fully automatic',
-  'Vorab prüfen': 'Review first',
+  'Freigabe nötig': 'Approval required',
   'Lege fest, wie deine Clips vorbereitet werden, wer sie freigibt und wann sie erscheinen.': 'Choose how your clips are prepared, who approves them and when they go out.',
   'Plan wird geladen.': 'Loading plan.',
   'Erneut laden': 'Reload',

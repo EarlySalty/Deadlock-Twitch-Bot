@@ -32,7 +32,7 @@ export function StudioAutopilotSwitches({ owner, settings, failed, api, onSaved 
   const locked = !settings || save.isPending;
   return <div className="studio-autopilot" data-saving={save.isPending ? 'true' : undefined} role="group" aria-label={t('Auto-Pilot')}>
     <label className="studio-switch"><input type="checkbox" role="switch" checked={settings?.enabled ?? false} disabled={locked} onChange={(event) => save.mutate({ enabled: event.target.checked })} />{t('Auto-Pilot aktiv')}</label>
-    <label className="studio-switch"><input type="checkbox" role="switch" checked={settings?.paused ?? false} disabled={locked || !settings?.enabled} onChange={(event) => save.mutate({ paused: event.target.checked })} />{t('Produktion pausieren')}</label>
+    <label className="studio-switch"><input type="checkbox" role="switch" checked={settings?.paused ?? false} disabled={locked || (!settings?.enabled && !settings?.paused)} onChange={(event) => save.mutate({ paused: event.target.checked })} />{t('Produktion pausieren')}</label>
     {(failed || save.isError) && <p role="alert" className="studio-autopilot-error">{t('Speichern oder Laden fehlgeschlagen. Bitte erneut versuchen.')}</p>}
   </div>;
 }

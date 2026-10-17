@@ -612,6 +612,7 @@ export const SOCIAL_EN: Record<string, string> = {
   'Produktion pausieren': 'Pause production',
   'Für Auto-Posting aktiv': 'Active for auto-posting',
   'Erst nach dem Verbinden verfügbar.': 'Available after connecting.',
+  'Automatisches Posten ist für diese Plattform noch nicht verfügbar.': 'Automatic posting is not available for this platform yet.',
   'Verbinde das Konto erneut, sonst wird hier nichts gepostet.': 'Reconnect the account, otherwise nothing will be posted here.',
   'Auto-Posting konnte nicht gespeichert werden. Bitte versuche es erneut.': 'Auto-posting could not be saved. Please try again.',
   'Rechtliches & KI-Einwilligung': 'Legal & AI consent',

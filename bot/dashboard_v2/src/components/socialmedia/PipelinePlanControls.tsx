@@ -46,6 +46,8 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
 
   const dirty = base !== null && draft !== null && isDirty(base, draft);
   useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
+  const advancedNeeded = draft !== null && (draft.schedule_scope === 'per_platform' || draft.distribution_policy === 'independent_clips' || choices !== undefined);
+  const [advancedShown, setAdvancedShown] = useState(false);
 
   const reload = useCallback(async (force: boolean, signal?: AbortSignal) => {
     if (savingRef.current || (dirtyRef.current && !force)) return;
@@ -113,7 +115,6 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
     if (path === 'template') { edit({ pipeline_mode: 'upload' }); return; }
     if (!aiPath) edit({ pipeline_mode: base.policy.pipeline_mode !== 'upload' ? base.policy.pipeline_mode : 'upload_text' });
   };
-  const advancedOpen = draft.schedule_scope === 'per_platform' || draft.distribution_policy === 'independent_clips' || choices !== undefined;
 
   return <section className="studio-card schedule-queue pp-plan" aria-labelledby={`${id}-heading`} data-unsaved={dirty || saving ? 'true' : undefined} data-saving={saving ? 'true' : undefined}>
     <header className="pp-head">
@@ -138,11 +139,11 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
               {base.snapshot.production_hold && <p className="sq-help">{text(HOLDS[base.snapshot.production_hold])}</p>}
             </div>
           </div>
-          <details className="pp-advanced" open={advancedOpen || undefined}>
+          <details className="pp-advanced" open={advancedShown || advancedNeeded} onToggle={event => setAdvancedShown(event.currentTarget.open)}>
             <summary>{text('Erweiterte Plattform-Regeln (abweichende Zeiten / unterschiedliche Clips pro Kanal)')}</summary>
             <div className="pp-column">
               <ChoiceGroup legend={text('Wann soll gepostet werden?')} name={`${id}-scope`} options={SCOPES} value={draft.schedule_scope} text={text} onChange={scheduleScope} compact />
-              {choices && <SharedChoice choices={choices} text={text} onPick={slots => { setChoices(undefined); edit({ schedule_scope: 'shared', shared: slots }); }} onCancel={() => setChoices(undefined)} />}
+              {choices && <SharedChoice choices={choices} text={text} onPick={slots => { setAdvancedShown(true); setChoices(undefined); edit({ schedule_scope: 'shared', shared: slots }); }} onCancel={() => setChoices(undefined)} />}
               {draft.schedule_scope === 'per_platform' && draft.target_platforms.map(platform => <WeekEditor key={platform} platform={platform} label={PLAN_PLATFORMS.find(item => item.id === platform)?.label ?? platform} slots={draft.per_platform[platform] ?? []} text={text}
                 onChange={slots => edit({ per_platform: { ...draft.per_platform, [platform]: slots } })} />)}
               <ChoiceGroup legend={text('Verteilung der Clips')} name={`${id}-distribution`} options={DISTRIBUTIONS} value={draft.distribution_policy} text={text} onChange={distribution_policy => edit({ distribution_policy })} compact />
