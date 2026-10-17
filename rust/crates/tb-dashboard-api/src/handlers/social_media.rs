@@ -653,7 +653,7 @@ async fn auto_posting_guard(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<
         None
     } else {
         Some(crate::auth::stufe_required_response(
-            tb_analytics::stufe::Stufe::Pro,
+            tb_analytics::stufe::Stufe::Studio,
         ))
     }
 }

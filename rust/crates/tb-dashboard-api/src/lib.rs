@@ -256,12 +256,12 @@ fn build_authed_router_with_analysis_store(
         audience_demographics, auth_status, billing, category_activity, category_comparison,
         category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
         chat_deep_llm, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
-        command_name_settings, dashboard_assistent, engagement_mode, engagement_settings,
-        exp_analytics, feedback, follower_funnel, greeting_settings, internal_home, leaderboard,
-        loyalty_curve, lurk_command_settings, lurker_analysis, lurker_tax_settings,
-        moderation_settings, monetization, onboarding, overview, performance, plattform_connect,
-        raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
-        scam_guard_settings, session_detail, silent_settings, social_media, spa,
+        command_name_settings, community_hints, dashboard_assistent, engagement_mode,
+        engagement_settings, exp_analytics, feedback, follower_funnel, greeting_settings,
+        internal_home, leaderboard, loyalty_curve, lurk_command_settings, lurker_analysis,
+        lurker_tax_settings, moderation_settings, monetization, onboarding, overview, performance,
+        plattform_connect, raid_analytics, raid_history, rankings, retention_curve,
+        scam_guard_queue, scam_guard_settings, session_detail, silent_settings, social_media, spa,
         stat_command_settings, stream_report, streamer_disconnect, streamers,
         sub_reminder_settings, tag_analysis, tip_settings, title, title_command_settings,
         title_performance, uplink, viewer_timeline, viewers, watch_time,
@@ -614,6 +614,10 @@ fn build_authed_router_with_analysis_store(
         .route(
             "/twitch/api/v2/streamer/silent-settings",
             get(silent_settings::get_handler).post(silent_settings::post_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/community-hints",
+            get(community_hints::get_handler).post(community_hints::post_handler),
         )
         // Streamer-Selbstbedienung: Go-Live-Tipp-Opt-out. Partner setzen nur
         // die eigene `twitch_tip_settings`-Zeile über ihre Session-User-ID.

@@ -26,9 +26,9 @@ const faqData = [
       'Deine Analytics-Daten bleiben für 30 Tage nach Kündigung gespeichert. Du kannst sie jederzeit exportieren oder dein Konto reaktivieren, um wieder Zugang zu erhalten.',
   },
   {
-    question: 'Was ist der Unterschied zwischen Free, Plus und Pro?',
+    question: 'Was kosten Twitch-Bot, Steam-Bot und die Hinweise im Chat?',
     answer:
-      'Free zeigt dir deinen letzten Stream und bleibt sonst vollwertig: Auto-Raid, Chat-Schutz, alle Chat-Befehle, Overlay-Builder. Netzwerk Plus zeigt dir deine Entwicklung, also den vollen Verlauf, Zeitraumvergleiche und die komplette KI-Auswertung. Creator Pro ist die Stufe darüber und steht noch nicht zum Kauf bereit: sie wird erst buchbar, wenn ihre eigenen Funktionen fertig sind.',
+      'Twitch-Bot, Steam-Bot und alle Free-Funktionen kosten dich nichts. Die Hinweise im Chat sind der Weg, wie Zuschauer die Community finden und wie diese kostenlose Arbeit mitgetragen wird. Ab Netzwerk Plus schaltest du sie in der Verwaltung unter Bot & Schutz aus. Dein Go-Live-Post im Community-Discord bleibt davon unberührt.',
   },
 ];
 

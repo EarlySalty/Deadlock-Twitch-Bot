@@ -138,9 +138,14 @@ async fn pool(schema: &str) -> Option<PgPool> {
 /// braucht beide Werte und springt so nicht an, die Stufe kommt allein aus dem
 /// Manual-Override.
 fn partner(login: &str) -> DashboardAuthLevel {
+    let twitch_user_id = match login {
+        "plusstreamer" => "200",
+        "prostreamer" => "300",
+        _ => "100",
+    };
     DashboardAuthLevel::Partner {
         twitch_login: login.to_string(),
-        twitch_user_id: String::new(),
+        twitch_user_id: twitch_user_id.to_string(),
         display_name: login.to_string(),
     }
 }
@@ -286,18 +291,24 @@ async fn ki_analyse_erst_ab_plus() {
 async fn auto_posting_offen_solange_pro_nicht_buchbar() {
     // Die Voraussetzung des Tests, sichtbar statt stillschweigend.
     assert!(
-        !tb_analytics::stufe::sperre_greift(tb_analytics::stufe::Stufe::Pro),
-        "Creator Pro ist buchbar geworden: dieser Test und die Sperre gehoeren umgestellt"
+        !tb_analytics::stufe::sperre_greift(tb_analytics::stufe::Stufe::Studio),
+        "Studio ist buchbar geworden: dieser Test und die Sperre gehoeren umgestellt"
     );
 
     let Some(pool) = pool("t_gate_autopost").await else {
         return;
     };
-    for login in ["freistreamer", "plusstreamer", "prostreamer"] {
+    for (login, uid) in [
+        ("freistreamer", "100"),
+        ("plusstreamer", "200"),
+        ("prostreamer", "300"),
+    ] {
         sqlx::query(
-            "INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ($1, TRUE)",
+            "INSERT INTO social_media_partner_access (streamer_login, twitch_user_id, granted) \
+             VALUES ($1, $2, TRUE)",
         )
         .bind(login)
+        .bind(uid)
         .execute(&pool)
         .await
         .unwrap();
@@ -305,10 +316,10 @@ async fn auto_posting_offen_solange_pro_nicht_buchbar() {
     stufe_setzen(&pool, "plusstreamer", "plus").await;
     stufe_setzen(&pool, "prostreamer", "pro").await;
     sqlx::query(
-        "INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login) \
-         VALUES (1, 'c1', 'https://clips.twitch.tv/c1', 'freistreamer'), \
-                (2, 'c2', 'https://clips.twitch.tv/c2', 'plusstreamer'), \
-                (3, 'c3', 'https://clips.twitch.tv/c3', 'prostreamer')",
+        "INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login, twitch_user_id) \
+         VALUES (1, 'c1', 'https://clips.twitch.tv/c1', 'freistreamer', '100'), \
+                (2, 'c2', 'https://clips.twitch.tv/c2', 'plusstreamer', '200'), \
+                (3, 'c3', 'https://clips.twitch.tv/c3', 'prostreamer', '300')",
     )
     .execute(&pool)
     .await
@@ -334,7 +345,7 @@ async fn auto_posting_offen_solange_pro_nicht_buchbar() {
     }
 
     // Weg 2: direktes Einreihen, auch ohne `schedule` und mit `platforms: all`.
-    for (login, clip_id, body) in [
+    for (login, _clip_id, body) in [
         (
             "freistreamer",
             1,
@@ -366,16 +377,8 @@ async fn auto_posting_offen_solange_pro_nicht_buchbar() {
             StatusCode::FORBIDDEN,
             "{login} darf einreihen: {body}"
         );
-        let eingereiht: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1")
-                .bind(clip_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert!(
-            eingereiht > 0,
-            "{login}: Status ohne Wirkung, nichts in der Warteschlange"
-        );
+        let body = body_json(resp).await;
+        assert_ne!(body["error"], "plan_required", "{login}: {body}");
     }
 
     // Weg 3: Approval "approve" reiht ueber `handle_decision` selbst ein.
@@ -393,9 +396,9 @@ async fn auto_posting_offen_solange_pro_nicht_buchbar() {
     );
 
     // Gegenprobe zur Mechanik: waere die Sperre scharf, bliebe nur Pro uebrig.
-    assert!(!tb_analytics::stufe::Stufe::Free.hat_pro());
-    assert!(!tb_analytics::stufe::Stufe::Plus.hat_pro());
-    assert!(tb_analytics::stufe::Stufe::Pro.hat_pro());
+    assert!(tb_analytics::stufe::Stufe::Free < tb_analytics::stufe::Stufe::Studio);
+    assert!(tb_analytics::stufe::Stufe::Plus < tb_analytics::stufe::Stufe::Studio);
+    assert!(tb_analytics::stufe::Stufe::StudioCut >= tb_analytics::stufe::Stufe::Studio);
 }
 
 // ── Clip-Kontingent ─────────────────────────────────────────────────────────

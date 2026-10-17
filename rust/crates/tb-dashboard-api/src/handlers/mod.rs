@@ -52,6 +52,7 @@ pub mod clip_command_settings;
 pub mod clip_contest;
 pub mod coaching;
 pub mod command_name_settings;
+pub mod community_hints;
 pub mod dashboard_assistent;
 pub mod demo;
 pub mod demo_login;

@@ -21,6 +21,7 @@ import { DisconnectBotSection } from '@/components/verwaltung/DisconnectBotSecti
 import { GreetingSection } from '@/components/verwaltung/GreetingSection';
 import { LurkCommandSection } from '@/components/verwaltung/LurkCommandSection';
 import { LurkerTaxSection } from '@/components/verwaltung/LurkerTaxSection';
+import { CommunityHinweiseSection } from '@/components/verwaltung/CommunityHinweiseSection';
 import { SilentNotificationsSection } from '@/components/verwaltung/SilentNotificationsSection';
 import { ModerationSection } from '@/components/verwaltung/ModerationSection';
 import { ScamGuardSection } from '@/components/verwaltung/ScamGuardSection';
@@ -282,6 +283,7 @@ export function VerwaltungPage() {
       <ModerationSection />
       <ScamGuardSection />
       <SilentNotificationsSection />
+      <CommunityHinweiseSection />
       <DisconnectBotSection login={selfLogin} />
     </CommandNamesProvider>
   );

@@ -163,7 +163,7 @@ pub async fn plan_stufe(pool: &PgPool, login: &str, user_id: &str) -> Stufe {
 /// "voll" unterscheiden, fragen nur diesen Wert.
 pub async fn stufe_fuer_auth(pool: &PgPool, auth: &DashboardAuthLevel) -> Stufe {
     match auth {
-        DashboardAuthLevel::Admin { .. } => Stufe::Pro,
+        DashboardAuthLevel::Admin { .. } => Stufe::StudioCut,
         DashboardAuthLevel::None => Stufe::Free,
         DashboardAuthLevel::Partner {
             twitch_login,
@@ -196,7 +196,7 @@ pub async fn extended_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<R
 
 /// Gate fuer die Pro-Grenze (Clips ohne Limit, automatisches Posten).
 pub async fn pro_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<Response> {
-    stufen_gate(pool, auth, Stufe::Pro).await
+    stufen_gate(pool, auth, Stufe::Studio).await
 }
 
 /// Gemeinsamer Kern beider Gates: `None` heisst durchgelassen.
@@ -252,11 +252,7 @@ pub fn mit_plan_hinweis(
 ) -> Response {
     use axum::http::HeaderValue;
     let headers = response.headers_mut();
-    headers.insert("x-plan-stufe", HeaderValue::from_static(match stufe {
-        Stufe::Free => "free",
-        Stufe::Plus => "plus",
-        Stufe::Pro => "pro",
-    }));
+    headers.insert("x-plan-stufe", HeaderValue::from_static(stufe.as_str()));
     if gekuerzt {
         headers.insert("x-plan-gekuerzt", HeaderValue::from_static("1"));
         if let Ok(value) = HeaderValue::from_str(&fenster_tage.to_string()) {
@@ -306,20 +302,26 @@ pub fn plan_required_response() -> Response {
 /// 403 mit der Stufe, die fehlt. `required_plans` listet die Stufen, die den
 /// Zugang freischalten (Pro schaltet alles frei, was Plus schaltet).
 pub fn stufe_required_response(benoetigt: Stufe) -> Response {
-    let required_plans: Vec<&'static str> = [Stufe::Plus, Stufe::Pro]
-        .into_iter()
-        .filter(|stufe| *stufe >= benoetigt)
-        .map(Stufe::as_str)
-        .collect();
+    let required_plans: Vec<&'static str> = [
+        Stufe::Plus,
+        Stufe::Studio,
+        Stufe::StudioKi,
+        Stufe::StudioCut,
+    ]
+    .into_iter()
+    .filter(|stufe| *stufe >= benoetigt)
+    .map(Stufe::as_str)
+    .collect();
     let hinweis = match benoetigt {
-        Stufe::Pro => "Dafür brauchst du Creator Pro.",
+        Stufe::StudioCut => "Dafür brauchst du Studio Schnitt.",
+        Stufe::StudioKi => "Dafür brauchst du Studio KI.",
+        Stufe::Studio => "Dafür brauchst du Studio.",
         _ => "Dafür brauchst du Netzwerk Plus.",
     };
-    // Das Entitlement muss zur fehlenden Stufe passen. Vorher stand hier fest
-    // `analytics`, auch im 403 des Pro-Gates — dort fehlt aber `social.auto_post`,
-    // und das Frontend bekam damit die falsche Begruendung fuer die Sperre.
     let required_entitlements: &[&str] = match benoetigt {
-        Stufe::Pro => &["social.auto_post"],
+        Stufe::StudioCut => &["social.video_edit"],
+        Stufe::StudioKi => &["social.captions"],
+        Stufe::Studio => &["social.auto_post"],
         _ => &["analytics"],
     };
     (
@@ -350,21 +352,25 @@ mod tests {
         assert_eq!(body["error"], "plan_required");
         assert_eq!(body["required_entitlements"], json!(["analytics"]));
         assert_eq!(body["required_stufe"], "plus");
-        // Pro schaltet alles frei, was Plus freischaltet.
-        assert_eq!(body["required_plans"], json!(["plus", "pro"]));
+        assert_eq!(
+            body["required_plans"],
+            json!(["plus", "studio", "studio_ki", "studio_cut"])
+        );
         assert!(body["message"].as_str().unwrap().contains("Netzwerk Plus"));
     }
 
-    /// Pro-Grenze: nur Pro steht in der Liste, und der Text nennt Creator Pro.
     #[tokio::test]
-    async fn stufe_required_response_fuer_pro() {
-        let resp = stufe_required_response(Stufe::Pro);
+    async fn stufe_required_response_fuer_studio() {
+        let resp = stufe_required_response(Stufe::Studio);
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         let bytes = to_bytes(resp.into_body(), 1 << 16).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(body["required_stufe"], "pro");
-        assert_eq!(body["required_plans"], json!(["pro"]));
-        assert!(body["message"].as_str().unwrap().contains("Creator Pro"));
+        assert_eq!(body["required_stufe"], "studio");
+        assert_eq!(
+            body["required_plans"],
+            json!(["studio", "studio_ki", "studio_cut"])
+        );
+        assert!(body["message"].as_str().unwrap().contains("Studio"));
     }
 
     /// 401-Body-Shape (Python `_require_v2_auth`): error-Text + loginUrl.

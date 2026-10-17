@@ -90,6 +90,45 @@ const BILLING_CATALOG_FIXTURE: { plans: CatalogPlan[] } = {
       is_current: true,
     },
     {
+      id: 'studio',
+      name: 'Studio',
+      tier: 'extended',
+      price_monthly: 12,
+      description: 'Pipeline, Import, VOD, drei Plattformen, Vorlagen und Freigabe-Autopilot.',
+      monthly_gross_cents: 1200,
+      yearly_gross_cents: 12000,
+      recommended: false,
+      buchbar: false,
+      is_current: false,
+      features: ['Pipeline', 'Import', 'VOD', 'Drei Plattformen', 'Vorlagen', 'Freigabe-Autopilot'],
+    },
+    {
+      id: 'studio_ki',
+      name: 'Studio KI',
+      tier: 'extended',
+      price_monthly: 15,
+      description: 'Transkription, Titel, Hashtags und Vollautomatik.',
+      monthly_gross_cents: 1500,
+      yearly_gross_cents: 15000,
+      recommended: true,
+      buchbar: false,
+      is_current: false,
+      features: ['Transkription', 'Titel', 'Hashtags', 'Vollautomatik'],
+    },
+    {
+      id: 'studio_cut',
+      name: 'Studio Schnitt',
+      tier: 'extended',
+      price_monthly: 20,
+      description: 'KI-Videoschnitt mit 12 Schnitten im Monat.',
+      monthly_gross_cents: 2000,
+      yearly_gross_cents: 20000,
+      recommended: false,
+      buchbar: false,
+      is_current: false,
+      features: ['KI-Videoschnitt', '12 Schnitte im Monat'],
+    },
+    {
       id: 'pro',
       name: 'Creator Pro',
       tier: 'extended',
@@ -691,6 +730,9 @@ const DONO_GOAL_FIXTURE = {
  * nirgends gibt.
  */
 export function getPreviewPathFixture(pathname: string): unknown | undefined {
+  if (pathname === '/twitch/api/v2/streamer/community-hints') {
+    return { enabled: true, can_disable: true };
+  }
   if (pathname === '/twitch/api/v2/streamer/dono-goal') return DONO_GOAL_FIXTURE;
   if (pathname === '/twitch/api/v2/streamer/ad-manager') return AD_MANAGER_FIXTURE;
   if (pathname === '/twitch/api/v2/engagement/settings') return ENGAGEMENT_SETTINGS_FIXTURE;

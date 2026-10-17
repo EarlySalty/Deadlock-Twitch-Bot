@@ -1,44 +1,56 @@
 import { useLanguage, useOAuthLink, useT } from '../../context/LanguageContext';
 import { translatePageText } from '../../i18n/pageText';
-import { motion } from 'framer-motion';
+import { useState } from 'react';
 import { Check } from 'lucide-react';
 import { getPlanCheckoutHref } from '../../preview/routes';
 import type { CatalogPlan } from '../../types/billing';
 
-/* Die Stufen des Katalogs, so wie das Backend sie liefert: free, plus, pro.
-   Der frühere Baukasten setzte Feature-Kacheln zu Plan-IDs zusammen, die es seit
-   dem Umbau nicht mehr gibt; jede Auswahl landete deshalb bei "Kostenlos" und
-   verlinkte am Checkout vorbei. Hier wird nur noch angezeigt, was im Katalog
-   steht. Kein Empfohlen-Badge, keine Minus-Kreuze: was eine Stufe kann, steht
-   als Liste da, was sie nicht kann, steht in der Stufe darüber.
+const GOLD = '#C5A059';
+const CYAN = '#00D9FF';
 
-   Creator Pro bekommt bewusst KEINE eigene Säule, solange die Werkzeuge dafür
-   fehlen: eine Karte mit zwei Zeilen neben zwei vollen Karten wirkt wie ein
-   Angebot, das man nicht kaufen will. Es steht deshalb als ruhige Zeile
-   darunter, bis es Substanz hat. Sobald der Katalog Pro auf `buchbar` stellt
-   und die Feature-Liste trägt, gehört es zurück nach oben. Wer die Stufe über
-   ein Geschenk bereits laufen hat, sieht sie ebenfalls als Karte, sonst
-   verschwindet der eigene Stand samt Hinweis hinter der Ausblick-Zeile.
+const PLUS_PUNKTE = [
+  'Voller Verlauf, Vergleiche, Wachstum',
+  'KI-Analyse, KI-Chat, Coaching, Wochenreport',
+  'Lurker-Erinnerung und Raid-Vorrang',
+  'Community-Hinweise abschaltbar',
+];
 
-   Die Ausblick-Zeile nennt bewusst kein einzelnes Merkmal: was dort stünde,
-   liefe entweder heute schon für alle oder wäre ein Versprechen auf etwas,
-   das es noch nicht gibt. */
-
-const AKZENT: Record<string, string> = {
-  free: '#C5A059',
-  plus: '#00D9FF',
-  pro: '#FF5A3C',
+const STUDIO_KURZ: Record<string, string> = {
+  studio: 'Drei Plattformen, Einspruch bis zum Termin. 40 Clips.',
+  studio_ki: 'Titel, Hashtags, Vollautomatik. 80 Clips.',
+  studio_cut: 'KI-Schnitt mit Prüfung. 12 Schnitte im Monat.',
 };
 
-const AKZENT_FALLBACK = '#C5A059';
+const STUDIO_IDS = ['studio', 'studio_ki', 'studio_cut'] as const;
 
-/** Cent-Betrag als deutscher Endpreis, z. B. `499` → `4,99 €`. */
+type Marke = 'ja' | 'nein' | string;
+
+const MATRIX: Array<{ gruppe?: string; name?: string; werte?: [Marke, Marke, Marke, Marke, Marke] }> = [
+  { gruppe: 'Bot, in jeder Stufe frei' },
+  { name: 'Auto-Raid, beide Richtungen', werte: ['ja', 'ja', 'ja', 'ja', 'ja'] },
+  { name: 'Chat-Schutz und alle Befehle', werte: ['ja', 'ja', 'ja', 'ja', 'ja'] },
+  { name: 'Overlay, Sendeplan, Tagesform', werte: ['ja', 'ja', 'ja', 'ja', 'ja'] },
+  { name: 'Go-Live im Community-Discord', werte: ['ja', 'ja', 'ja', 'ja', 'ja'] },
+  { name: 'Steam-Bot und Twitch-Werbemanager', werte: ['ja', 'ja', 'ja', 'ja', 'ja'] },
+  { gruppe: 'Plus' },
+  { name: 'Voller Verlauf, Vergleiche, KI-Auswertung', werte: ['nein', 'ja', 'ja', 'ja', 'ja'] },
+  { name: 'Lurker-Erinnerung, Raid-Vorrang', werte: ['nein', 'ja', 'ja', 'ja', 'ja'] },
+  { name: 'Community-Hinweise im Chat', werte: ['an', 'Schalter', 'Schalter', 'Schalter', 'Schalter'] },
+  { gruppe: 'Studio-Versionen' },
+  { name: 'Pipeline, Import, VOD-Archiv', werte: ['nein', 'nein', 'ja', 'ja', 'ja'] },
+  { name: 'YouTube, TikTok, Instagram, Vorlagen', werte: ['nein', 'nein', 'ja', 'ja', 'ja'] },
+  { name: 'Auto-Pilot: Freigabe oder Einspruch', werte: ['nein', 'nein', 'ja', 'ja', 'ja'] },
+  { name: 'Vollautomatik, Titel, Hashtags', werte: ['nein', 'nein', 'nein', 'ja', 'ja'] },
+  { name: 'KI-Schnitt, mehrere Videos, Prüfung', werte: ['nein', 'nein', 'nein', 'nein', 'ja'] },
+  { name: 'Clips im Monat', werte: ['nein', 'nein', '40', '80', 'ohne Limit'] },
+  { name: 'KI-Schnitte im Monat', werte: ['nein', 'nein', 'nein', 'nein', '12'] },
+];
+
 function eur(cents: number, locale: string): string {
   const sicher = Math.max(0, Math.round(cents));
   return new Intl.NumberFormat(locale, { style: 'currency', currency: 'EUR' }).format(sicher / 100);
 }
 
-/** Fälliger Endpreis der Stufe im gewählten Zyklus, in Cent. */
 function betragCents(plan: CatalogPlan, cycle: 1 | 12): number {
   if (typeof plan.price?.total_gross_cents === 'number') {
     return plan.price.total_gross_cents;
@@ -48,7 +60,6 @@ function betragCents(plan: CatalogPlan, cycle: 1 | 12): number {
   return cycle === 12 ? jahr : monat;
 }
 
-/** Rechnerischer Monatspreis im Jahreszyklus, in Cent. */
 function monatsBetragCents(plan: CatalogPlan, cycle: 1 | 12): number {
   if (typeof plan.price?.effective_monthly_gross_cents === 'number') {
     return plan.price.effective_monthly_gross_cents;
@@ -56,41 +67,18 @@ function monatsBetragCents(plan: CatalogPlan, cycle: 1 | 12): number {
   return Math.round(betragCents(plan, cycle) / cycle);
 }
 
-/* Bezahlte Stufen nur anbieten, wenn das Backend sie auch verkaufen kann: ohne
-   hinterlegte Stripe-Preis-ID meldet der Katalog checkout_available=false und
-   der Checkout schickt jeden Klick mit missing_stripe_price_id zurück. Lieber
-   ehrlich "bald buchbar" anzeigen als einen Kauf versprechen, der abprallt.
-   Free braucht keinen Stripe-Preis und bleibt immer anklickbar. `buchbar`
-   schlägt alles: die Stufe existiert als Ausblick, ihre Funktionen noch nicht. */
 function istBuchbar(plan: CatalogPlan, gratis: boolean): boolean {
   return plan.buchbar !== false && (gratis || plan.checkout_available !== false);
 }
 
-const ZAHLWORT: Record<number, string> = {
-  1: 'Eine',
-  2: 'Zwei',
-  3: 'Drei',
-  4: 'Vier',
-};
-
-/** Überschrift aus der tatsächlichen Kartenzahl, damit sie nie zwei behauptet,
-    während drei Säulen darunter stehen. */
-function ueberschriftFuer(anzahl: number): string {
-  if (anzahl === 1) {
-    return 'Eine Stufe, ein Bot';
+function zelle(wert: Marke) {
+  if (wert === 'ja') {
+    return <span className="font-bold" style={{ color: GOLD }}>✓</span>;
   }
-  return `${ZAHLWORT[anzahl] ?? anzahl} Stufen, ein Bot`;
-}
-
-/** Unterzeile passend zur Kartenzahl: über Plus nur reden, wenn Plus dasteht. */
-function unterzeileFuer(anzahl: number): string {
-  if (anzahl <= 1) {
-    return 'Free bleibt dauerhaft vollwertig.';
+  if (wert === 'nein') {
+    return <span className="text-white/20">·</span>;
   }
-  if (anzahl === 2) {
-    return 'Free bleibt dauerhaft vollwertig. Plus zeigt dir deine Entwicklung statt nur den letzten Stream.';
-  }
-  return 'Free bleibt dauerhaft vollwertig. Die bezahlten Stufen zeigen dir deine Entwicklung statt nur den letzten Stream.';
+  return <span className="text-sm font-semibold tabular-nums text-white/80">{wert}</span>;
 }
 
 interface PlanStufenProps {
@@ -102,139 +90,222 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
   const t = useT();
   const { locale } = useLanguage();
   const oauthLink = useOAuthLink();
-  if (plans.length === 0) {
+  const katalog = plans.filter((plan) => plan.id !== 'pro');
+  const plus = katalog.find((plan) => plan.id === 'plus');
+  const studioPlaene = STUDIO_IDS.flatMap((id) => {
+    const plan = katalog.find((eintrag) => eintrag.id === id);
+    return plan ? [plan] : [];
+  });
+  const laufend = studioPlaene.find((plan) => plan.is_current);
+  const empfohlen = studioPlaene.find((plan) => plan.recommended) ?? studioPlaene[0];
+  const [wahl, setWahl] = useState<string | null>(null);
+  const gewaehlt = studioPlaene.find((plan) => plan.id === (wahl ?? laufend?.id ?? empfohlen?.id)) ?? studioPlaene[0];
+
+  if (katalog.length === 0) {
     return null;
   }
 
-  const karten = plans.filter((plan) => plan.id !== 'pro');
-  const pro = plans.find((plan) => plan.id === 'pro');
-  /* Buchbar gehört nach oben, und wer die Stufe laufen hat, sieht sie auch:
-     ein unbefristetes Geschenk setzt is_current auf der Pro-Karte, ohne dass
-     der Katalog sie buchbar stellt. Ohne diese Ausnahme sähe der Beschenkte
-     weder "Deine aktuelle Stufe" noch den Hinweis dazu. */
-  const proGehoertNachOben = pro ? istBuchbar(pro, false) || pro.is_current : false;
-  const obenAngezeigt = proGehoertNachOben && pro ? [...karten, pro] : karten;
+  const kopf = STUDIO_IDS.map((id) => katalog.find((plan) => plan.id === id));
+
+  const knopf = (plan: CatalogPlan, farbe: 'plus' | 'studio') => {
+    const buchbar = istBuchbar(plan, false);
+    const klasse = 'mt-4 block w-full rounded-xl px-4 py-3 text-center text-sm font-semibold';
+    if (plan.is_current) {
+      return <span className={`${klasse} bg-white/5 text-white/50`}>{t('Deine aktuelle Stufe')}</span>;
+    }
+    if (!buchbar) {
+      return <span className={`${klasse} bg-white/5 text-white/40`}>{t('Bald buchbar')}</span>;
+    }
+    const href = oauthLink(getPlanCheckoutHref(plan.id, false, cycle));
+    const stil = farbe === 'plus' ? 'text-white' : 'text-[#0D0806]';
+    const hintergrund = farbe === 'plus' ? 'rgba(0, 217, 255, 0.16)' : GOLD;
+    return (
+      <a href={href} className={`${klasse} ${stil}`} style={{ backgroundColor: hintergrund }}>
+        {t('{p0} buchen', { p0: t(plan.name) })}
+      </a>
+    );
+  };
 
   return (
     <div>
-      <div className="mb-7">
-        <p className="text-xl font-semibold text-white mb-1.5">
-          {t(ueberschriftFuer(obenAngezeigt.length))}
+      <div className="mb-5">
+        <p className="text-xl font-semibold text-white">{t('Plus oder Studio')}</p>
+        <p className="mt-1 text-sm text-white/55">
+          {t('Zwei Produkte. Studio hat drei Versionen. Studio enthält Plus.')}
         </p>
-        <p className="text-sm text-white/45">{t(unterzeileFuer(obenAngezeigt.length))}</p>
       </div>
 
-      <div
-        className={`grid grid-cols-1 gap-6 ${
-          obenAngezeigt.length > 2 ? 'lg:grid-cols-3' : 'lg:grid-cols-2'
-        }`}
-      >
-        {obenAngezeigt.map((plan, index) => {
-          const akzent = AKZENT[plan.id] ?? AKZENT_FALLBACK;
-          const cents = betragCents(plan, cycle);
-          const gratis = cents === 0;
-          const monatlich = monatsBetragCents(plan, cycle);
-          const buchbar = istBuchbar(plan, gratis);
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)]">
+        {plus && (
+          <article
+            className="flex flex-col rounded-2xl border p-5"
+            style={{ borderColor: 'rgba(0, 217, 255, 0.35)', backgroundColor: 'rgba(0, 217, 255, 0.04)' }}
+          >
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em]" style={{ color: CYAN }}>
+              {t(plus.name)}
+            </p>
+            <p className="mt-2 text-3xl font-bold text-white">
+              {eur(betragCents(plus, cycle), locale)}{' '}
+              <span className="text-base font-semibold text-white/45">
+                {cycle === 12 ? t('/ Jahr') : t('/ Monat')}
+              </span>
+            </p>
+            {cycle === 12 && (
+              <p className="text-sm text-white/40">
+                {t('entspricht {p0} im Monat, zwei Monate geschenkt', {
+                  p0: eur(monatsBetragCents(plus, cycle), locale),
+                })}
+              </p>
+            )}
+            <p className="mt-2 text-sm text-white/60">{t('Dein Verlauf und die KI-Auswertung.')}</p>
+            <ul className="mt-3 space-y-2">
+              {PLUS_PUNKTE.map((punkt) => (
+                <li key={punkt} className="flex items-start gap-2 text-sm text-white/70">
+                  <Check className="mt-0.5 h-4 w-4 shrink-0" style={{ color: CYAN }} />
+                  {t(punkt)}
+                </li>
+              ))}
+            </ul>
+            {knopf(plus, 'plus')}
+            {plus.hinweis && (
+              <p className="mt-3 text-center text-sm text-white/35">
+                {translatePageText(t, plus.hinweis, locale)}
+              </p>
+            )}
+          </article>
+        )}
 
-          return (
-            <motion.div
-              key={plan.id}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3, delay: 0.05 * index }}
-              data-tour-id={`tour-pricing-${plan.id}`}
-              className="rounded-2xl border p-8 flex flex-col"
-              style={{
-                borderColor: akzent + (plan.is_current ? '80' : '35'),
-                backgroundColor: akzent + '0B',
-              }}
-            >
-              <p className="font-semibold text-white text-xl">{t(plan.name)}</p>
-              {plan.description && (
-                <p className="text-white/45 text-sm leading-relaxed mt-2 max-w-md">
-                  {t(plan.description)}
-                </p>
-              )}
-
-              <div className="mt-7 mb-1 flex items-baseline gap-2">
-                <span className="text-4xl font-bold text-white tracking-tight">
-                  {gratis ? '0 €' : eur(cents, locale)}
-                </span>
-                <span className="text-white/45 text-base">
-                  {gratis ? t("für immer") : cycle === 12 ? t("/ Jahr") : t("/ Monat")}
-                </span>
-              </div>
-              {!gratis && cycle === 12 && (
-                <p className="text-white/35 text-sm">
-                  {t("entspricht {p0} im Monat, zwei Monate geschenkt", { p0: eur(monatlich, locale) })}</p>
-              )}
-              {!gratis && cycle === 1 && (
-                <p className="text-white/35 text-sm">{t("monatlich kündbar")}</p>
-              )}
-
-              <ul className="space-y-3 mt-8 mb-8 flex-1">
-                {plan.features.map((feature) => (
-                  <li
-                    key={feature}
-                    className="flex items-start gap-3 text-sm text-white/70 leading-relaxed"
+        {gewaehlt && (
+          <article
+            className="flex flex-col rounded-2xl border p-5"
+            style={{ borderColor: 'rgba(197, 160, 89, 0.45)', backgroundColor: 'rgba(197, 160, 89, 0.05)' }}
+          >
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em]" style={{ color: GOLD }}>
+              {t('Studio')}
+            </p>
+            <p className="mt-2 text-sm text-white/60">
+              {t('Drei Versionen, eine Buchung. Enthält alles aus Plus.')}
+            </p>
+            <div className="my-3 flex flex-col gap-2" role="radiogroup" aria-label={t('Studio-Version')}>
+              {studioPlaene.map((plan, index) => {
+                const an = plan.id === gewaehlt.id;
+                const vorher = index > 0 ? studioPlaene[index - 1] : undefined;
+                const diff = vorher ? betragCents(plan, cycle) - betragCents(vorher, cycle) : 0;
+                return (
+                  <label
+                    key={plan.id}
+                    className="grid cursor-pointer grid-cols-[16px_1fr_auto] items-center gap-2 rounded-xl border px-3 py-2"
+                    style={{
+                      borderColor: an ? 'rgba(197, 160, 89, 0.7)' : 'rgba(255,255,255,0.1)',
+                      backgroundColor: an ? 'rgba(197, 160, 89, 0.1)' : 'rgba(0,0,0,0.18)',
+                    }}
                   >
-                    <Check
-                      className="w-4 h-4 mt-0.5 flex-shrink-0"
-                      style={{ color: akzent }}
+                    <input
+                      type="radio"
+                      name="studio-version"
+                      value={plan.id}
+                      checked={an}
+                      onChange={() => setWahl(plan.id)}
+                      style={{ accentColor: GOLD }}
                     />
-                    {t(feature)}
-                  </li>
-                ))}
-              </ul>
-
-              {plan.is_current ? (
-                <span className="px-6 py-3.5 rounded-xl text-sm font-semibold text-center bg-white/5 text-white/50">
-                  {t("Deine aktuelle Stufe")}</span>
-              ) : buchbar ? (
-                <a
-                  href={oauthLink(getPlanCheckoutHref(gratis ? null : plan.id, gratis, cycle))}
-                  className={`px-6 py-3.5 rounded-xl text-sm font-semibold text-center transition-[background-color,border-color,color,box-shadow,transform,translate,scale] duration-200 ${
-                    gratis
-                      ? 'bg-white/10 hover:bg-white/15 text-white'
-                      : 'bg-white/15 hover:bg-white/20 text-white'
-                  }`}
-                >
-                  {gratis ? t("Kostenlos nutzen") : t("{p0} buchen", { p0: t(plan.name) })}
-                </a>
-              ) : (
-                <span className="px-6 py-3.5 rounded-xl text-sm font-semibold text-center bg-white/5 text-white/40">
-                  {t("Bald buchbar")}</span>
-              )}
-
-              {/* Wer im Test oder auf einem alten Tarif steht, nutzt die Stufe
-                  schon, hat sie aber nicht dauerhaft gekauft. Der Knopf bleibt
-                  deshalb stehen, der Hinweis sagt nur, warum. */}
-              {plan.hinweis && (
-                <p className="text-white/35 text-sm mt-3 text-center">{translatePageText(t, plan.hinweis, locale)}</p>
-              )}
-            </motion.div>
-          );
-        })}
+                    <span>
+                      <b className="block text-sm text-white">{t(plan.name)}</b>
+                      <small className="block text-xs text-white/45">{t(STUDIO_KURZ[plan.id] ?? plan.description ?? '')}</small>
+                    </span>
+                    <span className="text-right text-sm font-bold tabular-nums text-white">
+                      {eur(betragCents(plan, cycle), locale)}
+                      {diff > 0 && (
+                        <span className="mt-0.5 block text-[10px] font-bold" style={{ color: GOLD }}>
+                          +{eur(diff, locale)}
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            {knopf(gewaehlt, 'studio')}
+            {gewaehlt.hinweis && (
+              <p className="mt-3 text-center text-sm text-white/35">
+                {translatePageText(t, gewaehlt.hinweis, locale)}
+              </p>
+            )}
+          </article>
+        )}
       </div>
 
-      {pro && !proGehoertNachOben && (
-        <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] px-8 py-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="max-w-2xl">
-            <p className="text-white/80 font-medium">{t("{p0} ist noch nicht buchbar.", { p0: t(pro.name) })}</p>
-            <p className="text-white/40 text-sm mt-1.5 leading-relaxed">
-              {t("Die Stufe bekommt Inhalt, sobald die Werkzeuge dafür stehen.")}</p>
-          </div>
-          {/* Kein hartkodierter Ersatzpreis: fällt das Katalogfeld weg, steht
-              hier lieber nichts als stumm eine veraltete Zahl. */}
-          {typeof pro.monthly_gross_cents === 'number' && (
-            <span className="text-white/35 text-sm whitespace-nowrap">
-              {t("später {p0} im Monat", { p0: eur(pro.monthly_gross_cents, locale) })}</span>
-          )}
-        </div>
-      )}
+      <p className="my-4 rounded-xl bg-white/[0.03] px-3 py-2.5 text-xs text-white/60">
+        <strong className="text-white">{t('Netzwerk Free, 0 €.')}</strong>{' '}
+        {t('Kein Abo. Auto-Raid, Chat-Schutz, alle Befehle, Overlay, Sendeplan, Tagesform, Go-Live im Community-Discord, Steam-Bot, Twitch-Werbemanager.')}
+        {katalog.find((plan) => plan.id === 'free')?.is_current ? ` ${t('Deine aktuelle Stufe.')}` : ''}
+      </p>
 
-      <p className="text-white/30 text-sm mt-6 text-center">
-        {t("Alle Beträge sind Endpreise. Kleinunternehmer nach Paragraph 19 UStG, kein Umsatzsteuerausweis.")}</p>
+      <h2 className="mb-2 text-base font-bold text-white">{t('Vergleich')}</h2>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[560px] border-separate border-spacing-0 text-sm">
+          <thead>
+            <tr>
+              <th rowSpan={2} className="sticky left-0 z-20 bg-[#1b1713] px-2 py-2 text-left font-semibold text-white/45">
+                {t('Leistung')}
+              </th>
+              <th rowSpan={2} className="bg-[#1b1713] px-2 py-2">Free</th>
+              <th rowSpan={2} className="bg-[#1b1713] px-2 py-2">Plus</th>
+              <th className="bg-[#2a2418] px-2 py-2 text-center font-extrabold uppercase tracking-wider" style={{ color: GOLD }} colSpan={3}>
+                {t('Studio')}
+              </th>
+            </tr>
+            <tr>
+              {kopf.map((plan, index) => (
+                <th
+                  key={plan?.id ?? index}
+                  className="px-2 py-2 text-center text-xs"
+                  style={{ backgroundColor: index === 1 ? '#322a1c' : '#1b1713' }}
+                >
+                  {plan
+                    ? index === 1
+                      ? `KI, ${eur(betragCents(plan, cycle), locale)}`
+                      : index === 2
+                        ? `Schnitt, ${eur(betragCents(plan, cycle), locale)}`
+                        : eur(betragCents(plan, cycle), locale)
+                    : ''}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {MATRIX.map((zeile) =>
+              zeile.gruppe ? (
+                <tr key={zeile.gruppe}>
+                  <td colSpan={6} className="px-2 pb-1 pt-3 text-left text-[10px] font-extrabold uppercase tracking-[0.14em]" style={{ color: GOLD }}>
+                    {t(zeile.gruppe)}
+                  </td>
+                </tr>
+              ) : (
+                <tr key={zeile.name}>
+                  <td className="sticky left-0 z-10 border-b border-white/10 bg-[#14110e] px-2 py-1.5 text-left text-white/60">
+                    {t(zeile.name ?? '')}
+                  </td>
+                  {zeile.werte?.map((wert, index) => (
+                    <td
+                      key={`${zeile.name}-${index}`}
+                      className="border-b border-white/10 px-2 py-1.5 text-center"
+                      style={{ backgroundColor: index === 3 ? 'rgba(197, 160, 89, 0.1)' : undefined }}
+                    >
+                      {zelle(wert)}
+                    </td>
+                  ))}
+                </tr>
+              ),
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-3 max-w-3xl text-xs text-white/40">
+        {t('Gebucht wird Plus oder genau eine Studio-Version. Go-Live bleibt in jeder Stufe frei. Community-Hinweise sind standardmäßig an. Jahrespreis gleich zehn Monatspreise.')}
+      </p>
+      <p className="mt-4 text-center text-sm text-white/30">
+        {t('Alle Beträge sind Endpreise. Kleinunternehmer nach Paragraph 19 UStG, kein Umsatzsteuerausweis.')}
+      </p>
     </div>
   );
 }

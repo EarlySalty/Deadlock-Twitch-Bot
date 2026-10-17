@@ -5,8 +5,10 @@ export type EntitlementId =
   | 'chat.lurker_tax'
   | 'chat.promos.disable'
   | 'raid.priority'
-  // Nur Creator Pro: automatisches Posten auf TikTok, Instagram und YouTube.
-  | 'social.auto_post';
+  | 'social.auto_post'
+  | 'social.studio'
+  | 'social.captions'
+  | 'social.video_edit';
 
 // Dashboard view mode (what the user is currently viewing)
 export type DashboardView = 'basic' | 'extended';
@@ -42,6 +44,9 @@ export const ALL_ENTITLEMENTS: EntitlementId[] = [
   'chat.promos.disable',
   'raid.priority',
   'social.auto_post',
+  'social.studio',
+  'social.captions',
+  'social.video_edit',
 ];
 
 // Tab visibility configuration per entitlement.

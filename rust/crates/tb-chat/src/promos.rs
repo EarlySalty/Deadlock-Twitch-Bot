@@ -2980,32 +2980,12 @@ impl PromoEngine {
         }
     }
 
-    /// Plan-Flag-Check (promos.py:1097: `_promo_blocked_by_plan_or_flag`).
-    ///
-    /// Zwei Gründe blockieren Bot-Werbung dauerhaft:
-    /// 1. `streamer_plans.promo_disabled = 1` (harte Abschaltung).
-    /// 2. Der effektive Plan trägt das Entitlement `chat.promos.disable`.
-    ///
-    /// Der Entitlement-Pfad läuft über die VOLLE Snapshot-Resolution
-    /// (`tb_analytics::plan::resolve_plan_snapshot`, Port von Pythons
-    /// `resolve_plan_snapshot_for_refs`): respektiert `manual_plan_expires_at`
-    /// (abgelaufene Pläne fallen auf `raid_free` zurück), löst Bundles/Legacy-
-    /// Namen auf kanonische IDs auf und zieht den Stripe-Abo-Fallback heran.
-    /// Damit werden Pläne, die Promo abschalten, nicht fälschlich ignoriert —
-    /// und umgekehrt schaltet ein abgelaufener Werbefrei-Plan die Werbung wieder
-    /// frei (vorher: statische Whitelist ohne Ablauf-Gate).
-    ///
-    /// Fail-open bei DB-Fehler (Infra-Issues blockieren nicht alle Promos).
-    /// Wie Python wird per Login referenziert (leerer user_id) — der periodische
-    /// Pfad iteriert ohnehin nur über aufgelöste Live-Kanäle.
     async fn promo_blocked_by_plan_or_flag(&self, login: &str) -> bool {
         let normalized = login.trim().to_lowercase();
         if normalized.is_empty() {
             return false;
         }
-
-        // 1. Harte promo_disabled-Spalte (greift vor jeder Override-Auswertung).
-        let promo_disabled = match sqlx::query_scalar!(
+        match sqlx::query_scalar!(
             "SELECT COALESCE(promo_disabled, 0) AS \"promo_disabled!\"
                FROM streamer_plans
               WHERE LOWER(COALESCE(twitch_login,'')) = $1
@@ -3015,31 +2995,16 @@ impl PromoEngine {
         .fetch_optional(&self.pool)
         .await
         {
-            Ok(value) => value,
+            Ok(Some(flag)) => flag != 0,
+            Ok(None) => false,
             Err(error) => {
                 tracing::warn!(
                     %error,
                     login = %normalized,
                     "Promo-Disable-Flag konnte nicht geladen werden"
                 );
-                None
-            }
-        };
-        if promo_disabled.is_some_and(|flag| flag != 0) {
-            return true;
-        }
-
-        // 2. Entitlement-Pfad über volle Plan-Snapshot-Resolution.
-        match tb_analytics::plan::resolve_plan_snapshot(&self.pool, &normalized, "").await {
-            Ok(snapshot) => snapshot.entitlements.contains(&"chat.promos.disable"),
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    login = %normalized,
-                    "Promo-Disable-Plan konnte nicht aufgeloest werden"
-                );
                 false
-            } // Fail-open.
+            }
         }
     }
 
@@ -6752,15 +6717,13 @@ mod db_tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn promo_disable_entitlement_blockiert_bei_aktivem_plan() {
-        // Aktiver chat_quiet-Override (kein Ablauf) → chat.promos.disable greift.
-        // User-Betonung: Pläne die Promo abschalten dürfen NICHT ignoriert werden.
+    async fn entitlement_schaltet_hinweise_nicht_stumm() {
         let pool = pool_or_skip!("promo_entitlement_aktiv");
         let engine = make_engine(pool.clone());
 
         sqlx::query(
-            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id)
-             VALUES ('uq1', 'werbefreikanal', 'chat_quiet')",
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, promo_disabled)
+             VALUES ('uq1', 'werbefreikanal', 'chat_quiet', 0)",
         )
         .execute(&pool)
         .await
@@ -6768,33 +6731,27 @@ mod db_tests {
 
         let blocked = engine.promo_blocked_by_plan_or_flag("werbefreikanal").await;
         assert!(
-            blocked,
-            "aktiver chat_quiet → chat.promos.disable → blockiert"
+            !blocked,
+            "chat.promos.disable allein schaltet die Hinweise nicht aus"
         );
     }
 
     #[tokio::test]
-    async fn promo_disable_entitlement_blockiert_bei_zukuenftigem_ablauf() {
-        // manual_plan_expires_at in der Zukunft → Plan effektiv → blockiert.
+    async fn zukuenftiger_plan_ohne_flag_schaltet_hinweise_nicht_stumm() {
         let pool = pool_or_skip!("promo_entitlement_zukunft");
         let engine = make_engine(pool.clone());
 
         sqlx::query(
-            // manual_plan_expires_at = TEXT (Prod-Schema): ISO-8601-String wie Python
-            // (`datetime.isoformat()`), den der Resolver parst — kein timestamptz-Cast.
-            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at)
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at, promo_disabled)
              VALUES ('uq2', 'zukunftkanal', 'bundle_komplett',
-                     to_char((NOW() + INTERVAL '30 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00'))"
+                     to_char((NOW() + INTERVAL '30 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00'), 0)"
         )
         .execute(&pool)
         .await
         .unwrap();
 
         let blocked = engine.promo_blocked_by_plan_or_flag("zukunftkanal").await;
-        assert!(
-            blocked,
-            "nicht abgelaufenes bundle_komplett → chat.promos.disable → blockiert"
-        );
+        assert!(!blocked, "ohne promo_disabled bleiben die Hinweise an");
     }
 
     #[tokio::test]
