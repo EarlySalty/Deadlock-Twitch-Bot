@@ -7,7 +7,7 @@ import type { ScheduleQueueSnapshot } from './autopilot/schedule-queue';
 import type { PublishSnapshot } from './autopilot/publish-review/api';
 import type { AiJobView } from './ai/api';
 import { platformIconUrl } from './platformIcon';
-import { DESTINATION_REASONS, HOLD_REASONS } from './reviewReasons';
+import { clipName, discardedItems, type DiscardedItem } from './discardedItems';
 import { WorkspaceDialog } from './WorkspaceDialog';
 import type { SocialMediaViewTarget } from './labels';
 import type { QueueStage } from './queuePresentation';
@@ -18,12 +18,6 @@ type Translate = (key: string, params?: Record<string, string | number>) => stri
 type Navigate = (view: SocialMediaViewTarget, stage?: QueueStage) => void;
 
 interface RecentItem { key: string; title: string; at: string | null; platforms: string[] }
-interface DiscardedItem { key: string; title: string; reason: string }
-
-function clipName(clips: SocialClipMitPosting[] | undefined, clipDbId: number, fallback: string): string {
-  const clip = clips?.find(item => item.clip_db_id === clipDbId);
-  return clip?.generated_title?.trim() || clip?.title || fallback;
-}
 
 function recentPublications(publish: PublishSnapshot | undefined, clips: SocialClipMitPosting[] | undefined, t: Translate): RecentItem[] {
   const produced = (publish?.videos ?? []).flatMap(video => {
@@ -35,33 +29,6 @@ function recentPublications(publish: PublishSnapshot | undefined, clips: SocialC
     platforms: Object.entries(clip.platform_status).filter(([, done]) => done).map(([platform]) => platform),
   }));
   return [...produced.sort((a, b) => Date.parse(b.at ?? '') - Date.parse(a.at ?? '')), ...legacy];
-}
-
-function reasonText(reasons: string[], labels: Record<string, string>, t: Translate): string | null {
-  const known = reasons.map(reason => labels[reason]).filter((label): label is string => Boolean(label));
-  return known.length > 0 ? known.map(label => t(label)).join(' ') : reasons[0] ?? null;
-}
-
-function discardedItems(schedule: ScheduleQueueSnapshot | undefined, publish: PublishSnapshot | undefined, clips: SocialClipMitPosting[] | undefined, locale: string, t: Translate): DiscardedItem[] {
-  const jobs = (schedule?.jobs ?? []).filter(job => job.status === 'failed' || job.status === 'cancelled').map(job => ({
-    key: `job-${job.id}`, title: job.clip_title || t('Clip {id}', { id: job.clip_id }),
-    reason: reasonText(job.review_reasons, HOLD_REASONS, t) ?? (job.last_error ? t(job.last_error) : t(job.status === 'cancelled' ? 'Auftrag abgebrochen' : 'Produktion fehlgeschlagen')),
-  }));
-  const videos = (publish?.videos ?? []).flatMap(video => {
-    const title = clipName(clips, video.clip_id, t('Video {id}', { id: video.id }));
-    const own = ['rejected', 'failed'].includes(video.status) ? [{ key: `video-${video.id}`, title,
-      reason: reasonText(video.review_reasons, HOLD_REASONS, t) ?? t(video.status === 'rejected' ? 'Video verworfen' : 'Video fehlgeschlagen') }] : [];
-    const destinations = (video.event?.destinations ?? []).filter(destination => destination.state === 'discarded' || destination.state === 'failed').map(destination => ({
-      key: `destination-${video.id}-${destination.platform}`, title,
-      reason: destination.reason ? t(DESTINATION_REASONS[destination.reason] ?? destination.reason) : t(destination.state === 'failed' ? 'Veröffentlichung fehlgeschlagen' : 'Veröffentlichung verworfen'),
-    }));
-    return [...own, ...destinations];
-  });
-  const discarded = (clips ?? []).filter(clip => clip.discarded_at).map(clip => ({
-    key: `clip-${clip.clip_db_id}`, title: clip.generated_title?.trim() || clip.title || clip.clip_id,
-    reason: t('Aussortiert am {date}', { date: new Date(clip.discarded_at!).toLocaleDateString(locale) }),
-  }));
-  return [...jobs, ...videos, ...discarded];
 }
 
 function aiUsage(jobs: AiJobView[]) {
@@ -148,10 +115,10 @@ export function StudioOverviewTiles({ schedule, publish, clips, owner, streamer,
   statisticsPlatforms: string[];
   onNavigate: Navigate;
 }) {
-  const { t, locale } = useLanguage();
+  const { t } = useLanguage();
   return <div className="studio-tiles">
     <RecentTile items={recentPublications(publish, clips, t)} onNavigate={onNavigate} />
-    <DiscardedTile items={discardedItems(schedule, publish, clips, locale, t)} />
+    <DiscardedTile items={discardedItems(schedule, publish, clips, t)} />
     <CostTile owner={owner} streamer={streamer} isAdmin={isAdmin} statisticsPlatforms={statisticsPlatforms} />
   </div>;
 }

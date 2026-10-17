@@ -1921,7 +1921,7 @@ select.studio-select {
 .studio-vod-parts { font-size: 12px; color: var(--color-text-secondary); }
 .studio-vod-meta { display: flex; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--color-text-secondary); }
 .studio-vod-meta > * + *::before { content: '·'; margin-inline: 8px; }
-.studio-vod-details { flex: 0 0 auto; }
+.studio-vod-details { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .studio-vod-details[open] { flex-basis: 100%; }
 .studio-vod-toggle { display: inline-flex; align-items: center; min-height: 36px; padding: 6px 14px; border: 1px solid var(--color-border-strong); border-radius: 8px; color: var(--color-text-primary); font-size: 13px; font-weight: 600; list-style: none; cursor: pointer; }
 .studio-vod-toggle::-webkit-details-marker { display: none; }

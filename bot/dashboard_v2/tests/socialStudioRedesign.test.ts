@@ -10,6 +10,7 @@ import {
   filterQueue,
   loadQueueSnapshot,
   sourceStage,
+  sourceMatchesStage,
 } from '../src/components/socialmedia/queuePresentation';
 import type { PipelineSource } from '../src/components/socialmedia/pipelineApi';
 import type { SocialClipMitPosting } from '../src/api/socialMedia';
@@ -332,4 +333,30 @@ test('eingeplante Ziele landen in Geplant, laufende Produktion in Vorbereitung',
   assert.equal(sourceStage(source({ versions: [{ status: 'scheduled' }] } as Partial<PipelineSource>)), 'planned');
   assert.equal(sourceStage(source({ jobs: [{ status: 'queued', reservations: [] }] } as Partial<PipelineSource>)), 'preparing');
   assert.equal(sourceStage(source({ versions: [{ status: 'rendering' }] } as Partial<PipelineSource>)), 'preparing');
+});
+
+test('archivierte Clips erscheinen nur unter Archiv, nicht unter Aussortiert / Fehler', () => {
+  const source = (patch: Partial<PipelineSource>) => ({ discarded_at: null, published_at: null, jobs: [], versions: [], destinations: [], legacy_publications: [], ...patch }) as unknown as PipelineSource;
+  const archived = source({ discarded_at: '2026-10-01T10:00:00Z' } as Partial<PipelineSource>);
+  assert.equal(sourceMatchesStage(archived, 'archive'), true);
+  assert.equal(sourceMatchesStage(archived, 'failed'), false);
+  const failed = source({ jobs: [{ status: 'failed', reservations: [] }] } as Partial<PipelineSource>);
+  assert.equal(sourceMatchesStage(failed, 'failed'), true);
+  assert.equal(sourceMatchesStage(failed, 'archive'), false);
+});
+
+test('Von KI aussortiert zählt nur automatische Ablehnungen, keine Handaktionen', async () => {
+  const { discardedItems } = await import('../src/components/socialmedia/discardedItems');
+  const job = (id: number, status: string, review_reasons: string[]) => ({ id, clip_id: id, clip_title: `Clip ${id}`, status, review_reasons, last_error: null });
+  const schedule = { jobs: [job(1, 'failed', []), job(2, 'cancelled', ['unsuitable_clip']), job(3, 'cancelled', [])] } as unknown as Parameters<typeof discardedItems>[0];
+  const video = (id: number, status: string, review_reasons: string[], destinations: unknown[] = []) => ({ id, clip_id: id, status, review_reasons, event: { destinations } });
+  const publish = { videos: [
+    video(10, 'rejected', []),
+    video(11, 'rejected', ['ai_production_failed']),
+    video(12, 'failed', []),
+    video(13, 'approved', [], [{ platform: 'youtube', state: 'discarded', reason: null }, { platform: 'tiktok', state: 'discarded', reason: 'tiktok_rejected' }, { platform: 'instagram', state: 'failed', reason: null }]),
+  ] } as unknown as Parameters<typeof discardedItems>[1];
+  const clips = [{ clip_db_id: 99, clip_id: 'x', title: 'Hand', discarded_at: '2026-10-01T10:00:00Z' }] as unknown as SocialClipMitPosting[];
+  const keys = discardedItems(schedule, publish, clips, key => key).map(item => item.key);
+  assert.deepEqual(keys, ['job-1', 'job-2', 'video-11', 'video-12', 'destination-13-tiktok', 'destination-13-instagram']);
 });

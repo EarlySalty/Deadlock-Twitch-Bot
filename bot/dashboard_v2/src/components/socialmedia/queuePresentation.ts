@@ -169,9 +169,7 @@ export function sourceStage(source: PipelineSource): Exclude<QueueStage, 'all'> 
 }
 
 export function sourceMatchesStage(source: PipelineSource, stage: QueueStage): boolean {
-  if (stage === 'all') return true;
-  const current = sourceStage(source);
-  return current === stage || (stage === 'failed' && current === 'archive');
+  return stage === 'all' || sourceStage(source) === stage;
 }
 
 export type EligibilityFilter = SourceEligibility | 'all';
