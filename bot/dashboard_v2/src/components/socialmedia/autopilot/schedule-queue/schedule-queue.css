@@ -55,7 +55,18 @@
 .pp-next dt { color: var(--sq-muted); }
 .pp-next dd { margin: 0; font-weight: 600; }
 .pp-stack { display: grid; gap: 20px; min-width: 0; }
-.pp-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 32px; }
+.pp-steps { display: grid; gap: 20px; }
+.pp-step { display: grid; gap: 20px; padding: 20px; border: 1px solid var(--sq-border); border-radius: 12px; background: var(--sq-panel); min-width: 0; }
+.pp-step-head { display: grid; gap: 2px; }
+.pp-step-head h3 { margin: 0; font-size: 18px; }
+.pp-step-head p { margin: 0; }
+.pp-step-number { color: var(--sq-accent); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.pp-step-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 24px; }
+.pp-advanced { border: 1px solid var(--sq-border); border-radius: 8px; padding: 0 14px; min-width: 0; }
+.pp-advanced > summary { padding: 12px 0; font-size: 14px; font-weight: 600; cursor: pointer; }
+.pp-advanced[open] { padding-bottom: 14px; }
+.pp-path-body { display: grid; gap: 16px; padding-left: 14px; border-left: 2px solid var(--sq-accent); min-width: 0; }
+.pp-wide { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .pp-column { display: grid; gap: 24px; align-content: start; min-width: 0; }
 .pp-group legend { margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .pp-choices { display: grid; gap: 8px; }
@@ -92,5 +103,5 @@
 .pp-messages { min-width: 0; flex: 1 1 260px; }
 .pp-dirty { color: var(--sq-accent); font-size: 13px; }
 .pp-footer .sq-actions { margin-top: 0; }
-@media (max-width: 900px) { .pp-columns { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
-@media (max-width: 420px) { .pp-day { grid-template-columns: minmax(0, 1fr); gap: 4px; } .pp-compact { grid-template-columns: minmax(0, 1fr); } .pp-footer .sq-actions { width: 100%; } .pp-footer .sq-actions button { flex: 1 1 auto; } }
+@media (max-width: 900px) { .pp-step-grid, .pp-wide { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 420px) { .pp-step { padding: 14px; } .pp-path-body { padding-left: 10px; } .pp-day { grid-template-columns: minmax(0, 1fr); gap: 4px; } .pp-compact { grid-template-columns: minmax(0, 1fr); } .pp-footer .sq-actions { width: 100%; } .pp-footer .sq-actions button { flex: 1 1 auto; } }

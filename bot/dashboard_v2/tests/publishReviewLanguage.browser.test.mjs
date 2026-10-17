@@ -144,7 +144,6 @@ test('built publication panel preserves state and effects across language change
     try {
       const video = page.locator('.publish-video').first();
       await video.locator('[aria-label="YouTube"] input').evaluate((element) => element.click());
-      await page.locator('.publish-preferences summary').evaluate((element) => element.click());
       await page.locator('.publish-preferences input[type="number"]').fill('36');
       await page.evaluate(() => { window.originalPanel = document.querySelector('.publish-review'); window.originalVideo = document.querySelector('.publish-video'); });
       const initialCalls = await calls(page);
@@ -282,7 +281,6 @@ test('built publication panel preserves state and effects across language change
     const page = await open();
     try {
       await page.locator('.publish-video').first().locator('[aria-label="YouTube"] input').evaluate((element) => element.click());
-      await page.locator('.publish-preferences summary').evaluate((element) => element.click());
       await page.locator('.publish-preferences input[type="number"]').fill('48');
       await page.evaluate(() => { window.releasePause = window.publishReviewFixture.holdNext('pause'); });
       await page.locator('.publish-mode-row button').nth(1).evaluate((element) => element.click());
@@ -296,7 +294,6 @@ test('built publication panel preserves state and effects across language change
       assert.equal(await page.locator('.publish-video').first().locator('[aria-label="YouTube"] input').isChecked(), false);
       assert.equal(await page.locator('.publish-preferences input[type="number"]').inputValue(), '24');
       assert.equal(await page.locator('.publish-review').getAttribute('data-unsaved'), null);
-      await page.locator('.publish-preferences summary').evaluate((element) => element.click());
       for (const width of [390, 1440]) {
         await page.setViewportSize({ width, height: 1000 });
         for (const currentLanguage of ['de', 'en']) {

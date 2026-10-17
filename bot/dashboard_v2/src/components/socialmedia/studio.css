@@ -480,6 +480,34 @@ select.studio-select {
 .studio-header > div:first-child {
   flex: 1 1 260px;
 }
+.studio-autopilot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 2px 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-card);
+}
+.social-studio .studio-autopilot label.studio-switch {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding-left: 8px;
+  display: inline-flex;
+  align-items: center;
+}
+.social-studio .studio-autopilot label.studio-switch:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.studio-autopilot-error {
+  flex-basis: 100%;
+  padding: 0 8px 6px;
+  font-size: 12px;
+  color: var(--color-danger);
+}
 .social-studio ::selection {
   background: var(--color-primary);
   color: var(--color-on-gold);
@@ -537,6 +565,10 @@ select.studio-select {
   }
   .studio-header-actions > button {
     flex: 1;
+  }
+  .studio-autopilot {
+    flex: 1 1 100%;
+    justify-content: space-between;
   }
   .studio-tabs {
     flex-wrap: wrap;
@@ -1992,3 +2024,11 @@ select.studio-select {
   .studio-approval-buttons .studio-button { flex: 1 1 auto; justify-content: center; }
   .studio-overview-row .studio-mode-badge { display: none; }
 }
+.studio-vod-workspace { display: grid; gap: 20px; }
+.social-studio label.studio-target-switch { display: grid; gap: 2px; margin-top: 8px; font-size: 13px; font-weight: 600; }
+.social-studio label.studio-target-switch small { font-size: 12px; font-weight: 400; color: var(--color-text-secondary); }
+.social-studio label.studio-target-switch:has(input:disabled) { cursor: not-allowed; opacity: 0.6; }
+.studio-link-button { padding: 0; border: 0; background: none; color: var(--color-primary); font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.studio-link-button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.social-ai-plan-options { display: grid; gap: 12px; }
+.social-ai-consent-status { font-size: 14px; color: var(--color-text-secondary); }

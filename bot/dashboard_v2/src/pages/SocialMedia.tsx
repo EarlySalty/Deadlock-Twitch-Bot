@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, BarChart3, Calendar, CalendarClock, CheckCircle2, ExternalLink, Film, Layers3, Loader2, Pencil, ShieldAlert, SlidersHorizontal, Crop } from 'lucide-react';
+import { Archive, Calendar, CalendarClock, CheckCircle2, ExternalLink, Film, Layers3, Loader2, Pencil, ShieldAlert, SlidersHorizontal, Crop } from 'lucide-react';
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { PlatformCheck } from '@/components/socialmedia/PlatformCheck';
 import { istGesperrt, istStandUnbekannt } from '@/components/socialmedia/kartenZustand';
 import { StudioActivity } from '@/components/socialmedia/StudioActivity';
-import { StudioHero } from '@/components/socialmedia/StudioHero';
+import { StudioAutopilotSwitches, StudioHero } from '@/components/socialmedia/StudioHero';
+import { AiPlanOptions } from '@/components/socialmedia/ai/EditorOptionsPanel';
+import { PLAN_PLATFORMS } from '@/components/socialmedia/pipelinePlan';
 import { WorkspaceDialog } from '@/components/socialmedia/WorkspaceDialog';
 import { PublishReviewPanel } from '@/components/socialmedia/autopilot/publish-review/PublishReviewPanel';
 import { publishReviewClient, type PublishReviewClient } from '@/components/socialmedia/autopilot/publish-review/api';
@@ -19,7 +21,6 @@ import { loadQueueSnapshot, type QueueStage } from '@/components/socialmedia/que
 import '@/components/socialmedia/studio.css';
 import { LayoutSchematic } from '@/components/socialmedia/LayoutSchematic';
 import { StudioSectionHeading } from '@/components/socialmedia/StudioSectionHeading';
-import { AnalyticsTab } from '@/components/socialmedia/AnalyticsTab';
 import { VodArchiveList } from '@/components/socialmedia/VodArchiveList';
 import { LayoutEditor, type VorschauClip } from '@/components/socialmedia/LayoutEditor';
 import { LadeFehlerHinweis } from '@/components/socialmedia/LadeFehlerHinweis';
@@ -61,7 +62,6 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
   const [layoutChoice, setLayoutChoice] = useState<LayoutPayload | null>(null);
   const [activeView, setActiveView] = useState<SocialMediaView>(() => socialViewFromSearch(window.location.search));
   const [clipStage, setClipStage] = useState<QueueStage | undefined>(() => socialStageFromSearch(window.location.search));
-  const [showAnalytics, setShowAnalytics] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [reloading, setReloading] = useState(false);
   const [now, setNow] = useState(Date.now);
@@ -102,7 +102,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
   const vorschauClipsQuery = useQuery({
     queryKey: ['social-media', 'vorschau-clips', streamer, twitchUserId],
     queryFn: () => fetchClips({ status: 'all', twitch_user_id: twitchUserId, page: 1, page_size: 12 }),
-    enabled: !!twitchUserId && activeView === 'einstellungen',
+    enabled: !!twitchUserId && activeView === 'planen',
     staleTime: 5 * 60 * 1000,
     retry: retryUnlessForbidden,
   });
@@ -211,6 +211,20 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
     },
   });
 
+  const targetPlatformMutation = useMutation({
+    mutationFn: async ({ platform, active }: { platform: SocialPlatform; active: boolean }) => {
+      const current = await scheduleApi.load(twitchUserId);
+      const selected = new Set(current.settings.target_platforms);
+      if (active) selected.add(platform);
+      else selected.delete(platform);
+      return scheduleApi.save({ target_platforms: PLAN_PLATFORMS.map((item) => item.id).filter((id) => selected.has(id)) }, twitchUserId);
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['social-media', 'autopilot-schedule'] });
+      setReloadKey((key) => key + 1);
+    },
+  });
+
   const changeView = (target: SocialMediaViewTarget, stage?: QueueStage) => {
     const next = socialViewFromSearch(`?view=${target}`);
     const nextStage = next === 'clips' ? stage ?? socialStageFromSearch(`?view=${target}`) : undefined;
@@ -249,6 +263,65 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
     void queryClient.invalidateQueries({ predicate: (query) => RELOAD_QUERY_ROOTS.has(String(query.queryKey[0])) }).finally(() => setReloading(false));
   };
 
+  const layoutCards = (
+    <div className="studio-templates-card">
+      <StudioSectionHeading
+        title={t('Vorlagen & Layouts')}
+        icon={Crop}
+        level={3}
+        description={t('Lege den Standard-Ausschnitt für neue Clips fest. Einzelne Clips kannst du weiterhin separat anpassen.')}
+        actions={
+          <button
+            type="button"
+            className="studio-button"
+            disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data}
+            onClick={() => {
+              saveLayoutMutation.reset();
+              setLayoutChoice(layoutForEditor);
+            }}
+          >
+            {t('Gespeichertes Layout öffnen')}
+          </button>
+        }
+      />
+      {layoutQuery.isError ? <LadeFehlerHinweis fehler={layoutQuery.error} /> : null}
+      <div className="grid gap-4 md:grid-cols-3">
+        {(
+          [
+            { mode: 'blur_pad', title: 'Gameplay mit Hintergrund', cam: false, description: 'Das ganze Spielbild bleibt sichtbar, der Hintergrund füllt das Hochformat.' },
+            { mode: 'pip', title: 'Facecam & Gameplay', cam: true, description: 'Deine Kamera sitzt über dem vollständigen Spielbild.' },
+            { mode: 'stacked', title: 'Kamera oben mit DDC-Branding', cam: true, description: 'Kamera und Spielbild untereinander, mit DDC-Trenner.' },
+          ] as const
+        ).map((preset) => (
+          <button
+            key={preset.mode}
+            type="button"
+            className="studio-template"
+            disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data}
+            onClick={() => {
+              saveLayoutMutation.reset();
+              setLayoutChoice({
+                ...layoutForEditor,
+                mode: preset.mode,
+                cam_enabled: preset.cam,
+                cam_position: preset.mode === 'stacked'
+                  ? { ...layoutForEditor.cam_position, h: DEFAULT_LAYOUT.cam_position.h }
+                  : layoutForEditor.cam_position,
+              });
+            }}
+          >
+            <LayoutSchematic mode={preset.mode} />
+            <div className="studio-template-copy">
+              <h3>{t(preset.title)}</h3>
+              <p>{t(preset.description)}</p>
+              <span className="studio-template-action">{t('Layout anpassen')} <Pencil className="h-3.5 w-3.5" aria-hidden="true" /></span>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   if (isForbidden) {
     return (
       <div className="panel-card rounded-2xl p-12 text-center max-w-2xl mx-auto mt-12">
@@ -284,8 +357,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
 
   return (
     <div className="social-studio space-y-6" data-studio-version="industrial-gold-live-v1">
-      <StudioHero streamer={streamer} onUpload={() => setShowUpload(true)} onRefresh={refreshAll} refreshing={reloading} />
-      <StudioStatusBar poolFailed={postingPlanQuery.isError} data={overviewData} pool={postingPlanQuery.isError ? undefined : postingPlanQuery.data?.pool} now={now} onNavigate={openView} />
+      <StudioHero streamer={streamer} onUpload={() => setShowUpload(true)} onRefresh={refreshAll} refreshing={reloading}
+        autopilot={twitchUserId ? <StudioAutopilotSwitches owner={twitchUserId} settings={scheduleQuery.data?.settings} failed={scheduleQuery.isError} api={scheduleApi} onSaved={() => setReloadKey((key) => key + 1)} /> : undefined} />
+      <StudioStatusBar poolFailed={postingPlanQuery.isError} data={overviewData} pool={postingPlanQuery.isError ? undefined : postingPlanQuery.data?.pool} onNavigate={openView} />
 
       <nav className="studio-tabs" role="tablist" aria-label={t('Social Studio')}>
         {SOCIAL_MEDIA_TABS.map(({ id, label }, index) => {
@@ -335,28 +409,33 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         {activeView === 'heute' ? (
           <PipelineOverview data={overviewData} now={now} onNavigate={openView} activity={<StudioActivity twitchUserId={twitchUserId} data={overviewData} now={now} onNavigate={openView} />} />
         ) : activeView === 'clips' ? (
-          <>
-            <div className="studio-clips-actions">
-              <button type="button" className="studio-button" onClick={() => setShowAnalytics(true)}>
-                <BarChart3 className="h-4 w-4" aria-hidden="true" />
-                {t('Auswertung')}
-              </button>
-            </div>
-            <div className="studio-library-import">
-              {workspaceSlots?.libraryImport ?? <ImportPoolPanel twitchUserId={twitchUserId} reloadKey={reloadKey} onChanged={refreshSchedule} initialStage={clipStage ?? 'all'} />}
-            </div>
-          </>
+          <div className="studio-library-import">
+            {workspaceSlots?.libraryImport ?? <ImportPoolPanel twitchUserId={twitchUserId} reloadKey={reloadKey} onChanged={refreshSchedule} initialStage={clipStage ?? 'all'} />}
+          </div>
         ) : activeView === 'planen' ? (
           <div className="studio-plan-workspace">
             {workspaceSlots?.automation ? (
               <div className="studio-card">{workspaceSlots.automation}</div>
             ) : (
-              <ScheduleQueuePanel twitchUserId={twitchUserId} api={scheduleApi} onChanged={refreshSchedule} reloadKey={reloadKey} />
+              <ScheduleQueuePanel twitchUserId={twitchUserId} api={scheduleApi} onChanged={refreshSchedule} reloadKey={reloadKey}
+                layoutSlot={layoutCards}
+                aiOptionsSlot={AiEditor && twitchUserId ? <AiPlanOptions channel={twitchUserId} onOpenSettings={() => openView('einstellungen')} /> : undefined}
+                reviewStatusSlot={twitchUserId ? <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="mode" onChanged={refreshSchedule} reloadKey={reloadKey} /> : undefined} />
             )}
-            {twitchUserId && <section className="studio-card"><PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="mode" onChanged={refreshSchedule} reloadKey={reloadKey} /></section>}
           </div>
         ) : activeView === 'vod' ? (
-          <VodArchiveList twitchUserId={twitchUserId} isAdmin={isAdmin} />
+          <div className="studio-vod-workspace">
+            <VodArchiveCard
+              streamer={streamer}
+              settings={vodArchiveQuery.data ?? null}
+              isLoading={vodArchiveQuery.isLoading}
+              ladeFehler={vodArchiveQuery.error}
+              isSaving={vodArchiveMutation.isPending}
+              error={vodArchiveMutation.error}
+              onChange={(next) => vodArchiveMutation.mutate(next)}
+            />
+            <VodArchiveList twitchUserId={twitchUserId} isAdmin={isAdmin} />
+          </div>
         ) : (
           <div className="studio-settings">
             <div className="studio-settings-row">
@@ -371,75 +450,15 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                 isDisconnecting={disconnectMutation.isPending}
                 error={disconnectMutation.error}
                 disconnectResult={disconnectMutation.data?.twitchUserId === twitchUserId ? disconnectMutation.data ?? null : null}
+                targetPlatforms={scheduleQuery.data?.settings.target_platforms ?? null}
+                targetSaving={targetPlatformMutation.isPending}
+                targetError={targetPlatformMutation.isError}
+                onToggleTarget={(platform, active) => targetPlatformMutation.mutate({ platform, active })}
               />
-              <VodArchiveCard
-                streamer={streamer}
-                settings={vodArchiveQuery.data ?? null}
-                isLoading={vodArchiveQuery.isLoading}
-                ladeFehler={vodArchiveQuery.error}
-                isSaving={vodArchiveMutation.isPending}
-                error={vodArchiveMutation.error}
-                onChange={(next) => vodArchiveMutation.mutate(next)}
-              />
+              {AiEditor && twitchUserId && <section className="studio-card studio-production-card" aria-labelledby="studio-production-title">
+                <AiEditor twitchUserId={twitchUserId} streamer={streamer} settingsOnly scheduleApi={scheduleApi} />
+              </section>}
             </div>
-            <section className="studio-card studio-templates-card">
-            <StudioSectionHeading
-              title={t('Vorlagen & Layouts')}
-              icon={Crop}
-              description={t('Lege den Standard-Ausschnitt für neue Clips fest. Einzelne Clips kannst du weiterhin separat anpassen.')}
-              actions={
-                <button
-                  type="button"
-                  className="studio-button"
-                  disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data}
-                  onClick={() => {
-                    saveLayoutMutation.reset();
-                    setLayoutChoice(layoutForEditor);
-                  }}
-                >
-                  {t('Gespeichertes Layout öffnen')}
-                </button>
-              }
-            />
-            {layoutQuery.isError ? <LadeFehlerHinweis fehler={layoutQuery.error} /> : null}
-            <div className="grid gap-4 md:grid-cols-3">
-              {(
-                [
-                  { mode: 'blur_pad', title: 'Gameplay mit Hintergrund', cam: false, description: 'Das ganze Spielbild bleibt sichtbar, der Hintergrund füllt das Hochformat.' },
-                  { mode: 'pip', title: 'Facecam & Gameplay', cam: true, description: 'Deine Kamera sitzt über dem vollständigen Spielbild.' },
-                  { mode: 'stacked', title: 'Kamera oben mit DDC-Branding', cam: true, description: 'Kamera und Spielbild untereinander, mit DDC-Trenner.' },
-                ] as const
-              ).map((preset) => (
-                <button
-                  key={preset.mode}
-                  type="button"
-                  className="studio-template"
-                  disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data}
-                  onClick={() => {
-                    saveLayoutMutation.reset();
-                    setLayoutChoice({
-                      ...layoutForEditor,
-                      mode: preset.mode,
-                      cam_enabled: preset.cam,
-                      cam_position: preset.mode === 'stacked'
-                        ? { ...layoutForEditor.cam_position, h: DEFAULT_LAYOUT.cam_position.h }
-                        : layoutForEditor.cam_position,
-                    });
-                  }}
-                >
-                  <LayoutSchematic mode={preset.mode} />
-                  <div className="studio-template-copy">
-                    <h3>{t(preset.title)}</h3>
-                    <p>{t(preset.description)}</p>
-                    <span className="studio-template-action">{t('Layout anpassen')} <Pencil className="h-3.5 w-3.5" aria-hidden="true" /></span>
-                  </div>
-                </button>
-              ))}
-            </div>
-            </section>
-            {AiEditor && twitchUserId && <section className="studio-card studio-production-card" aria-labelledby="studio-production-title">
-              <AiEditor twitchUserId={twitchUserId} streamer={streamer} settingsOnly scheduleApi={scheduleApi} />
-            </section>}
             {twitchUserId && <section className="studio-card"><PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="notifications" onChanged={refreshSchedule} reloadKey={reloadKey} /></section>}
           </div>
         )}
@@ -487,15 +506,6 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
               {t('Layout gespeichert.')}
             </p>
           )}
-        </WorkspaceDialog>
-      )}
-      {showAnalytics && (
-        <WorkspaceDialog
-          eyebrow={t('Performance')}
-          title={t('Auswertung')}
-          onClose={() => setShowAnalytics(false)}
-        >
-          <AnalyticsTab streamer={streamer} twitchUserId={twitchUserId} isAdmin={isAdmin} statisticsPlatforms={(platformStatusQuery.data?.platforms ?? []).filter((p) => p.capabilities?.statistics).map((p) => p.platform)} />
         </WorkspaceDialog>
       )}
     </div>
@@ -633,6 +643,10 @@ function PlatformConnectionsCard({
   isDisconnecting,
   error,
   disconnectResult,
+  targetPlatforms,
+  targetSaving,
+  targetError,
+  onToggleTarget,
 }: {
   now: number;
   streamer: string;
@@ -644,6 +658,10 @@ function PlatformConnectionsCard({
   isDisconnecting: boolean;
   error: unknown;
   disconnectResult: { success: boolean; revocation_pending: boolean } | null;
+  targetPlatforms: string[] | null;
+  targetSaving: boolean;
+  targetError: boolean;
+  onToggleTarget: (platform: SocialPlatform, active: boolean) => void;
 }) {
   const { t, locale } = useLanguage();
   const byName = new Map(platforms.map((p) => [p.platform, p]));
@@ -747,6 +765,12 @@ function PlatformConnectionsCard({
                 {!standUnbekannt && platform === 'tiktok' && (
                   <p className="mt-1 text-xs text-text-secondary">{t('TikTok-Statistiken sind in dieser Beta nicht verfügbar.')}</p>
                 )}
+                <AutoPostingSwitch
+                  active={targetPlatforms?.includes(platform) ?? false}
+                  usable={!standUnbekannt && uploadAvailable && connected && !abgelaufen}
+                  disabled={gesperrt || targetPlatforms === null || targetSaving}
+                  onChange={(active) => onToggleTarget(platform, active)}
+                />
               </div>
               {standUnbekannt ? null : connected && !status?.uses_global_fallback ? (
                 <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -784,7 +808,24 @@ function PlatformConnectionsCard({
       </div>
 
       {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
+      {targetError ? <p role="alert" className="text-xs text-danger">{t('Auto-Posting konnte nicht gespeichert werden. Bitte versuche es erneut.')}</p> : null}
     </section>
+  );
+}
+
+function AutoPostingSwitch({ active, usable, disabled, onChange }: {
+  active: boolean;
+  usable: boolean;
+  disabled: boolean;
+  onChange: (active: boolean) => void;
+}) {
+  const t = useT();
+  return (
+    <label className="studio-switch studio-target-switch">
+      <input type="checkbox" role="switch" checked={active} disabled={disabled || (!usable && !active)} onChange={(event) => onChange(event.target.checked)} />
+      <span>{t('Für Auto-Posting aktiv')}</span>
+      {!usable && <small>{t(active ? 'Verbinde das Konto erneut, sonst wird hier nichts gepostet.' : 'Erst nach dem Verbinden verfügbar.')}</small>}
+    </label>
   );
 }
 

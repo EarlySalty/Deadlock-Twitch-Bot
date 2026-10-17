@@ -11,15 +11,19 @@ export const PLAN_PLATFORMS = [
 export const WEEKDAYS = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
 const SUGGESTED_TIMES = ['18:00', '20:00', '12:00', '08:00', '22:00', '16:00', '10:00', '14:00'];
 
-export const MODES: { id: PipelineMode; title: string; text: string }[] = [
-  { id: 'upload', title: 'Nur hochladen', text: 'Der Clip geht unverändert raus, mit deinem Titel und deinen Standardtexten.' },
-  { id: 'upload_text', title: 'Hochladen + KI-Texte', text: 'Der Clip bleibt unverändert. Die KI schreibt Titel, Beschreibung und Hashtags.' },
-  { id: 'ai_edit', title: 'KI-Videoschnitt', text: 'Die KI schneidet den Clip und schreibt die Texte.' },
+export const PATHS: { id: 'template' | 'ai'; title: string; text: string }[] = [
+  { id: 'template', title: 'Weg A: Standard-Vorlage (schnell & kostenlos)', text: 'Der Clip wird mit deinem Layout und deinen Standardtexten hochgeladen.' },
+  { id: 'ai', title: 'Weg B: Mit KI-Bearbeitung', text: 'Die KI schreibt die Texte und schneidet auf Wunsch auch den Clip.' },
+];
+
+export const AI_MODES: { id: PipelineMode; title: string; text: string }[] = [
+  { id: 'upload_text', title: 'Nur KI-Texte', text: 'Der Clip bleibt unverändert. Die KI schreibt Titel, Beschreibung und Hashtags.' },
+  { id: 'ai_edit', title: 'KI-Schnitt + Untertitel', text: 'Die KI schneidet den Clip, setzt Untertitel und schreibt die Texte.' },
 ];
 
 export const REVIEWS: { id: ReviewPolicy; title: string; text: string }[] = [
-  { id: 'off', title: 'Aus', text: 'Fertige Clips werden ohne deine Freigabe eingeplant.' },
-  { id: 'required', title: 'Freigabe nötig', text: 'Nichts geht raus, bevor du es freigibst.' },
+  { id: 'off', title: 'Vollautomatisch', text: 'Fertige Clips werden ohne deine Freigabe eingeplant.' },
+  { id: 'required', title: 'Vorab prüfen', text: 'Nichts geht raus, bevor du es freigibst.' },
   { id: 'veto_until_deadline', title: 'Veto bis Frist', text: 'Geht zur Frist automatisch raus, wenn du nicht stoppst.' },
 ];
 
@@ -49,34 +53,37 @@ export const HOLDS: Record<Exclude<ProductionHold, null>, string> = {
 
 export const PLAN_EN: Record<string, string> = {
   'Planen': 'Plan',
+  'Schritt {number}': 'Step {number}',
+  'Postingplan': 'Posting plan',
+  'Wann soll gepostet werden?': 'When should clips be posted?',
+  'Erweiterte Plattform-Regeln (abweichende Zeiten / unterschiedliche Clips pro Kanal)': 'Advanced platform rules (different times / different clips per channel)',
+  'Vorlauf in Stunden (Standard: 24 h vor Termin vorbereiten)': 'Lead time in hours (default: prepare 24 h before the slot)',
+  'Noch keine Plattform für Auto-Posting aktiv. Aktiviere sie unter Einstellungen bei den Konten.': 'No platform is active for auto-posting yet. Turn one on under Settings in the accounts list.',
+  'Video-Vorbereitung': 'Video preparation',
+  'Wie sollen Clips geschnitten & betextet werden?': 'How should clips be cut and captioned?',
+  'Weg A: Standard-Vorlage (schnell & kostenlos)': 'Option A: Standard template (fast & free)',
+  'Der Clip wird mit deinem Layout und deinen Standardtexten hochgeladen.': 'The clip is uploaded with your layout and your default text.',
+  'Weg B: Mit KI-Bearbeitung': 'Option B: With AI editing',
+  'Die KI schreibt die Texte und schneidet auf Wunsch auch den Clip.': 'AI writes the text and can also edit the clip.',
+  'Was soll die KI übernehmen?': 'What should AI take care of?',
+  'Nur KI-Texte': 'AI text only',
+  'KI-Schnitt + Untertitel': 'AI edit + subtitles',
+  'Die KI schneidet den Clip, setzt Untertitel und schreibt die Texte.': 'AI edits the clip, adds subtitles and writes the text.',
+  'Standardtexte & Hashtags (Fallback)': 'Default text & hashtags (fallback)',
+  'Kontrolle': 'Review',
+  'Prüfen oder automatisch posten?': 'Review first or post automatically?',
+  'Vollautomatisch': 'Fully automatic',
+  'Vorab prüfen': 'Review first',
   'Lege fest, wie deine Clips vorbereitet werden, wer sie freigibt und wann sie erscheinen.': 'Choose how your clips are prepared, who approves them and when they go out.',
   'Plan wird geladen.': 'Loading plan.',
   'Erneut laden': 'Reload',
-  'Was passiert mit deinen Clips?': 'What happens to your clips?',
-  'Nur hochladen': 'Upload only',
-  'Der Clip geht unverändert raus, mit deinem Titel und deinen Standardtexten.': 'The clip goes out unchanged, with your title and default text.',
-  'Hochladen + KI-Texte': 'Upload + AI text',
   'Der Clip bleibt unverändert. Die KI schreibt Titel, Beschreibung und Hashtags.': 'The clip stays unchanged. AI writes the title, description and hashtags.',
-  'KI-Videoschnitt': 'AI video edit',
-  'Die KI schneidet den Clip und schreibt die Texte.': 'AI edits the clip and writes the text.',
   'Änderungen gelten für neue Clips.': 'Changes apply to new clips.',
-  'Vor Veröffentlichung prüfen': 'Review before publishing',
-  'Aus': 'Off',
   'Fertige Clips werden ohne deine Freigabe eingeplant.': 'Finished clips are scheduled without your approval.',
-  'Freigabe nötig': 'Approval required',
   'Nichts geht raus, bevor du es freigibst.': 'Nothing goes out before you approve it.',
   'Veto bis Frist': 'Veto until deadline',
   'Geht zur Frist automatisch raus, wenn du nicht stoppst.': 'Goes out automatically at the deadline unless you stop it.',
   'Clips, die schon auf deine Freigabe warten, bleiben dort, bis du entscheidest.': 'Clips already waiting for your approval stay there until you decide.',
-  'Zielplattformen': 'Target platforms',
-  'nicht verbunden': 'not connected',
-  'Verbinde fehlende Plattformen unter Konten.': 'Connect missing platforms under Accounts.',
-  'Noch keine Zielplattform ausgewählt. Ohne Zielplattform wird nichts veröffentlicht.': 'No target platform selected yet. Nothing is published without one.',
-  'Auto-Pilot': 'Autopilot',
-  'Auto-Pilot einschalten': 'Turn on autopilot',
-  'Neue Produktionen pausieren': 'Pause new productions',
-  'Vorlauf in Stunden': 'Lead time in hours',
-  'Wann wird gepostet?': 'When to post?',
   'Gemeinsam': 'Shared',
   'Alle Plattformen posten zu denselben Zeiten.': 'All platforms post at the same times.',
   'Je Plattform': 'Per platform',
@@ -84,7 +91,6 @@ export const PLAN_EN: Record<string, string> = {
   'Zeitzone: {timezone}': 'Time zone: {timezone}',
   'Zeitzone in Verwaltung ändern': 'Change time zone in Settings',
   'Sommerzeit wird berücksichtigt. Verpasste Termine werden nicht nachgeholt.': 'Daylight saving time is handled. Missed times are not made up.',
-  'Wähle zuerst eine Zielplattform aus.': 'Select a target platform first.',
   'Zeit hinzufügen': 'Add time',
   '{day}: Zeit hinzufügen': '{day}: add time',
   '{day} {time} entfernen': 'Remove {day} {time}',
@@ -125,7 +131,6 @@ export const PLAN_EN: Record<string, string> = {
   'Keine passenden Clips verfügbar. Prüfe deine Clips oder den Zeitraum.': 'No matching clips available. Check your clips or the date range.',
   'Füge mindestens eine Zeit hinzu.': 'Add at least one time.',
   'Der nächste freie Termin liegt noch außerhalb des Vorlaufs.': 'The next free time is still outside the lead time.',
-  'Standardtexte': 'Default text',
   'Werden genutzt, wenn ein Clip keinen eigenen Titel, keine Beschreibung oder keine Hashtags hat.': 'Used when a clip has no title, description or hashtags of its own.',
   'Gleich für alle': 'Same for all',
   'Alle Plattformen bekommen dieselben Standardtexte.': 'All platforms get the same default text.',
@@ -154,8 +159,6 @@ export function planText(language: string): PlanText {
 }
 
 export interface PlanDraft {
-  enabled: boolean;
-  paused: boolean;
   lead_time_hours: number;
   target_platforms: string[];
   pipeline_mode: PipelineMode;
@@ -226,8 +229,6 @@ function normalizePerPlatform(value: Record<string, WeeklySlot[]>): Record<strin
 
 export function planDraft({ snapshot, policy }: PlanState): PlanDraft {
   return {
-    enabled: snapshot.settings.enabled,
-    paused: snapshot.settings.paused,
     lead_time_hours: snapshot.settings.lead_time_hours,
     target_platforms: [...snapshot.settings.target_platforms],
     pipeline_mode: policy.pipeline_mode,
@@ -245,17 +246,10 @@ function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function samePlatforms(a: string[], b: string[]): boolean {
-  return sameJson([...a].sort(), [...b].sort());
-}
-
 export function schedulePatch(base: PlanState, draft: PlanDraft): SchedulePatch {
   const settings = base.snapshot.settings;
   const patch: SchedulePatch = {};
-  if (draft.enabled !== settings.enabled) patch.enabled = draft.enabled;
-  if (draft.paused !== settings.paused) patch.paused = draft.paused;
   if (draft.lead_time_hours !== settings.lead_time_hours) patch.lead_time_hours = draft.lead_time_hours;
-  if (!samePlatforms(draft.target_platforms, settings.target_platforms)) patch.target_platforms = PLAN_PLATFORMS.map(platform => platform.id).filter(id => draft.target_platforms.includes(id));
   if (!sameJson(normalizeSlots(draft.shared), normalizeSlots(settings.schedule_slots))) patch.schedule_slots = normalizeSlots(draft.shared);
   if (draft.pipeline_mode !== base.policy.pipeline_mode && (draft.pipeline_mode === 'ai_edit') !== settings.ai_editing_enabled) patch.ai_editing_enabled = draft.pipeline_mode === 'ai_edit';
   return patch;

@@ -123,8 +123,8 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
   }
 
   return <section className="publish-review" aria-label={t('Freigabe und Veröffentlichung')} aria-busy={busy} data-unsaved={preferencesDirty || busy ? 'true' : undefined} data-saving={busy ? 'true' : undefined}>
-    <StudioSectionHeading title={t(section === 'videos' ? 'Fertige Videos' : section === 'mode' ? 'Aktuell wirksam' : section === 'notifications' ? 'Benachrichtigungen' : 'Freigabe & Veröffentlichung')} icon={ShieldCheck}
-      description={section === 'mode' ? undefined : t('Prüfe die fertige Videoversion. Eine Kontoverbindung ist noch keine Freigabe.')} />
+    <StudioSectionHeading title={t(section === 'videos' ? 'Fertige Videos' : section === 'mode' ? 'Aktuell wirksam' : section === 'notifications' ? 'Benachrichtigungen & Aufbewahrung' : 'Freigabe & Veröffentlichung')} icon={ShieldCheck}
+      description={section === 'mode' || section === 'notifications' ? undefined : t('Prüfe die fertige Videoversion. Eine Kontoverbindung ist noch keine Freigabe.')} />
     {error && <p role="alert" className="publish-error">{'raw' in error ? error.raw : t(error.key, error.params)}</p>}
     {error && !snapshot && <button type="button" disabled={busy} onClick={() => setRetry((value) => value + 1)}>{t('Erneut laden')}</button>}
     {message && <p role="status" className="publish-message">{t(message.key, message.params)}</p>}
@@ -138,8 +138,9 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
       {(section === 'all' || section === 'videos') && <div className="publish-video-list">
         {visibleVideos.length === 0 ? <p>{videoId === undefined ? t('Noch keine fertigen Videos. Sobald ein Video gerendert ist, findest du es hier.') : t('Diese Fassung wartet nicht mehr auf eine Freigabe.')}</p> : visibleVideos.map((video) => <VideoRow key={video.id} video={video} snapshot={snapshot} busy={busy || editorBusy || editorVideo === video.id} onRevise={editorVideo === null ? setEditorVideo : undefined} onOpenVideo={onOpenVideo} onConfigureTikTok={onConfigureTikTok} act={act} client={client} owner={twitchUserId} inlineTikTok={clipDbId === undefined ? undefined : { clipDbId, revision: textRevision }} locked={locked} />)}
       </div>}
-      {(section === 'all' || section === 'notifications') && preferences && <details className="publish-preferences"><summary>{t('Benachrichtigungen & Aufbewahrung')}</summary>
-        <p>{t('Ungeprüfte Videos bleiben sieben Tage ab dem fertigen Rendern verfügbar. Freigegebene Videos sowie laufende, fehlgeschlagene oder unklare Veröffentlichungen bleiben geschützt.')}</p>
+      {(section === 'all' || section === 'notifications') && preferences && <div className="publish-preferences">
+        {section === 'all' && <h3>{t('Benachrichtigungen & Aufbewahrung')}</h3>}
+        <p className="publish-retention">{t('Ungeprüfte Videos bleiben sieben Tage ab dem fertigen Rendern verfügbar. Freigegebene Videos sowie laufende, fehlgeschlagene oder unklare Veröffentlichungen bleiben geschützt.')}</p>
         <form onSubmit={(event) => { event.preventDefault(); void act(() => client.preferences(twitchUserId, preferences), { key: 'Benachrichtigungen gespeichert.' }, true); }}>
           <fieldset disabled={busy}><legend>{t('Wo möchtest du Hinweise erhalten?')}</legend>
             <label><input type="checkbox" role="switch" checked={preferences.dashboard} onChange={(event) => setPreferences({ ...preferences, dashboard: event.target.checked })} />{t('Im Dashboard')}</label>
@@ -152,7 +153,7 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
           </fieldset>
           <button type="submit" disabled={busy}>{t('Benachrichtigungen speichern')}</button>
         </form>
-      </details>}
+      </div>}
       {(section === 'all' || section === 'notifications') && snapshot.notifications.length > 0 && <section className="publish-notifications" aria-label={t('Hinweise')}><h3>{t('Deine Hinweise')}</h3>{snapshot.notifications.map((notification) => <p key={notification.id}>{notification.content}</p>)}</section>}
     </>}
   </section>;

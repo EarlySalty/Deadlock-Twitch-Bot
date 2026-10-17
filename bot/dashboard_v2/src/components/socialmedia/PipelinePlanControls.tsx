@@ -4,7 +4,7 @@ import { useLanguage } from '@/context/LanguageContext';
 import { platformIconUrl } from './platformIcon';
 import type { PolicyScope, ScheduleQueueApi, WeeklySlot } from './autopilot/schedule-queue/api';
 import {
-  DISTRIBUTIONS, HOLDS, MODES, PLAN_PLATFORMS, REVIEWS, SCOPES, SHARED_TEXT, TEXT_SCOPES, WEEKDAYS, addTime, failureText, isDirty, loadPlan, planDraft, planText,
+  AI_MODES, DISTRIBUTIONS, HOLDS, PATHS, PLAN_PLATFORMS, REVIEWS, SCOPES, SHARED_TEXT, TEXT_SCOPES, WEEKDAYS, addTime, failureText, isDirty, loadPlan, planDraft, planText,
   savePlan, switchScope, validateDraft, type PlanDraft, type PlanState, type PlanText, type ScopeSwitch, type TextDraft,
 } from './pipelinePlan';
 
@@ -23,9 +23,12 @@ export interface PipelinePlanControlsProps {
   onChanged?: () => void;
   reloadKey?: number;
   timezoneLink?: ReactNode;
+  layoutSlot?: ReactNode;
+  aiOptionsSlot?: ReactNode;
+  reviewStatusSlot?: ReactNode;
 }
 
-export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey = 0, timezoneLink }: PipelinePlanControlsProps) {
+export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey = 0, timezoneLink, layoutSlot, aiOptionsSlot, reviewStatusSlot }: PipelinePlanControlsProps) {
   const { language, locale } = useLanguage();
   const text = planText(language);
   const id = useId();
@@ -105,46 +108,66 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
     edit(result.draft);
   };
 
+  const aiPath = draft.pipeline_mode !== 'upload';
+  const choosePath = (path: 'template' | 'ai') => {
+    if (path === 'template') { edit({ pipeline_mode: 'upload' }); return; }
+    if (!aiPath) edit({ pipeline_mode: base.policy.pipeline_mode !== 'upload' ? base.policy.pipeline_mode : 'upload_text' });
+  };
+  const advancedOpen = draft.schedule_scope === 'per_platform' || draft.distribution_policy === 'independent_clips' || choices !== undefined;
+
   return <section className="studio-card schedule-queue pp-plan" aria-labelledby={`${id}-heading`} data-unsaved={dirty || saving ? 'true' : undefined} data-saving={saving ? 'true' : undefined}>
     <header className="pp-head">
       <div>
         <h2 id={`${id}-heading`}><CalendarClock size={18} aria-hidden="true" />{text('Planen')}</h2>
         <p className="sq-help">{text('Lege fest, wie deine Clips vorbereitet werden, wer sie freigibt und wann sie erscheinen.')}</p>
       </div>
-      <NextSlots base={base} targets={draft.target_platforms} locale={locale} text={text} />
     </header>
     <form className="pp-form" onSubmit={event => { event.preventDefault(); void submit(); }}>
-      <fieldset className="pp-columns" disabled={saving}>
-        <div className="pp-column">
-          <ChoiceGroup legend={text('Was passiert mit deinen Clips?')} name={`${id}-mode`} options={MODES} value={draft.pipeline_mode} text={text} onChange={pipeline_mode => edit({ pipeline_mode })}
-            hint={draft.pipeline_mode !== base.policy.pipeline_mode ? text('Änderungen gelten für neue Clips.') : undefined} />
-          <ChoiceGroup legend={text('Vor Veröffentlichung prüfen')} name={`${id}-review`} options={REVIEWS} value={draft.review_policy} text={text} onChange={review_policy => edit({ review_policy })}
-            hint={base.policy.review_policy !== 'off' && draft.review_policy !== base.policy.review_policy ? text('Clips, die schon auf deine Freigabe warten, bleiben dort, bis du entscheidest.') : undefined} />
-          <Targets draft={draft} connected={base.snapshot.connected_platforms} text={text} onChange={target_platforms => edit({ target_platforms })} />
-          <TextDefaultsEditor id={id} draft={draft} text={text} onChange={edit} />
-          <fieldset className="pp-group">
-            <legend>{text('Auto-Pilot')}</legend>
-            <div className="sq-toggles">
-              <label><input type="checkbox" role="switch" checked={draft.enabled} onChange={event => edit({ enabled: event.target.checked })} /><span>{text('Auto-Pilot einschalten')}</span></label>
-              <label><input type="checkbox" role="switch" checked={draft.paused} onChange={event => edit({ paused: event.target.checked })} /><span>{text('Neue Produktionen pausieren')}</span></label>
+      <fieldset className="pp-steps" disabled={saving}>
+        <Step id={`${id}-step-1`} number={1} title={text('Postingplan')} question={text('Wann soll gepostet werden?')} text={text}>
+          <div className="pp-step-grid">
+            <div className="pp-column">
+              <p className="sq-help pp-timezone">{text('Zeitzone: {timezone}', { timezone: base.snapshot.settings.timezone })} · {timezoneLink}</p>
+              {!draft.target_platforms.length && <p className="sq-help">{text('Noch keine Plattform für Auto-Posting aktiv. Aktiviere sie unter Einstellungen bei den Konten.')}</p>}
+              {draft.schedule_scope === 'shared' && <WeekEditor label={text('Gemeinsam')} slots={draft.shared} text={text} onChange={shared => edit({ shared })} />}
+              <p className="sq-help">{text('Sommerzeit wird berücksichtigt. Verpasste Termine werden nicht nachgeholt.')}</p>
             </div>
-            <label className="pp-lead" htmlFor={`${id}-lead`}>{text('Vorlauf in Stunden')}<input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} /></label>
-            {base.snapshot.production_hold && <p className="sq-help">{text(HOLDS[base.snapshot.production_hold])}</p>}
-          </fieldset>
-        </div>
-        <div className="pp-column">
-          <ChoiceGroup legend={text('Wann wird gepostet?')} name={`${id}-scope`} options={SCOPES} value={draft.schedule_scope} text={text} onChange={scheduleScope} compact />
-          {choices && <SharedChoice choices={choices} text={text} onPick={slots => { setChoices(undefined); edit({ schedule_scope: 'shared', shared: slots }); }} onCancel={() => setChoices(undefined)} />}
-          <p className="sq-help pp-timezone">{text('Zeitzone: {timezone}', { timezone: base.snapshot.settings.timezone })} · {timezoneLink}</p>
-          {draft.schedule_scope === 'shared'
-            ? <WeekEditor label={text('Gemeinsam')} slots={draft.shared} text={text} onChange={shared => edit({ shared })} />
-            : draft.target_platforms.length
-              ? draft.target_platforms.map(platform => <WeekEditor key={platform} platform={platform} label={PLAN_PLATFORMS.find(item => item.id === platform)?.label ?? platform} slots={draft.per_platform[platform] ?? []} text={text}
-                onChange={slots => edit({ per_platform: { ...draft.per_platform, [platform]: slots } })} />)
-              : <p className="sq-help">{text('Wähle zuerst eine Zielplattform aus.')}</p>}
-          <p className="sq-help">{text('Sommerzeit wird berücksichtigt. Verpasste Termine werden nicht nachgeholt.')}</p>
-          <ChoiceGroup legend={text('Verteilung der Clips')} name={`${id}-distribution`} options={DISTRIBUTIONS} value={draft.distribution_policy} text={text} onChange={distribution_policy => edit({ distribution_policy })} />
-        </div>
+            <div className="pp-column">
+              <NextSlots base={base} targets={draft.target_platforms} locale={locale} text={text} />
+              <label className="pp-lead" htmlFor={`${id}-lead`}>{text('Vorlauf in Stunden (Standard: 24 h vor Termin vorbereiten)')}<input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} /></label>
+              {base.snapshot.production_hold && <p className="sq-help">{text(HOLDS[base.snapshot.production_hold])}</p>}
+            </div>
+          </div>
+          <details className="pp-advanced" open={advancedOpen || undefined}>
+            <summary>{text('Erweiterte Plattform-Regeln (abweichende Zeiten / unterschiedliche Clips pro Kanal)')}</summary>
+            <div className="pp-column">
+              <ChoiceGroup legend={text('Wann soll gepostet werden?')} name={`${id}-scope`} options={SCOPES} value={draft.schedule_scope} text={text} onChange={scheduleScope} compact />
+              {choices && <SharedChoice choices={choices} text={text} onPick={slots => { setChoices(undefined); edit({ schedule_scope: 'shared', shared: slots }); }} onCancel={() => setChoices(undefined)} />}
+              {draft.schedule_scope === 'per_platform' && draft.target_platforms.map(platform => <WeekEditor key={platform} platform={platform} label={PLAN_PLATFORMS.find(item => item.id === platform)?.label ?? platform} slots={draft.per_platform[platform] ?? []} text={text}
+                onChange={slots => edit({ per_platform: { ...draft.per_platform, [platform]: slots } })} />)}
+              <ChoiceGroup legend={text('Verteilung der Clips')} name={`${id}-distribution`} options={DISTRIBUTIONS} value={draft.distribution_policy} text={text} onChange={distribution_policy => edit({ distribution_policy })} compact />
+            </div>
+          </details>
+        </Step>
+        <Step id={`${id}-step-2`} number={2} title={text('Video-Vorbereitung')} question={text('Wie sollen Clips geschnitten & betextet werden?')} text={text}>
+          <ChoiceGroup legend={text('Video-Vorbereitung')} hideLegend name={`${id}-path`} options={PATHS} value={aiPath ? 'ai' : 'template'} text={text} onChange={choosePath} compact
+            hint={draft.pipeline_mode !== base.policy.pipeline_mode ? text('Änderungen gelten für neue Clips.') : undefined} />
+          {aiPath
+            ? <div className="pp-path-body">
+              <ChoiceGroup legend={text('Was soll die KI übernehmen?')} name={`${id}-mode`} options={AI_MODES} value={draft.pipeline_mode} text={text} onChange={pipeline_mode => edit({ pipeline_mode })} compact />
+              {aiOptionsSlot}
+            </div>
+            : layoutSlot && <div className="pp-path-body">{layoutSlot}</div>}
+          <details className="pp-advanced">
+            <summary>{text('Standardtexte & Hashtags (Fallback)')}</summary>
+            <TextDefaultsEditor id={id} draft={draft} text={text} onChange={edit} />
+          </details>
+        </Step>
+        <Step id={`${id}-step-3`} number={3} title={text('Kontrolle')} question={text('Prüfen oder automatisch posten?')} text={text}>
+          <ChoiceGroup legend={text('Kontrolle')} hideLegend name={`${id}-review`} options={REVIEWS} value={draft.review_policy} text={text} onChange={review_policy => edit({ review_policy })} wide
+            hint={base.policy.review_policy !== 'off' && draft.review_policy !== base.policy.review_policy ? text('Clips, die schon auf deine Freigabe warten, bleiben dort, bis du entscheidest.') : undefined} />
+          {reviewStatusSlot}
+        </Step>
       </fieldset>
       <footer className="pp-footer">
         <div className="pp-messages" aria-live="polite">
@@ -163,6 +186,17 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
   </section>;
 }
 
+function Step({ id, number, title, question, text, children }: { id: string; number: number; title: string; question: string; text: PlanText; children: ReactNode }) {
+  return <section className="pp-step" aria-labelledby={id}>
+    <header className="pp-step-head">
+      <span className="pp-step-number">{text('Schritt {number}', { number })}</span>
+      <h3 id={id}>{title}</h3>
+      <p className="sq-help">{question}</p>
+    </header>
+    {children}
+  </section>;
+}
+
 interface ChoiceGroupProps<T extends string> {
   legend: string;
   name: string;
@@ -172,12 +206,14 @@ interface ChoiceGroupProps<T extends string> {
   onChange: (value: T) => void;
   hint?: string;
   compact?: boolean;
+  wide?: boolean;
+  hideLegend?: boolean;
 }
 
-function ChoiceGroup<T extends string>({ legend, name, options, value, text, onChange, hint, compact }: ChoiceGroupProps<T>) {
+function ChoiceGroup<T extends string>({ legend, name, options, value, text, onChange, hint, compact, wide, hideLegend }: ChoiceGroupProps<T>) {
   return <fieldset className="pp-group">
-    <legend>{legend}</legend>
-    <div className={compact ? 'pp-choices pp-compact' : 'pp-choices'}>
+    <legend className={hideLegend ? 'sq-sr-only' : undefined}>{legend}</legend>
+    <div className={wide ? 'pp-choices pp-wide' : compact ? 'pp-choices pp-compact' : 'pp-choices'}>
       {options.map(option => <label className="pp-choice" key={option.id}>
         <input type="radio" name={name} value={option.id} checked={value === option.id} onChange={() => onChange(option.id)} />
         <span><strong>{text(option.title)}</strong><small>{text(option.text)}</small></span>
@@ -193,7 +229,6 @@ function TextDefaultsEditor({ id, draft, text, onChange }: { id: string; draft: 
   const keys = draft.metadata_scope === 'shared' ? [SHARED_TEXT] : [SHARED_TEXT, ...draft.target_platforms];
   const update = (key: string, value: TextDraft) => onChange({ texts: { ...draft.texts, [key]: value } });
   return <fieldset className="pp-group pp-texts">
-    <legend>{text('Standardtexte')}</legend>
     <p className="sq-help">{text('Werden genutzt, wenn ein Clip keinen eigenen Titel, keine Beschreibung oder keine Hashtags hat.')}</p>
     <div className="pp-choices pp-compact">
       {TEXT_SCOPES.map(option => <label className="pp-choice" key={option.id}>
@@ -214,25 +249,6 @@ function TextFields({ id, label, platform, value, text, onChange }: { id: string
     <label htmlFor={`${id}-hashtags`}>{text('Hashtags')}<input id={`${id}-hashtags`} type="text" value={value.hashtags} placeholder="#deadlock #clips" onChange={event => onChange({ ...value, hashtags: event.target.value })} /></label>
     <small className="sq-help">{text('Mit Leerzeichen trennen, zum Beispiel #deadlock #clips')}</small>
   </div>;
-}
-
-function Targets({ draft, connected, text, onChange }: { draft: PlanDraft; connected: string[]; text: PlanText; onChange: (targets: string[]) => void }) {
-  return <fieldset className="pp-group">
-    <legend>{text('Zielplattformen')}</legend>
-    <div className="sq-toggles">
-      {PLAN_PLATFORMS.map(platform => {
-        const isConnected = connected.includes(platform.id);
-        const selected = draft.target_platforms.includes(platform.id);
-        return <label key={platform.id}>
-          <input type="checkbox" role="switch" checked={selected} disabled={!isConnected && !selected}
-            onChange={event => onChange(event.target.checked ? [...draft.target_platforms, platform.id] : draft.target_platforms.filter(value => value !== platform.id))} />
-          <span className="sq-platform-label"><img src={platformIconUrl(platform.id)} width="16" height="16" alt="" aria-hidden="true" />{platform.label}{!isConnected && ` (${text('nicht verbunden')})`}</span>
-        </label>;
-      })}
-    </div>
-    {connected.length < PLAN_PLATFORMS.length && <p className="sq-help">{text('Verbinde fehlende Plattformen unter Konten.')}</p>}
-    {!draft.target_platforms.length && <p className="sq-help">{text('Noch keine Zielplattform ausgewählt. Ohne Zielplattform wird nichts veröffentlicht.')}</p>}
-  </fieldset>;
 }
 
 function WeekEditor({ label, platform, slots, text, onChange }: { label: string; platform?: string; slots: WeeklySlot[]; text: PlanText; onChange: (slots: WeeklySlot[]) => void }) {

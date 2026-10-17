@@ -4,29 +4,19 @@ import type { ClipPoolForecast } from '@/types/socialMedia';
 import type { StudioOverviewData } from './StudioOverview';
 import type { SocialMediaViewTarget } from './labels';
 import { connectionFact } from './platformPresentation';
-import { formatTerminInZone, type QueueStage } from './queuePresentation';
-import { upcomingTerms } from './upcomingTerms';
+import type { QueueStage } from './queuePresentation';
 
-export function StudioStatusBar({ data, pool, poolFailed, now, onNavigate }: {
+export function StudioStatusBar({ data, pool, poolFailed, onNavigate }: {
   data: StudioOverviewData;
   pool: ClipPoolForecast | undefined;
   poolFailed?: boolean;
-  now: number;
   onNavigate: (view: SocialMediaViewTarget, stage?: QueueStage) => void;
 }) {
-  const { t, locale } = useLanguage();
-  const settings = data.scheduleFailed ? undefined : data.schedule?.settings;
+  const { t } = useLanguage();
   const connected = data.platformsFailed || !data.platforms ? null : data.platforms.filter(status =>
     ['youtube', 'tiktok', 'instagram'].includes(status.platform) && connectionFact(status).state === 'connected',
   ).length;
-  const next = upcomingTerms(data, now)[0];
   return <section className="studio-status-bar" aria-label={t('Stand auf einen Blick')}>
-    <button type="button" data-tone={settings?.enabled ? settings.paused ? 'warning' : 'success' : 'neutral'}
-      title={next ? `${t('Nächster Termin')}: ${formatTerminInZone(next.at, locale, next.timezone)}` : undefined}
-      onClick={() => onNavigate('planen')}>
-      {settings ? t(settings.enabled ? 'Auto-Pilot an' : 'Auto-Pilot aus') : `${t('Auto-Pilot')} · ${t(data.scheduleFailed ? 'Nicht abrufbar' : 'Wird geladen')}`}
-      {settings?.paused && ` · ${t('Pausiert')}`}
-    </button>
     <button type="button" data-tone={connected === 3 ? 'success' : 'warning'} onClick={() => onNavigate('einstellungen')}>
       {connected === null ? `${t('Konten')} · ${t(data.platformsFailed ? 'Nicht abrufbar' : 'Wird geladen')}` : t('Konten verbunden {count}/3', { count: connected })}
     </button>

@@ -81,12 +81,12 @@ test('plan save keeps the saved part and the unsaved rest after a revision confl
   const base = await plan.loadPlan(fixture.api);
   const stale = { ...base, policy: { ...base.policy, policy_revision: 0 } };
   const draft = plan.planDraft(stale);
-  draft.paused = true;
+  draft.lead_time_hours = 48;
   draft.review_policy = 'off';
   const outcome = await plan.savePlan(fixture.api, undefined, stale, draft);
   assert.ok(outcome.failure);
   assert.equal(outcome.partial, true);
-  assert.equal(outcome.state.snapshot.settings.paused, true);
+  assert.equal(outcome.state.snapshot.settings.lead_time_hours, 48);
   assert.deepEqual(plan.schedulePatch(outcome.state, draft), {});
   assert.equal(plan.policyChange(outcome.state, draft)?.review_policy, 'off');
   assert.match(plan.failureText(outcome.failure), /inzwischen woanders geändert/);
