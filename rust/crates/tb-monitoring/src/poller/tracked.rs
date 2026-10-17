@@ -1,12 +1,6 @@
-//! Lädt die vom Monitoring zu überwachenden Kanäle
-//! (Python `_load_tracked_streamers`): aktive/historische Partner aus der
-//! View `twitch_streamers_partner_state` plus monitored-only Kanäle aus
-//! `twitch_streamers`. Dazu die Auto-Archiv-Kandidaten.
-
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-/// Ein getrackter Kanal mit Announcement-relevanter Partner-Config.
 #[derive(Debug, Clone)]
 pub struct TrackedEntry {
     pub login: String,
@@ -38,7 +32,15 @@ struct ArchiveCandidateRow {
     twitch_login: String,
     archived_at: Option<String>,
     operational_state: Option<String>,
-    last_stream_at: Option<DateTime<Utc>>,
+    first_stream_at: Option<DateTime<Utc>>,
+    last_deadlock_at: Option<DateTime<Utc>>,
+}
+
+impl ArchiveCandidateRow {
+    fn inactive_since(&self, cutoff: DateTime<Utc>) -> bool {
+        self.first_stream_at.is_some_and(|first| first < cutoff)
+            && self.last_deadlock_at.is_none_or(|last| last < cutoff)
+    }
 }
 
 #[derive(Clone)]
@@ -51,8 +53,6 @@ impl TrackedStore {
         Self { pool }
     }
 
-    /// Liefert (tracked, partner_logins). `partner_logins` = aktive
-    /// Partner (lowercase) für die `is_partner`-Markierung der Stats.
     pub async fn load(
         &self,
     ) -> Result<(Vec<TrackedEntry>, std::collections::HashSet<String>), sqlx::Error> {
@@ -136,9 +136,6 @@ impl TrackedStore {
         Ok((tracked, partner_logins))
     }
 
-    /// Partner, deren letzte bekannte Stream-Aktivität vor `cutoff` liegt.
-    /// Nur aktive, nicht archivierte und noch nicht informativ markierte Partner
-    /// mit vorhandener Historie.
     pub async fn archive_candidates(
         &self,
         _target_game: &str,
@@ -149,7 +146,9 @@ impl TrackedStore {
             SELECT s.twitch_login,
                    s.archived_at::text AS archived_at,
                    s.operational_state,
-                   MAX(NULLIF(COALESCE(sess.ended_at::text, sess.started_at::text), '')::timestamptz) AS last_stream_at
+                   MIN(NULLIF(sess.started_at::text, '')::timestamptz) AS first_stream_at,
+                   MAX(NULLIF(COALESCE(sess.ended_at::text, sess.started_at::text), '')::timestamptz)
+                       FILTER (WHERE COALESCE(sess.had_deadlock_in_session, false)) AS last_deadlock_at
               FROM twitch_streamers_partner_state s
               LEFT JOIN twitch_stream_sessions sess
                 ON LOWER(sess.streamer_login) = LOWER(s.twitch_login)
@@ -163,9 +162,8 @@ impl TrackedStore {
         Ok(rows
             .into_iter()
             .filter_map(|row| {
-                let login = row.twitch_login;
-                let login = login.trim().to_lowercase();
-                if login.is_empty() {
+                let login = row.twitch_login.trim().to_lowercase();
+                if login.is_empty() || !row.inactive_since(cutoff) {
                     return None;
                 }
                 if row.archived_at.is_some_and(|a| !a.trim().is_empty()) {
@@ -178,10 +176,32 @@ impl TrackedStore {
                 {
                     return None;
                 }
-                // Keine Historie → keine automatische Inaktivitätsmarkierung.
-                let last = row.last_stream_at?;
-                (last < cutoff).then_some(login)
+                Some(login)
             })
             .collect())
+    }
+
+    pub async fn deadlock_days_including_today(
+        &self,
+        login: &str,
+        since: DateTime<Utc>,
+    ) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar(
+            r#"
+            SELECT COUNT(DISTINCT day) FROM (
+                SELECT (NULLIF(started_at::text, '')::timestamptz AT TIME ZONE 'Europe/Berlin')::date AS day
+                  FROM twitch_stream_sessions
+                 WHERE LOWER(streamer_login) = LOWER($1)
+                   AND COALESCE(had_deadlock_in_session, false)
+                   AND NULLIF(started_at::text, '')::timestamptz >= $2
+                UNION
+                SELECT (NOW() AT TIME ZONE 'Europe/Berlin')::date
+            ) days
+            "#,
+        )
+        .bind(login)
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await
     }
 }

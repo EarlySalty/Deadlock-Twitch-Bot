@@ -2,18 +2,14 @@ use super::*;
 use std::sync::{Arc, Mutex};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-const ACTIVITY: Activity = Activity {
-    keep_window_days: 28,
-    gain_window_days: 30,
-    gain_min_days: 4,
-};
-
 const TARGETS: Targets = Targets {
     guild_id: 1,
     streamer_role_id: 2,
-    live_role_id: None,
-    activity: ACTIVITY,
 };
+
+fn policy() -> Policy {
+    Policy::fallback(TARGETS.guild_id)
+}
 
 #[derive(Default)]
 struct DiscordState {
@@ -124,8 +120,8 @@ async fn fixture() -> (
     sqlx::raw_sql("CREATE TABLE twitch_partners (twitch_user_id TEXT PRIMARY KEY, status TEXT, raid_admin_enabled BOOL, raid_bot_enabled INT, manual_partner_opt_out INT, technical_pause_reason TEXT, departnered_at TEXT, admin_archived_at TEXT, deadlock_pause_unmodded_at TEXT);
         CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT PRIMARY KEY, discord_user_id TEXT);
         CREATE TABLE twitch_partner_signup_denylist (twitch_user_id TEXT);
-        CREATE TABLE twitch_raid_auth (twitch_user_id TEXT PRIMARY KEY);
-        INSERT INTO twitch_raid_auth VALUES ('100');
+        CREATE TABLE twitch_raid_auth (twitch_user_id TEXT PRIMARY KEY, needs_reauth BOOL DEFAULT false);
+        INSERT INTO twitch_raid_auth (twitch_user_id) VALUES ('100');
         INSERT INTO twitch_partners VALUES ('100','active',true,1,0,NULL,NULL,NULL);
         INSERT INTO twitch_streamer_identities VALUES ('100','10');
         CREATE TABLE twitch_stream_sessions (twitch_user_id TEXT, started_at TIMESTAMPTZ, had_deadlock_in_session BOOL);
@@ -423,7 +419,7 @@ async fn grace_expiry_reconciles_after_persistent_deactivation() {
     let (db, _server, relay, discord) = fixture().await;
     reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
     sqlx::raw_sql("ALTER TABLE twitch_streamer_identities ADD twitch_login TEXT DEFAULT 'test', ADD updated_at TIMESTAMPTZ DEFAULT NOW();
-        ALTER TABLE twitch_raid_auth ADD twitch_login TEXT DEFAULT 'test', ADD raid_enabled BOOL DEFAULT true, ADD needs_reauth BOOL DEFAULT false;
+        ALTER TABLE twitch_raid_auth ADD twitch_login TEXT DEFAULT 'test', ADD raid_enabled BOOL DEFAULT true;
         CREATE TABLE twitch_token_blacklist (twitch_user_id TEXT, twitch_login TEXT, error_count INT, grace_expires_at TEXT, role_removed INT, reminder_sent INT);
         INSERT INTO twitch_token_blacklist VALUES ('100','test',3,'2000-01-01T00:00:00+00:00',0,0);")
         .execute(&db.pool).await.unwrap();
@@ -448,32 +444,37 @@ fn partner(id: &str, discord: &str) -> Channel {
         has_bot_auth: true,
         manual_partner_opt_out: Some(0),
         kept_active: true,
-        deadlock_days: 4,
+        active_days: 4,
         ..Default::default()
     }
 }
 
 #[test]
 fn unavailable_bot_makes_partner_inactive() {
-    assert_eq!(partner("1", "10").availability(), Entitlement::Active);
-    for reason in ["bot_banned", "token_error", "blocked"] {
+    assert_eq!(partner("1", "10").availability(true), Entitlement::Active);
+    for reason in [
+        "bot_banned",
+        "token_error",
+        "token_error_expired",
+        "blocked",
+    ] {
         let channel = Channel {
             technical_pause_reason: Some(reason.into()),
             ..partner("1", "10")
         };
-        assert_eq!(channel.entitlement(true, &ACTIVITY), Entitlement::Inactive);
+        assert_eq!(channel.entitlement(true, &policy()), Entitlement::Inactive);
     }
     let unmodded = Channel {
         bot_unmodded: true,
         ..partner("1", "10")
     };
-    assert_eq!(unmodded.entitlement(true, &ACTIVITY), Entitlement::Inactive);
+    assert_eq!(unmodded.entitlement(true, &policy()), Entitlement::Inactive);
     let without_auth = Channel {
         has_bot_auth: false,
         ..partner("1", "10")
     };
     assert_eq!(
-        without_auth.entitlement(true, &ACTIVITY),
+        without_auth.entitlement(true, &policy()),
         Entitlement::Inactive
     );
     let maintenance = Channel {
@@ -481,7 +482,7 @@ fn unavailable_bot_makes_partner_inactive() {
         ..partner("1", "10")
     };
     assert_eq!(
-        maintenance.entitlement(true, &ACTIVITY),
+        maintenance.entitlement(true, &policy()),
         Entitlement::Active
     );
     let unknown_status = Channel {
@@ -489,44 +490,186 @@ fn unavailable_bot_makes_partner_inactive() {
         bot_unmodded: true,
         ..partner("1", "10")
     };
-    assert_eq!(unknown_status.availability(), Entitlement::Inactive);
+    assert_eq!(unknown_status.availability(true), Entitlement::Inactive);
+    let relaxed = Policy {
+        require_bot_access: false,
+        ..policy()
+    };
+    assert_eq!(
+        without_auth.entitlement(true, &relaxed),
+        Entitlement::Active
+    );
+    assert_eq!(unmodded.entitlement(true, &relaxed), Entitlement::Active);
+    let blocked = Channel {
+        technical_pause_reason: Some("blocked".into()),
+        ..partner("1", "10")
+    };
+    assert_eq!(blocked.entitlement(true, &relaxed), Entitlement::Inactive);
 }
 
 #[test]
 fn holders_keep_with_recent_session_and_newcomers_need_enough_days() {
     let quiet_holder = Channel {
         kept_active: false,
-        deadlock_days: 0,
+        active_days: 0,
         ..partner("1", "10")
     };
     assert_eq!(
-        quiet_holder.entitlement(true, &ACTIVITY),
+        quiet_holder.entitlement(true, &policy()),
         Entitlement::Inactive
     );
     let recent_holder = Channel {
-        deadlock_days: 1,
+        active_days: 1,
         ..partner("1", "10")
     };
     assert_eq!(
-        recent_holder.entitlement(true, &ACTIVITY),
+        recent_holder.entitlement(true, &policy()),
         Entitlement::Active
     );
     assert_eq!(
-        recent_holder.entitlement(false, &ACTIVITY),
+        recent_holder.entitlement(false, &policy()),
         Entitlement::Inactive
     );
     let three_days = Channel {
-        deadlock_days: 3,
+        active_days: 3,
         ..partner("1", "10")
     };
     assert_eq!(
-        three_days.entitlement(false, &ACTIVITY),
+        three_days.entitlement(false, &policy()),
         Entitlement::Inactive
     );
     assert_eq!(
-        partner("1", "10").entitlement(false, &ACTIVITY),
+        partner("1", "10").entitlement(false, &policy()),
         Entitlement::Active
     );
+    let without_check = Policy {
+        method: ActivityMethod::None,
+        ..policy()
+    };
+    assert_eq!(
+        quiet_holder.entitlement(false, &without_check),
+        Entitlement::Active
+    );
+}
+
+fn policy_row() -> PolicyRow {
+    PolicyRow {
+        live_role_id: Some(3),
+        role_activity_method: "any_stream_days".into(),
+        role_keep_window_days: 14,
+        role_gain_window_days: 21,
+        role_gain_min_days: 2,
+        role_require_bot_access: false,
+    }
+}
+
+#[test]
+fn guild_policy_rows_parse_and_reject_invalid_values() {
+    assert_eq!(
+        policy_row().policy(),
+        Some(Policy {
+            live_role_id: Some(3),
+            method: ActivityMethod::AnyStreamDays,
+            keep_window_days: 14,
+            gain_window_days: 21,
+            gain_min_days: 2,
+            require_bot_access: false,
+        })
+    );
+    let without_live_role = PolicyRow {
+        live_role_id: None,
+        role_activity_method: "none".into(),
+        ..policy_row()
+    };
+    let parsed = without_live_role.policy().unwrap();
+    assert_eq!(parsed.live_role_id, None);
+    assert_eq!(parsed.method, ActivityMethod::None);
+    for invalid in [
+        PolicyRow {
+            role_activity_method: "weekly".into(),
+            ..policy_row()
+        },
+        PolicyRow {
+            role_gain_min_days: 22,
+            ..policy_row()
+        },
+        PolicyRow {
+            role_keep_window_days: 0,
+            ..policy_row()
+        },
+        PolicyRow {
+            role_gain_window_days: 366,
+            ..policy_row()
+        },
+        PolicyRow {
+            live_role_id: Some(0),
+            ..policy_row()
+        },
+    ] {
+        assert_eq!(invalid.policy(), None);
+    }
+    assert_eq!(
+        Policy::fallback(HOME_GUILD_ID).live_role_id,
+        Some(HOME_LIVE_ROLE_ID)
+    );
+    assert_eq!(Policy::fallback(1).live_role_id, None);
+}
+
+#[tokio::test]
+async fn guild_policy_falls_back_without_table_or_row() {
+    let db = crate::role_test_postgres::TestPostgres::start().await;
+    assert_eq!(
+        load_policy(&db.pool, HOME_GUILD_ID).await,
+        Policy::fallback(HOME_GUILD_ID)
+    );
+    sqlx::raw_sql(GUILD_TABLE).execute(&db.pool).await.unwrap();
+    assert_eq!(
+        load_policy(&db.pool, HOME_GUILD_ID).await,
+        Policy::fallback(HOME_GUILD_ID)
+    );
+    sqlx::raw_sql(
+        "INSERT INTO discord_guilds VALUES (1, NULL, 'any_stream_days', 14, 21, 2, false)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        load_policy(&db.pool, 1).await,
+        policy_row()
+            .policy()
+            .map(|policy| Policy {
+                live_role_id: None,
+                ..policy
+            })
+            .unwrap()
+    );
+}
+
+const GUILD_TABLE: &str = "CREATE TABLE discord_guilds (guild_id BIGINT PRIMARY KEY, live_role_id BIGINT, role_activity_method TEXT NOT NULL, role_keep_window_days INT NOT NULL, role_gain_window_days INT NOT NULL, role_gain_min_days INT NOT NULL, role_require_bot_access BOOL NOT NULL);";
+
+#[tokio::test]
+async fn stale_raid_auth_and_any_stream_method_follow_guild_policy() {
+    let (db, _server, relay, discord) = fixture().await;
+    sqlx::raw_sql(GUILD_TABLE).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO discord_guilds VALUES (1, NULL, 'deadlock_days', 28, 30, 4, true);
+        INSERT INTO twitch_partners VALUES ('101','active',true,1,0,NULL,NULL,NULL);
+        INSERT INTO twitch_streamer_identities VALUES ('101','11');
+        INSERT INTO twitch_raid_auth VALUES ('101', false);
+        UPDATE twitch_stream_sessions SET had_deadlock_in_session = false WHERE twitch_user_id = '101';
+        UPDATE twitch_raid_auth SET needs_reauth = true WHERE twitch_user_id = '100';",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
+    assert!(discord.0.lock().unwrap().holders.is_empty());
+    sqlx::raw_sql("UPDATE discord_guilds SET role_activity_method = 'any_stream_days'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    reconcile(&db.pool, &relay, &TARGETS, None).await.unwrap();
+    assert_eq!(discord.0.lock().unwrap().holders, BTreeSet::from([11]));
 }
 
 #[test]
@@ -534,7 +677,7 @@ fn channels_of_one_member_merge_with_active_winning() {
     let channels = [
         Channel {
             kept_active: false,
-            deadlock_days: 0,
+            active_days: 0,
             ..partner("1", "10")
         },
         partner("2", "10"),
@@ -547,7 +690,7 @@ fn channels_of_one_member_merge_with_active_winning() {
             ..partner("4", "11")
         },
     ];
-    let desired = entitlements(&channels, &[], &BTreeSet::from([10]), &ACTIVITY).unwrap();
+    let desired = entitlements(&channels, &[], &BTreeSet::from([10]), &policy()).unwrap();
     assert_eq!(desired.get(&10), Some(&Entitlement::Active));
     assert_eq!(desired.get(&11), Some(&Entitlement::Unknown));
 }
@@ -586,7 +729,9 @@ async fn live_role_follows_fresh_deadlock_streams_of_entitled_members() {
     sqlx::raw_sql(
         "INSERT INTO twitch_partners VALUES ('101','active',true,1,0,NULL,NULL,NULL);
         INSERT INTO twitch_streamer_identities VALUES ('101','11');
-        CREATE TABLE twitch_live_state (twitch_user_id TEXT, is_live INT, last_game TEXT, last_seen_at TEXT);",
+        CREATE TABLE twitch_live_state (twitch_user_id TEXT, is_live INT, last_game TEXT, last_seen_at TEXT);
+        INSERT INTO twitch_partners VALUES ('102','pending',true,1,0,NULL,NULL,NULL);
+        INSERT INTO twitch_streamer_identities VALUES ('102','12');",
     )
     .execute(&db.pool)
     .await
@@ -600,15 +745,17 @@ async fn live_role_follows_fresh_deadlock_streams_of_entitled_members() {
     .await
     .unwrap();
     discord.0.lock().unwrap().live_holders = BTreeSet::from([11, 12]);
-    let targets = Targets {
-        live_role_id: Some(3),
-        ..TARGETS
-    };
+    sqlx::raw_sql(GUILD_TABLE).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql("INSERT INTO discord_guilds VALUES (1, 3, 'deadlock_days', 28, 30, 4, true)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let targets = TARGETS;
     reconcile(&db.pool, &relay, &targets, None).await.unwrap();
     {
         let state = discord.0.lock().unwrap();
         assert_eq!(state.holders, BTreeSet::from([10]));
-        assert_eq!(state.live_holders, BTreeSet::from([10]));
+        assert_eq!(state.live_holders, BTreeSet::from([10, 12]));
     }
     sqlx::query("UPDATE twitch_live_state SET last_game='Just Chatting'")
         .execute(&db.pool)
@@ -617,5 +764,5 @@ async fn live_role_follows_fresh_deadlock_streams_of_entitled_members() {
     reconcile(&db.pool, &relay, &targets, None).await.unwrap();
     let state = discord.0.lock().unwrap();
     assert_eq!(state.holders, BTreeSet::from([10]));
-    assert!(state.live_holders.is_empty());
+    assert_eq!(state.live_holders, BTreeSet::from([12]));
 }

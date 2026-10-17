@@ -776,7 +776,7 @@ async fn main() {
     let bot_ban_handler = token_lifecycle_wiring::build_bot_ban_handler(
         pool.clone(),
         &settings.broker,
-        &config.discord,
+        &config.discord.token_lifecycle,
     );
     let mut bot_ban_status_probe: Option<Arc<dyn tb_raid::BotBanStatusProbe>> = None;
     let subscription_manager: Option<Arc<SubscriptionManager>> =
@@ -1869,7 +1869,7 @@ async fn main() {
                     Ok(relay) => {
                         let dm = token_lifecycle_wiring::BrokerTokenLifecycleNotifier::from_config(
                             Some(relay),
-                            &config.discord,
+                            &config.discord.token_lifecycle,
                             pool.clone(),
                         );
                         executor = executor.with_notifier(Arc::new(
@@ -1896,7 +1896,7 @@ async fn main() {
                     Ok(relay) => {
                         let dm = token_lifecycle_wiring::BrokerTokenLifecycleNotifier::from_config(
                             Some(relay),
-                            &config.discord,
+                            &config.discord.token_lifecycle,
                             pool.clone(),
                         );
                         refresh = refresh.with_notifier(Arc::new(
@@ -2129,7 +2129,7 @@ async fn main() {
         &supervisor,
         pool.clone(),
         &settings.broker,
-        &config.discord,
+        &config.discord.token_lifecycle,
         bot_ban_status_probe.clone(),
     );
 
@@ -2299,7 +2299,7 @@ async fn main() {
         &supervisor,
         pool.clone(),
         &settings.broker,
-        &config.discord,
+        &config.discord.token_lifecycle,
         moderator_remover.map(|r| r as Arc<dyn tb_raid::DeadlockPauseUnmodPort>),
         bot_ban_status_probe.clone(),
     );

@@ -387,10 +387,16 @@ discord_guilds|cross_server_raids|boolean|NO|true
 discord_guilds|guild_id|bigint|NO|
 discord_guilds|installed_at|timestamp with time zone|NO|now()
 discord_guilds|language|text|NO|'en'::text
+discord_guilds|live_role_id|bigint|YES|
 discord_guilds|name|text|YES|
 discord_guilds|ping_role_id|bigint|YES|
 discord_guilds|promo_invite_url|text|YES|
 discord_guilds|removed_at|timestamp with time zone|YES|
+discord_guilds|role_activity_method|text|NO|'deadlock_days'::text
+discord_guilds|role_gain_min_days|integer|NO|4
+discord_guilds|role_gain_window_days|integer|NO|30
+discord_guilds|role_keep_window_days|integer|NO|28
+discord_guilds|role_require_bot_access|boolean|NO|true
 discord_guilds|status|text|NO|'inactive'::text
 discord_guilds|streamer_role_id|bigint|YES|
 discord_guilds|updated_at|timestamp with time zone|NO|now()

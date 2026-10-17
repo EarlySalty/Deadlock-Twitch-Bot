@@ -1,3 +1,5 @@
+//! Bestehende Discord-Betriebsziele. Gleichnamige frühere ENV-Overrides hatten
+//! je Verbraucher verschiedene Fallbacks; diese bleiben ausdrücklich getrennt.
 use crate::{
     file::FileError,
     global::{public_url, range},
@@ -7,7 +9,6 @@ use std::path::PathBuf;
 
 const COMMUNITY: u64 = 1_289_721_245_281_292_288;
 const STREAMER_ROLE: u64 = 1_313_624_729_466_441_769;
-const LIVE_STREAMER_ROLE: u64 = 1_560_993_753_643_098_153;
 
 #[derive(Clone, Deserialize, Serialize, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -75,46 +76,15 @@ impl Default for StreamerLink {
 pub struct OAuthFollowup {
     pub guild_id: u64,
     pub streamer_role_id: u64,
-    pub live_streamer_role_id: u64,
     pub role_sync_interval_secs: u64,
-    pub role_keep_window_days: u32,
-    pub role_gain_window_days: u32,
-    pub role_gain_min_days: u32,
 }
 impl Default for OAuthFollowup {
     fn default() -> Self {
         Self {
             guild_id: COMMUNITY,
             streamer_role_id: STREAMER_ROLE,
-            live_streamer_role_id: LIVE_STREAMER_ROLE,
             role_sync_interval_secs: 60,
-            role_keep_window_days: 28,
-            role_gain_window_days: 30,
-            role_gain_min_days: 4,
         }
-    }
-}
-
-impl OAuthFollowup {
-    fn validate_activity(&self) -> Result<(), FileError> {
-        range(
-            u64::from(self.role_keep_window_days),
-            1,
-            365,
-            "discord.oauth_followup.role_keep_window_days",
-        )?;
-        range(
-            u64::from(self.role_gain_window_days),
-            1,
-            365,
-            "discord.oauth_followup.role_gain_window_days",
-        )?;
-        range(
-            u64::from(self.role_gain_min_days),
-            1,
-            u64::from(self.role_gain_window_days),
-            "discord.oauth_followup.role_gain_min_days",
-        )
     }
 }
 
@@ -136,6 +106,7 @@ impl Default for TokenLifecycle {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RaidOAuth {
+    /// None: bisher kein Guard. Some([]): Guard aktiv, niemand erlaubt.
     pub allowed_guild_ids: Option<Vec<i64>>,
     pub allowed_channel_ids: Option<Vec<i64>>,
     pub allowed_role_ids: Option<Vec<i64>>,
@@ -186,10 +157,6 @@ impl DiscordOperations {
                 "discord.oauth_followup.streamer_role_id",
             ),
             (
-                self.oauth_followup.live_streamer_role_id,
-                "discord.oauth_followup.live_streamer_role_id",
-            ),
-            (
                 self.token_lifecycle.streamer_role_id,
                 "discord.token_lifecycle.streamer_role_id",
             ),
@@ -203,7 +170,6 @@ impl DiscordOperations {
                 .token_lifecycle
                 .guild_id
                 .is_some_and(|id| id != self.oauth_followup.guild_id)
-            || self.oauth_followup.live_streamer_role_id == self.oauth_followup.streamer_role_id
         {
             return Err(FileError::invalid("discord.streamer_role_targets"));
         }
@@ -213,7 +179,6 @@ impl DiscordOperations {
             3600,
             "discord.oauth_followup.role_sync_interval_secs",
         )?;
-        self.oauth_followup.validate_activity()?;
         if let Some(id) = self.token_lifecycle.guild_id {
             range(id, 1, u64::MAX, "discord.token_lifecycle.guild_id")?;
         }
@@ -295,33 +260,5 @@ mod tests {
         config.token_lifecycle.guild_id = Some(1);
         config.token_lifecycle.streamer_role_id = 2;
         assert!(config.validate().is_ok());
-        config.oauth_followup.live_streamer_role_id = 2;
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn role_activity_defaults_and_bounds() {
-        let defaults = OAuthFollowup::default();
-        assert_eq!(
-            (
-                defaults.role_keep_window_days,
-                defaults.role_gain_window_days,
-                defaults.role_gain_min_days,
-                defaults.live_streamer_role_id,
-            ),
-            (28, 30, 4, 1_560_993_753_643_098_153)
-        );
-        for change in 0..5 {
-            let mut config = DiscordOperations::default();
-            let activity = &mut config.oauth_followup;
-            match change {
-                0 => activity.role_keep_window_days = 0,
-                1 => activity.role_gain_window_days = 366,
-                2 => activity.role_gain_min_days = 0,
-                3 => activity.role_gain_min_days = 31,
-                _ => activity.live_streamer_role_id = 0,
-            }
-            assert!(config.validate().is_err());
-        }
     }
 }

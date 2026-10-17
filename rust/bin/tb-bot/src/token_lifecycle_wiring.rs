@@ -59,25 +59,25 @@ fn token_lifecycle_sweep_policy(discord_enabled: bool) -> TokenLifecycleSweepPol
     }
 }
 
+/// Broker-gestützte Umsetzung des Discord-Reaktions-Ports. Alle Methoden sind
+/// best-effort: Fehler werden geloggt, nie propagiert (Python-Parität).
 pub(crate) struct BrokerTokenLifecycleNotifier {
     relay: Option<BrokerRelay>,
     guild_id: Option<u64>,
     role_id: u64,
-    targets: crate::streamer_role_sync::Targets,
     pool: PgPool,
 }
 
 impl BrokerTokenLifecycleNotifier {
     pub(crate) fn from_config(
         relay: Option<BrokerRelay>,
-        config: &tb_config::discord::DiscordOperations,
+        config: &tb_config::discord::TokenLifecycle,
         pool: PgPool,
     ) -> Self {
         Self {
             relay,
-            guild_id: config.token_lifecycle.guild_id,
-            role_id: config.token_lifecycle.streamer_role_id,
-            targets: crate::streamer_role_sync::Targets::from_config(&config.oauth_followup),
+            guild_id: config.guild_id,
+            role_id: config.streamer_role_id,
             pool,
         }
     }
@@ -149,7 +149,6 @@ impl TokenLifecycleNotifier for BrokerTokenLifecycleNotifier {
         let targets = crate::streamer_role_sync::Targets {
             guild_id,
             streamer_role_id: self.role_id,
-            ..self.targets
         };
         match crate::streamer_role_sync::reconcile(&self.pool, relay, &targets, Some(user_id)).await
         {
@@ -204,7 +203,7 @@ impl BotBannedChannelHandler for BrokerBotBanLifecycleHandler {
 pub(crate) fn build_bot_ban_handler(
     pool: PgPool,
     broker: &tb_config::BrokerConfig,
-    options: &tb_config::discord::DiscordOperations,
+    options: &tb_config::discord::TokenLifecycle,
 ) -> Arc<dyn BotBannedChannelHandler> {
     let notifier = match BrokerRelay::new(broker) {
         Ok(relay) => BrokerTokenLifecycleNotifier::from_config(Some(relay), options, pool.clone()),
@@ -227,7 +226,7 @@ pub fn spawn_token_lifecycle_schedulers(
     supervisor: &TaskSupervisor,
     pool: PgPool,
     broker: &tb_config::BrokerConfig,
-    options: &tb_config::discord::DiscordOperations,
+    options: &tb_config::discord::TokenLifecycle,
     bot_ban_status_probe: Option<Arc<dyn BotBanStatusProbe>>,
 ) {
     let (notifier, discord_enabled) = match BrokerRelay::new(broker) {
@@ -353,7 +352,7 @@ pub(crate) fn spawn_deadlock_pause_scheduler(
     supervisor: &TaskSupervisor,
     pool: PgPool,
     broker: &tb_config::BrokerConfig,
-    options: &tb_config::discord::DiscordOperations,
+    options: &tb_config::discord::TokenLifecycle,
     unmod: Option<Arc<dyn tb_raid::DeadlockPauseUnmodPort>>,
     remod: Option<Arc<dyn BotBanStatusProbe>>,
 ) -> Option<SharedDeadlockPauseReactor> {

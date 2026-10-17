@@ -5,7 +5,9 @@ use tb_transport_discord::{relay::TwitchLink, BrokerRelay};
 static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 const LIVE_FRESH_SECS: i64 = 300;
-const BOT_UNAVAILABLE_REASONS: [&str; 3] = ["bot_banned", "token_error", "blocked"];
+const HOME_GUILD_ID: u64 = 1_289_721_245_281_292_288;
+const HOME_LIVE_ROLE_ID: u64 = 1_560_993_753_643_098_153;
+const MAX_WINDOW_DAYS: u32 = 365;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Entitlement {
@@ -15,18 +17,9 @@ enum Entitlement {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Activity {
-    pub keep_window_days: u32,
-    pub gain_window_days: u32,
-    pub gain_min_days: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Targets {
     pub guild_id: u64,
     pub streamer_role_id: u64,
-    pub live_role_id: Option<u64>,
-    pub activity: Activity,
 }
 
 impl Targets {
@@ -34,12 +27,107 @@ impl Targets {
         Self {
             guild_id: config.guild_id,
             streamer_role_id: config.streamer_role_id,
-            live_role_id: Some(config.live_streamer_role_id),
-            activity: Activity {
-                keep_window_days: config.role_keep_window_days,
-                gain_window_days: config.role_gain_window_days,
-                gain_min_days: config.role_gain_min_days,
-            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivityMethod {
+    DeadlockDays,
+    AnyStreamDays,
+    None,
+}
+
+impl ActivityMethod {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "deadlock_days" => Some(Self::DeadlockDays),
+            "any_stream_days" => Some(Self::AnyStreamDays),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Policy {
+    live_role_id: Option<u64>,
+    method: ActivityMethod,
+    keep_window_days: u32,
+    gain_window_days: u32,
+    gain_min_days: u32,
+    require_bot_access: bool,
+}
+
+impl Policy {
+    fn fallback(guild_id: u64) -> Self {
+        Self {
+            live_role_id: (guild_id == HOME_GUILD_ID).then_some(HOME_LIVE_ROLE_ID),
+            method: ActivityMethod::DeadlockDays,
+            keep_window_days: 28,
+            gain_window_days: 30,
+            gain_min_days: 4,
+            require_bot_access: true,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct PolicyRow {
+    live_role_id: Option<i64>,
+    role_activity_method: String,
+    role_keep_window_days: i32,
+    role_gain_window_days: i32,
+    role_gain_min_days: i32,
+    role_require_bot_access: bool,
+}
+
+fn window(days: i32) -> Option<u32> {
+    u32::try_from(days)
+        .ok()
+        .filter(|days| (1..=MAX_WINDOW_DAYS).contains(days))
+}
+
+impl PolicyRow {
+    fn policy(&self) -> Option<Policy> {
+        let gain_window_days = window(self.role_gain_window_days)?;
+        let live_role_id = match self.live_role_id {
+            Some(id) => Some(u64::try_from(id).ok().filter(|id| *id > 0)?),
+            None => None,
+        };
+        Some(Policy {
+            live_role_id,
+            method: ActivityMethod::parse(&self.role_activity_method)?,
+            keep_window_days: window(self.role_keep_window_days)?,
+            gain_window_days,
+            gain_min_days: window(self.role_gain_min_days)
+                .filter(|days| *days <= gain_window_days)?,
+            require_bot_access: self.role_require_bot_access,
+        })
+    }
+}
+
+async fn load_policy(pool: &PgPool, guild_id: u64) -> Policy {
+    let Ok(guild) = i64::try_from(guild_id) else {
+        return Policy::fallback(guild_id);
+    };
+    let row = sqlx::query_as::<_, PolicyRow>(
+        "SELECT live_role_id, role_activity_method, role_keep_window_days,
+                role_gain_window_days, role_gain_min_days, role_require_bot_access
+           FROM discord_guilds WHERE guild_id = $1",
+    )
+    .bind(guild)
+    .fetch_optional(pool)
+    .await;
+    match row {
+        Ok(Some(row)) => row.policy().unwrap_or_else(|| {
+            tracing::warn!(guild_id, "Ungültige Rollen-Richtlinie, Standardwerte aktiv");
+            Policy::fallback(guild_id)
+        }),
+        Ok(None) => Policy::fallback(guild_id),
+        Err(error) => {
+            tracing::warn!(%error, guild_id, "Rollen-Richtlinie nicht lesbar, Standardwerte aktiv");
+            Policy::fallback(guild_id)
         }
     }
 }
@@ -57,12 +145,20 @@ struct Channel {
     bot_unmodded: bool,
     denied: bool,
     kept_active: bool,
-    deadlock_days: i64,
+    active_days: i64,
 }
 
 impl Channel {
-    fn availability(&self) -> Entitlement {
-        if self.denied
+    fn bot_unavailable(&self) -> bool {
+        self.bot_unmodded
+            || self
+                .technical_pause_reason
+                .as_deref()
+                .is_some_and(|reason| reason == "bot_banned" || reason.starts_with("token_error"))
+    }
+
+    fn excluded(&self) -> bool {
+        self.denied
             || self.manual_partner_opt_out.is_some_and(|value| value != 0)
             || self.departnered_at.is_some()
             || self.admin_archived_at.is_some()
@@ -70,48 +166,47 @@ impl Channel {
                 self.status.as_deref(),
                 Some("departnered" | "archived" | "blocked")
             )
-            || self
-                .technical_pause_reason
-                .as_deref()
-                .is_some_and(|reason| BOT_UNAVAILABLE_REASONS.contains(&reason))
-            || self.bot_unmodded
-        {
+            || self.technical_pause_reason.as_deref() == Some("blocked")
+    }
+
+    fn availability(&self, require_bot_access: bool) -> Entitlement {
+        if self.excluded() || (require_bot_access && self.bot_unavailable()) {
             return Entitlement::Inactive;
         }
         if self.status.as_deref() != Some("active") || self.manual_partner_opt_out != Some(0) {
             Entitlement::Unknown
-        } else if self.has_bot_auth {
+        } else if self.has_bot_auth || !require_bot_access {
             Entitlement::Active
         } else {
             Entitlement::Inactive
         }
     }
 
-    fn active_enough(&self, holder: bool, activity: &Activity) -> bool {
-        if holder {
-            self.kept_active
-        } else {
-            self.deadlock_days >= i64::from(activity.gain_min_days)
+    fn active_enough(&self, holder: bool, policy: &Policy) -> bool {
+        match policy.method {
+            ActivityMethod::None => true,
+            _ if holder => self.kept_active,
+            _ => self.active_days >= i64::from(policy.gain_min_days),
         }
     }
 
-    fn entitlement(&self, holder: bool, activity: &Activity) -> Entitlement {
-        match self.availability() {
-            Entitlement::Active if !self.active_enough(holder, activity) => Entitlement::Inactive,
+    fn entitlement(&self, holder: bool, policy: &Policy) -> Entitlement {
+        match self.availability(policy.require_bot_access) {
+            Entitlement::Active if !self.active_enough(holder, policy) => Entitlement::Inactive,
             state => state,
         }
     }
 }
 
-async fn channels(pool: &PgPool, activity: &Activity) -> Result<Vec<Channel>, sqlx::Error> {
+async fn channels(pool: &PgPool, policy: &Policy) -> Result<Vec<Channel>, sqlx::Error> {
     sqlx::query_as(
         "WITH activity AS (
              SELECT s.twitch_user_id,
                     BOOL_OR(s.started_at >= NOW() - make_interval(days => $1)) AS kept_active,
                     COUNT(DISTINCT (s.started_at AT TIME ZONE 'Europe/Berlin')::date)
-                        FILTER (WHERE s.started_at >= NOW() - make_interval(days => $2)) AS deadlock_days
+                        FILTER (WHERE s.started_at >= NOW() - make_interval(days => $2)) AS active_days
                FROM twitch_stream_sessions s
-              WHERE s.had_deadlock_in_session
+              WHERE ($3 OR COALESCE(s.had_deadlock_in_session, false))
                 AND s.started_at >= NOW() - make_interval(days => GREATEST($1, $2))
               GROUP BY s.twitch_user_id)
          SELECT COALESCE(p.twitch_user_id, i.twitch_user_id) AS twitch_user_id,
@@ -122,16 +217,18 @@ async fn channels(pool: &PgPool, activity: &Activity) -> Result<Vec<Channel>, sq
                 NULLIF(TRIM(p.admin_archived_at), '') AS admin_archived_at,
                 p.deadlock_pause_unmodded_at IS NOT NULL AS bot_unmodded,
                 EXISTS (SELECT 1 FROM twitch_raid_auth a
-                         WHERE a.twitch_user_id = COALESCE(p.twitch_user_id, i.twitch_user_id)) AS has_bot_auth,
+                         WHERE a.twitch_user_id = COALESCE(p.twitch_user_id, i.twitch_user_id)
+                           AND NOT COALESCE(a.needs_reauth, false)) AS has_bot_auth,
                 EXISTS (SELECT 1 FROM twitch_partner_signup_denylist d
                          WHERE d.twitch_user_id = COALESCE(p.twitch_user_id, i.twitch_user_id)) AS denied,
                 COALESCE(act.kept_active, false) AS kept_active,
-                COALESCE(act.deadlock_days, 0) AS deadlock_days
+                COALESCE(act.active_days, 0) AS active_days
            FROM twitch_partners p FULL OUTER JOIN twitch_streamer_identities i USING (twitch_user_id)
            LEFT JOIN activity act ON act.twitch_user_id = COALESCE(p.twitch_user_id, i.twitch_user_id)",
     )
-    .bind(window_days(activity.keep_window_days))
-    .bind(window_days(activity.gain_window_days))
+    .bind(window_days(policy.keep_window_days))
+    .bind(window_days(policy.gain_window_days))
+    .bind(policy.method == ActivityMethod::AnyStreamDays)
     .fetch_all(pool)
     .await
 }
@@ -231,7 +328,7 @@ fn entitlements(
     channels: &[Channel],
     links: &[TwitchLink],
     holders: &BTreeSet<u64>,
-    activity: &Activity,
+    policy: &Policy,
 ) -> Result<BTreeMap<u64, Entitlement>, String> {
     Ok(linked_channels(channels, links)?
         .into_iter()
@@ -241,7 +338,7 @@ fn entitlements(
                 .into_iter()
                 .map(|channel| {
                     channel.map_or(Entitlement::Unknown, |channel| {
-                        channel.entitlement(holder, activity)
+                        channel.entitlement(holder, policy)
                     })
                 })
                 .reduce(merge)
@@ -311,6 +408,7 @@ struct LiveTarget<'a> {
     guild_id: u64,
     role_id: u64,
     members: &'a BTreeSet<u64>,
+    unknown: &'a BTreeSet<u64>,
     only_user: Option<u64>,
 }
 
@@ -328,7 +426,10 @@ async fn sync_live_role(
         Some(id) => BTreeSet::from([id]),
         None => holders.union(desired).copied().collect(),
     };
-    for user_id in users.into_iter().filter(|id| target.members.contains(id)) {
+    for user_id in users
+        .into_iter()
+        .filter(|id| target.members.contains(id) && !target.unknown.contains(id))
+    {
         let enabled = desired.contains(&user_id);
         if enabled != holders.contains(&user_id) {
             write_role(
@@ -354,7 +455,7 @@ pub async fn reconcile(
     let _guard = SYNC_LOCK.lock().await;
     let guild_id = targets.guild_id;
     let role_id = targets.streamer_role_id;
-    let activity = &targets.activity;
+    let policy = load_policy(pool, guild_id).await;
     let members = relay
         .live_role_members(guild_id, guild_id)
         .await
@@ -367,10 +468,10 @@ pub async fn reconcile(
         .twitch_links()
         .await
         .map_err(|error| error.to_string())?;
-    let snapshot = channels(pool, activity)
+    let snapshot = channels(pool, &policy)
         .await
         .map_err(|error| error.to_string())?;
-    let desired = entitlements(&snapshot, &links, &holders, activity)?;
+    let desired = entitlements(&snapshot, &links, &holders, &policy)?;
     let users: BTreeSet<_> = match only_user {
         Some(id) => BTreeSet::from([id]),
         None => holders
@@ -405,12 +506,12 @@ pub async fn reconcile(
         };
         if enabled != holders.contains(&user_id) {
             let current = entitlements(
-                &channels(pool, activity)
+                &channels(pool, &policy)
                     .await
                     .map_err(|error| error.to_string())?,
                 &links,
                 &holders,
-                activity,
+                &policy,
             )?;
             if current
                 .get(&user_id)
@@ -428,15 +529,21 @@ pub async fn reconcile(
             outcome = Some(enabled);
         }
     }
-    if let Some(live_role_id) = targets.live_role_id {
+    if let Some(live_role_id) = policy.live_role_id {
         let live = live_deadlock_channels(pool)
             .await
             .map_err(|error| error.to_string())?;
         let desired_live = live_desired(&snapshot, &links, &desired, &live)?;
+        let unknown: BTreeSet<u64> = desired
+            .iter()
+            .filter(|(_, state)| **state == Entitlement::Unknown)
+            .map(|(id, _)| *id)
+            .collect();
         let target = LiveTarget {
             guild_id,
             role_id: live_role_id,
             members: &members,
+            unknown: &unknown,
             only_user,
         };
         sync_live_role(relay, target, &desired_live, &mut counters).await?;
