@@ -208,14 +208,15 @@ type Translate = (key: string, params?: Record<string, string | number>) => stri
 
 function issueChips(actions: OverviewRow[], reviewsInPlan: boolean, t: Translate): IssueChip[] {
   const chips: IssueChip[] = [];
-  for (const row of actions) {
-    if (row.key === 'jobs' || row.key === 'failed' || (row.key === 'reviews' && reviewsInPlan)) chips.push({ key: row.key, label: row.title, detail: row.meta, tone: row.tone ?? 'warning', onClick: row.onClick });
-  }
   const published = actions.filter(row => row.key.startsWith('publish-'));
-  if (published[0]) chips.push({ key: 'publish', label: t(published.length === 1 ? '{count} Veröffentlichung prüfen' : '{count} Veröffentlichungen prüfen', { count: published.length }), detail: published.map(row => row.title).join(', '), tone: 'warning', onClick: published[0].onClick });
-  for (const row of actions.filter(item => item.key.startsWith('platform-'))) {
-    const expiring = row.meta === t('Verbindung läuft bald ab');
-    chips.push({ key: row.key, label: t(expiring ? '{platform}: Verbindung läuft bald ab' : '{platform} nicht verbunden', { platform: row.title }), detail: row.meta, tone: 'warning', onClick: row.onClick });
+  for (const row of actions) {
+    if (['hold', 'clips', 'video-reviews'].includes(row.key) || (row.key === 'reviews' && !reviewsInPlan)) continue;
+    if (row.key.startsWith('publish-')) {
+      if (row === published[0]) chips.push({ key: 'publish', label: t(published.length === 1 ? '{count} Veröffentlichung prüfen' : '{count} Veröffentlichungen prüfen', { count: published.length }), detail: published.map(item => item.title).join(', '), tone: 'warning', onClick: row.onClick });
+      continue;
+    }
+    const label = row.key.startsWith('platform-') && row.meta ? `${row.title}: ${row.meta}` : row.title;
+    chips.push({ key: row.key, label, detail: row.meta, tone: row.tone ?? 'warning', onClick: row.onClick });
   }
   return chips;
 }

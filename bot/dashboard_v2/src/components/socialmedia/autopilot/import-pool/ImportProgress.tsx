@@ -25,9 +25,21 @@ export function ImportProgress({ job }: { job: ImportJob }) {
   return (
     <div className="import-pool-progress" data-import-status={job.status}>
       {visibleStatus && status}
+      {job.next_retry_at && (
+        <p>
+          {t("Nächster Versuch frühestens")}:{" "}
+          {localTimestamp(job.next_retry_at, job.timezone, locale)}
+        </p>
+      )}
+      {job.last_error && (
+        <p className="import-pool-warning">{t(job.last_error)}</p>
+      )}
       <details className="import-pool-summary">
       <summary>{t("{count} erfasst", { count: job.persisted_count })} · {t("Importdetails")}</summary>
       {!visibleStatus && status}
+      <p className="import-pool-help">
+        {t("Verwendet den gespeicherten Zeitraum. Ein laufender Import behält seinen ursprünglichen Zeitraum.")}
+      </p>
       <p className="import-pool-help">
         {t("Festgelegter Zeitraum")}:{" "}
         {filterDescription(job.clip_date_filter, t)}. {job.timezone}
@@ -71,15 +83,6 @@ export function ImportProgress({ job }: { job: ImportJob }) {
           {localTimestamp(job.active_window.end, job.timezone, locale)}.{" "}
           {job.active_window.pages} {t("Seiten abgerufen")}.
         </p>
-      )}
-      {job.next_retry_at && (
-        <p>
-          {t("Nächster Versuch frühestens")}:{" "}
-          {localTimestamp(job.next_retry_at, job.timezone, locale)}
-        </p>
-      )}
-      {job.last_error && (
-        <p className="import-pool-warning">{t(job.last_error)}</p>
       )}
       {incomplete && (
         <div className="import-pool-warning">
