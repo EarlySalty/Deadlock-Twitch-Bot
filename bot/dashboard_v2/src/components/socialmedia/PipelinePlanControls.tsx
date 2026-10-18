@@ -171,10 +171,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
                   onChange={slots => edit({ per_platform: { ...draft.per_platform, [activeTab]: slots } })} />
               </div>
             </div>}
-          {(draft.target_platforms.length > 1 || draft.distribution_policy === 'independent_clips' || base.policy.distribution_policy === 'independent_clips') && <div className="sq-toggles pp-distribution">
-            <label><input type="checkbox" role="switch" checked={draft.distribution_policy === 'independent_clips'} onChange={event => edit({ distribution_policy: event.target.checked ? 'independent_clips' : 'same_clip' })} />{text('Unterschiedliche Clips je Plattform posten')}</label>
-            <p className="sq-help pp-distribution-note">{text(DISTRIBUTION_NOTES[draft.distribution_policy])}</p>
-          </div>}
+          {draft.target_platforms.length > 1 && <p className="sq-help pp-distribution-note">{text(DISTRIBUTION_NOTES[draft.distribution_policy])}</p>}
           <p className="sq-help">{text('Sommerzeit wird berücksichtigt. Verpasste Termine werden nicht nachgeholt.')}</p>
           {preview.production_hold && <p className="sq-help">{text(HOLDS[preview.production_hold])}</p>}
         </Step>

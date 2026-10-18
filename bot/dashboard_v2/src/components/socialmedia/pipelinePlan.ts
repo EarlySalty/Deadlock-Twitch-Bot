@@ -49,8 +49,8 @@ export const HOLDS: Record<Exclude<ProductionHold, null>, string> = {
 };
 
 export const DISTRIBUTION_NOTES: Record<DistributionPolicy, string> = {
-  same_clip: 'Aktiv: Derselbe Clip wird auf allen aktiven Plattformen veröffentlicht (empfohlen).',
-  independent_clips: 'Aktiv: Jede Plattform zieht sich einen eigenen, anderen Clip aus dem Vorrat (verbraucht mehr Clips).',
+  same_clip: 'Derselbe Clip geht zur selben Zeit auf allen Plattformen raus.',
+  independent_clips: 'Jede Plattform bekommt einen eigenen Clip zu ihren eigenen Zeiten. Das verbraucht mehr Clips.',
 };
 
 export function planPreview(snapshot: ScheduleQueueSnapshot, policy: DistributionPolicy): PolicyPreview {
@@ -109,9 +109,8 @@ export const PLAN_EN: Record<string, string> = {
   'Plattform wählen': 'Choose platform',
   'Vorlauf': 'Lead time',
   'h vor Termin': 'h before the slot',
-  'Unterschiedliche Clips je Plattform posten': 'Post different clips on each platform',
-  'Aktiv: Derselbe Clip wird auf allen aktiven Plattformen veröffentlicht (empfohlen).': 'Active: The same clip is published on all active platforms (recommended).',
-  'Aktiv: Jede Plattform zieht sich einen eigenen, anderen Clip aus dem Vorrat (verbraucht mehr Clips).': 'Active: Each platform takes its own, different clip from the pool (uses more clips).',
+  'Derselbe Clip geht zur selben Zeit auf allen Plattformen raus.': 'The same clip goes out at the same time on every platform.',
+  'Jede Plattform bekommt einen eigenen Clip zu ihren eigenen Zeiten. Das verbraucht mehr Clips.': 'Each platform gets its own clip at its own times. This uses more clips.',
   'Zeiten für {platform}': 'Times for {platform}',
   'Alle Plattformen': 'All platforms',
   'Nächster Termin je Plattform': 'Next slot per platform',
@@ -244,7 +243,7 @@ export function planDraft({ snapshot, policy }: PlanState): PlanDraft {
     pipeline_mode: policy.pipeline_mode,
     review_policy: policy.review_policy,
     schedule_scope: policy.schedule_scope,
-    distribution_policy: policy.distribution_policy,
+    distribution_policy: distributionFor(policy.schedule_scope),
     metadata_scope: policy.metadata_scope,
     texts: textsFromPolicy(policy),
     shared: structuredClone(snapshot.settings.schedule_slots),
@@ -341,6 +340,10 @@ export function addTime(slots: WeeklySlot[], weekday: number): WeeklySlot[] {
   return [...slots, { weekday, local_time }];
 }
 
+export function distributionFor(scope: PolicyScope): DistributionPolicy {
+  return scope === 'per_platform' ? 'independent_clips' : 'same_clip';
+}
+
 export function switchScope(draft: PlanDraft, scope: PolicyScope): PlanDraft {
   if (scope === draft.schedule_scope) return draft;
   if (scope === 'per_platform') {
@@ -348,10 +351,10 @@ export function switchScope(draft: PlanDraft, scope: PolicyScope): PlanDraft {
     for (const platform of draft.target_platforms) {
       if (!per_platform[platform]?.length) per_platform[platform] = structuredClone(draft.shared);
     }
-    return { ...draft, schedule_scope: 'per_platform', per_platform };
+    return { ...draft, schedule_scope: 'per_platform', distribution_policy: distributionFor('per_platform'), per_platform };
   }
   const union = normalizeSlots(draft.target_platforms.flatMap(platform => draft.per_platform[platform] ?? []));
-  return { ...draft, schedule_scope: 'shared', shared: union.length ? union : draft.shared };
+  return { ...draft, schedule_scope: 'shared', distribution_policy: distributionFor('shared'), shared: union.length ? union : draft.shared };
 }
 
 export function scopeMergeChanges(draft: PlanDraft): boolean {
