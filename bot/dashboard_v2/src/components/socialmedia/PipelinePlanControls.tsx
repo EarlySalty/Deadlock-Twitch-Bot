@@ -319,7 +319,7 @@ function NextSlots({ base, preview, targets, independent, locale, text }: { base
   const next = preview.next_slots;
   const shown = targets.filter(platform => base.snapshot.settings.target_platforms.includes(platform));
   const titleId = useId();
-  const common = !independent && shown.length > 1 && new Set(shown.map(platform => next[platform] ?? '')).size === 1;
+  const common = !independent && shown.length > 1 && next[shown[0]] !== undefined && new Set(shown.map(platform => next[platform] ?? '')).size === 1;
   return <div className="pp-info-item pp-next-block">
     <span id={titleId} className="pp-next-title">{text(independent && shown.length > 1 ? 'Nächster Termin je Plattform' : 'Nächster Termin')}</span>
     <dl className="pp-next" aria-labelledby={titleId}>
