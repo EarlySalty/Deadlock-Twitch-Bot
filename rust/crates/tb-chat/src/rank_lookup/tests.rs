@@ -311,25 +311,101 @@ fn target() -> CommandTarget {
     }
 }
 
-#[tokio::test]
-async fn verified_primary_gc_rank_wins_without_any_public_request() {
-    let db = database().await;
-    let server = MockServer::start().await;
+async fn bot_rank(server: &MockServer, key: &str, value: &str, updated_at: i64) {
     Mock::given(path("/rank"))
-        .and(query_param("discord_id", "101"))
+        .and(query_param(key, value))
+        .and(query_param("refresh", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "linked":true,"verified":true,"is_steam_friend":true,"rank_name":"Oracle","subrank":4
+            "linked":true,"verified":true,"is_steam_friend":true,"rank_name":"Eternus",
+            "subrank":3,"steam_id":"76561197960278073","rank_updated_at":updated_at
         })))
         .expect(1)
-        .mount(&server)
+        .mount(server)
         .await;
+}
+
+#[tokio::test]
+async fn refreshed_bot_rank_newer_than_the_api_match_wins() {
+    let db = database().await;
+    let server = MockServer::start().await;
+    bot_rank(&server, "discord_id", "101", 1_790_000_000).await;
+    public_rank(&server, 12345, 1).await;
     assert_eq!(
         lookup(&server)
             .twitch_reply(&db.pool, &target(), true)
             .await,
-        "Rang von Viewer: Oracle 4"
+        "Rang von Viewer: Eternus 3 (Steam-Bot; Stand 21.09.2026)."
     );
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn bot_rank_older_than_the_api_match_loses_to_the_api_rank() {
+    let db = database().await;
+    let server = MockServer::start().await;
+    bot_rank(&server, "discord_id", "101", 1_789_000_000).await;
+    public_rank(&server, 12345, 1).await;
+    let text = lookup(&server)
+        .twitch_reply(&db.pool, &target(), true)
+        .await;
+    assert!(text.starts_with("Rang von Viewer: Oracle 5 (Deadlock API; letztes erfasstes Ranked-Match vom 17.09.2026)"), "{text}");
+}
+
+#[tokio::test]
+async fn connected_account_asks_the_bot_by_steam_id_and_takes_its_newer_rank() {
+    let db = database().await;
+    let revision = crate::player_links::prepare(&db.pool, "target")
+        .await
+        .unwrap();
+    crate::player_links::complete(
+        &db.pool,
+        "target",
+        revision,
+        crate::player_links::STEAM64_BASE + 12345,
+        "direct",
+    )
+    .await
+    .unwrap();
+    let server = MockServer::start().await;
+    bot_rank(&server, "steam_id", "76561197960278073", 1_790_000_000).await;
+    public_rank(&server, 12345, 1).await;
+    let text = lookup(&server)
+        .twitch_reply(&db.pool, &target(), true)
+        .await;
+    assert_eq!(
+        text,
+        "Rang von Viewer: Eternus 3 (Steam-Bot; Stand 21.09.2026)."
+    );
+    assert!(!server.received_requests().await.unwrap().iter().any(|r| r
+        .url
+        .query()
+        .unwrap_or_default()
+        .contains("discord_id")));
+}
+
+#[tokio::test]
+async fn bot_rank_without_timestamp_or_tie_is_preferred() {
+    let api = || {
+        Ok(ApiRank {
+            name: "Oracle".into(),
+            subrank: 5,
+            last_match: Some(100),
+        })
+    };
+    let bot = |updated_at| {
+        Some(BotRank {
+            name: "Eternus".into(),
+            subrank: Some(2),
+            updated_at,
+        })
+    };
+    assert!(newest_rank_reply("Viewer", bot(None), api()).contains("Eternus 2 (Steam-Bot)"));
+    assert!(newest_rank_reply("Viewer", bot(Some(100)), api()).contains("Eternus 2"));
+    assert!(newest_rank_reply("Viewer", bot(Some(99)), api()).contains("Oracle 5"));
+    assert!(newest_rank_reply("Viewer", None, api()).contains("Oracle 5"));
+    assert!(
+        newest_rank_reply("Viewer", bot(Some(99)), Err("API down".into()))
+            .contains("Eternus 2 (Steam-Bot")
+    );
 }
 
 #[tokio::test]
@@ -339,6 +415,7 @@ async fn missing_friend_and_missing_rank_fall_back_to_the_primary_steam_id() {
         let server = MockServer::start().await;
         Mock::given(path("/rank"))
             .and(query_param("discord_id", "101"))
+            .and(query_param("refresh", "1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "linked":true,"verified":true,"is_steam_friend":is_steam_friend,
                 "steam_id":"76561197960278073"
