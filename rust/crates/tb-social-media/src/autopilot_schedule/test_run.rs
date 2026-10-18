@@ -76,7 +76,7 @@ pub async fn start_test_run(pool: &PgPool, owner: &str) -> Result<TestRun, Sched
     };
     sqlx::query(
         "INSERT INTO social_production_jobs (twitch_user_id, clip_id, source, queue_order)
-        VALUES ($1, $2, 'test', COALESCE((SELECT MIN(queue_order) - 1 FROM social_production_jobs), 1))",
+        VALUES ($1, $2, 'test', COALESCE((SELECT MAX(queue_order) + 1 FROM social_production_jobs), 1))",
     )
     .bind(owner)
     .bind(clip)
@@ -130,8 +130,19 @@ pub async fn discard_test_run(
         "completed" if videos.is_empty() => return Err(ScheduleError::NotInReview),
         _ => {}
     }
+    sqlx::query(
+        "UPDATE social_production_jobs SET status = 'cancelled', stage = 'test_discarded',
+            finished_at = NOW(), scheduled_at = NULL WHERE id = $1",
+    )
+    .bind(job_id)
+    .execute(&mut *tx)
+    .await?;
     for video in videos {
         crate::autopilot_publish::release_slot(&mut tx, video).await?;
+        sqlx::query("DELETE FROM social_media_clip_approval WHERE produced_video_id = $1")
+            .bind(video)
+            .execute(&mut *tx)
+            .await?;
         sqlx::query(
             "UPDATE social_produced_videos SET status = 'rejected', expires_at = clock_timestamp(),
                 needs_review = TRUE WHERE id = $1",
@@ -141,17 +152,14 @@ pub async fn discard_test_run(
         .await?;
     }
     sqlx::query(
-        "UPDATE social_production_jobs SET status = 'cancelled', stage = 'test_discarded',
-            finished_at = NOW(), scheduled_at = NULL WHERE id = $1",
+        "UPDATE social_clip_pool SET selected_at = NULL,
+            processed_at = CASE WHEN social_clip_video_holds(clip_db_id) THEN processed_at END
+        WHERE twitch_user_id = $1 AND clip_db_id = $2",
     )
-    .bind(job_id)
+    .bind(owner)
+    .bind(clip)
     .execute(&mut *tx)
     .await?;
-    sqlx::query("UPDATE social_clip_pool SET selected_at = NULL WHERE twitch_user_id = $1 AND clip_db_id = $2")
-        .bind(owner)
-        .bind(clip)
-        .execute(&mut *tx)
-        .await?;
     tx.commit().await?;
     Ok(())
 }

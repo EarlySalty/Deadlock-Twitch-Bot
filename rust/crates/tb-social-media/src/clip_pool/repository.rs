@@ -178,7 +178,7 @@ pub async fn list(
     let newest = settings.clip_sort == ClipSort::NewestFirst;
     let rows = sqlx::query("SELECT p.*, p.source_created_at >= $4 AND p.source_created_at < $5 AS eligible,
         EXISTS(SELECT 1 FROM social_production_jobs j WHERE j.clip_id = p.clip_db_id AND j.status <> 'cancelled')
-        OR EXISTS(SELECT 1 FROM social_produced_videos v WHERE v.clip_id = p.clip_db_id)
+        OR social_clip_video_holds(p.clip_db_id)
         OR EXISTS(SELECT 1 FROM twitch_clips_upload_queue q WHERE q.clip_id = p.clip_db_id) AS reserved,
         (SELECT c.view_count FROM twitch_clips_social_media c WHERE c.id = p.clip_db_id) AS view_count
         FROM social_clip_pool p WHERE p.twitch_user_id = $1
@@ -243,7 +243,7 @@ pub async fn set_selected(
     .ok_or(PoolError::NotFound)?;
     let source_id: Option<i64> = row.try_get("clip_db_id")?;
     let protected: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_production_jobs WHERE clip_id = $1 AND status <> 'cancelled')
-        OR EXISTS(SELECT 1 FROM social_produced_videos WHERE clip_id = $1)
+        OR social_clip_video_holds($1)
         OR EXISTS(SELECT 1 FROM twitch_clips_upload_queue WHERE clip_id = $1)")
         .bind(source_id).fetch_one(&mut *tx).await?;
     let processed_at: Option<DateTime<Utc>> = row.try_get("processed_at")?;

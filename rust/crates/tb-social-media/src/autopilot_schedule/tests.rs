@@ -49,6 +49,18 @@ async fn apply_slot_guards(pool: &PgPool) {
     .execute(pool)
     .await
     .expect("actual destination slot migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261018120000_social_production_test_run.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("actual destination slot migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261018130000_social_test_run_discard_release.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("actual destination slot migration");
 }
 
 async fn pool_before_slot_guards() -> PgPool {

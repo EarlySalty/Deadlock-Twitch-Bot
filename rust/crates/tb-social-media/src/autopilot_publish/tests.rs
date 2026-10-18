@@ -70,6 +70,8 @@ async fn pool() -> PgPool {
         include_str!("../../../../migrations/20261013140000_social_autopilot_publishing.sql"),
         include_str!("../../../../migrations/20261015124000_social_pipeline_policy.sql"),
         include_str!("../../../../migrations/20261015180000_social_destination_slots.sql"),
+        include_str!("../../../../migrations/20261018120000_social_production_test_run.sql"),
+        include_str!("../../../../migrations/20261018130000_social_test_run_discard_release.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(&pool)

@@ -586,3 +586,60 @@ async fn explicit_retry_resets_unfinished_ai_attempts_without_losing_checkpoints
     assert_eq!(resumed.status, "queued");
     cleanup(pool).await;
 }
+
+#[tokio::test]
+async fn discarding_a_reviewed_test_run_returns_the_clip_to_the_pool() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let id = clip(&pool, "owner", "test-run", utc("2025-01-01T00:00:00Z")).await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    assert_eq!(run.clip_id, id);
+    sqlx::query("UPDATE social_production_jobs SET status = 'completed' WHERE id = $1")
+        .bind(run.job_id)
+        .execute(&pool)
+        .await
+        .expect("test job complete");
+    let video: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at)
+        VALUES ('owner', $1, $2, 'static', 'review', '/fixture/test.mp4', 1000, clock_timestamp() + INTERVAL '7 days') RETURNING id")
+        .bind(id).bind(run.job_id).fetch_one(&pool).await.expect("test review");
+    sqlx::query("INSERT INTO social_media_clip_approval (produced_video_id, platform, state) VALUES ($1, 'youtube', 'awaiting_approval')")
+        .bind(video)
+        .execute(&pool)
+        .await
+        .expect("pending approval");
+    let processed: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT processed_at FROM social_clip_pool WHERE clip_db_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("processed before discard");
+    assert!(processed.is_some());
+    discard_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect("discard");
+    let (processed, selected): (Option<DateTime<Utc>>, Option<DateTime<Utc>>) = sqlx::query_as(
+        "SELECT processed_at, selected_at FROM social_clip_pool WHERE clip_db_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("pool row");
+    assert_eq!((processed, selected), (None, None));
+    let approvals: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM social_media_clip_approval WHERE produced_video_id = $1",
+    )
+    .bind(video)
+    .fetch_one(&pool)
+    .await
+    .expect("approval count");
+    assert_eq!(approvals, 0);
+    let holds: bool = sqlx::query_scalar("SELECT social_clip_video_holds($1)")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .expect("clip hold");
+    assert!(!holds);
+    let again = start_test_run(&pool, "owner").await.expect("second run");
+    assert_eq!(again.clip_id, id);
+    cleanup(pool).await;
+}
