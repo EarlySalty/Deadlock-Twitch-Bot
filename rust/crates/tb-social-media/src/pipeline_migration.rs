@@ -7,8 +7,9 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool, Row};
 
 use crate::autopilot_settings::{
-    self, AutopilotSettings, MigrationDisposition, PipelineMigrationMapping, PipelineMode,
-    PipelinePolicy, PolicyScope, PublishMode, ReviewPolicy, ScheduleSlot, SettingsError,
+    self, AutopilotSettings, DistributionPolicy, MigrationDisposition, PipelineMigrationMapping,
+    PipelineMode, PipelinePolicy, PolicyScope, PublishMode, ReviewPolicy, ScheduleSlot,
+    SettingsError,
 };
 use crate::posting_plan::PLATFORMS;
 
@@ -1669,6 +1670,7 @@ impl<'a> Context<'a> {
             policy.platform_schedule_slots = patterns.clone();
             Vec::new()
         };
+        policy.distribution_policy = DistributionPolicy::for_scope(policy.schedule_scope);
         json!({
             "policy": policy,
             "policy_source": source,

@@ -360,6 +360,15 @@ pub enum DistributionPolicy {
     IndependentClips,
 }
 
+impl DistributionPolicy {
+    pub fn for_scope(scope: PolicyScope) -> Self {
+        match scope {
+            PolicyScope::Shared => Self::SameClip,
+            PolicyScope::PerPlatform => Self::IndependentClips,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TextDefaults {
@@ -491,6 +500,7 @@ pub async fn save_policy(
 ) -> Result<PipelinePolicy, SettingsError> {
     policy.validate()?;
     let mut policy = policy.clone();
+    policy.distribution_policy = DistributionPolicy::for_scope(policy.schedule_scope);
     for slots in policy.platform_schedule_slots.values_mut() {
         slots.sort_by(|a, b| (a.weekday, &a.local_time).cmp(&(b.weekday, &b.local_time)));
         slots.dedup();
