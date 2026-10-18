@@ -402,6 +402,10 @@ async fn bot_rank_without_timestamp_or_tie_is_preferred() {
     assert!(newest_rank_reply("Viewer", bot(Some(100)), api()).contains("Eternus 2"));
     assert!(newest_rank_reply("Viewer", bot(Some(99)), api()).contains("Oracle 5"));
     assert!(newest_rank_reply("Viewer", None, api()).contains("Oracle 5"));
+    assert!(
+        newest_rank_reply("Viewer", bot(Some(99)), Err("API down".into()))
+            .contains("Eternus 2 (Steam-Bot")
+    );
 }
 
 #[tokio::test]
