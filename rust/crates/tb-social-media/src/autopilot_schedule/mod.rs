@@ -879,23 +879,12 @@ struct PreviewContext<'a> {
     now: DateTime<Utc>,
 }
 
-fn earliest_slot(
-    allocator: &Allocator,
-    next_slots: &BTreeMap<String, DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> Result<Option<DateTime<Utc>>, ScheduleError> {
-    if allocator.independent() && !next_slots.is_empty() {
-        return Ok(next_slots.values().min().copied());
-    }
-    Ok(allocator.plan(now)?.map(|plan| plan.reference))
-}
-
 fn preview(
     allocator: &Allocator,
     context: &PreviewContext<'_>,
 ) -> Result<PolicyPreview, ScheduleError> {
     let next_slots = allocator.next_slots(context.now)?;
-    let next_slot = earliest_slot(allocator, &next_slots, context.now)?;
+    let next_slot = allocator.plan(context.now)?.map(|plan| plan.reference);
     let mut production_hold = hold(
         context.settings,
         context.review_required,

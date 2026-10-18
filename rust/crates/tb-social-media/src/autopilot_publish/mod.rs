@@ -544,7 +544,8 @@ async fn videos_on(
             needs_review, review_reasons::text AS review_reasons, file_path, artifact_deleted_at,
             cleanup_error, scheduled_at, publication_executed_at, publication_completed_at,
             metadata::text AS metadata,
-            (SELECT j.id FROM social_production_jobs j WHERE j.id = ranked.job_id
+            (SELECT j.id FROM social_production_jobs j
+                WHERE j.id = social_video_job(ranked.job_id, ranked.metadata)
                 AND j.source = 'test') AS test_job_id
          FROM ranked WHERE unresolved OR position <= $3
          ORDER BY created_at DESC, id DESC",

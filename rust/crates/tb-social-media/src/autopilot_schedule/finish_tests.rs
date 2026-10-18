@@ -639,6 +639,78 @@ async fn discarding_a_reviewed_test_run_returns_the_clip_to_the_pool() {
         .await
         .expect("clip hold");
     assert!(!holds);
+    let managed: bool = sqlx::query_scalar(
+        "UPDATE twitch_clips_social_media SET game_id = '2132205352', clip_title = 'touched'
+        WHERE id = $1 RETURNING pool_managed_at IS NOT NULL",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("clip row write after discard");
+    assert!(managed);
+    let processed: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT processed_at FROM social_clip_pool WHERE clip_db_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("processed after clip write");
+    assert_eq!(processed, None);
+    let again = start_test_run(&pool, "owner").await.expect("second run");
+    assert_eq!(again.clip_id, id);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn discarding_a_revised_test_run_rejects_every_version_and_frees_the_clip() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let id = clip(&pool, "owner", "test-revision", utc("2025-01-01T00:00:00Z")).await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    sqlx::query("UPDATE social_production_jobs SET status = 'completed' WHERE id = $1")
+        .bind(run.job_id)
+        .execute(&pool)
+        .await
+        .expect("test job complete");
+    let parent: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at, metadata)
+        VALUES ('owner', $1, $2, 'ai', 'rejected', '/fixture/parent.mp4', 1000, clock_timestamp() + INTERVAL '7 days',
+            jsonb_build_object('production_ai_job_id', $2::bigint)) RETURNING id")
+        .bind(id).bind(run.job_id).fetch_one(&pool).await.expect("superseded parent");
+    let revision: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at, parent_version_id, version_no, metadata)
+        VALUES ('owner', $1, NULL, 'ai', 'review', '/fixture/revision.mp4', 1000, clock_timestamp() + INTERVAL '7 days', $3, 2,
+            jsonb_build_object('production_ai_job_id', $2::bigint, 'manual_ai_job_id', 1)) RETURNING id")
+        .bind(id).bind(run.job_id).bind(parent).fetch_one(&pool).await.expect("revision version");
+    sqlx::query("UPDATE social_produced_videos SET metadata = metadata || jsonb_build_object('superseded_by', $2::bigint) WHERE id = $1")
+        .bind(parent)
+        .bind(revision)
+        .execute(&pool)
+        .await
+        .expect("supersede parent");
+    let active = snapshot(&pool, "owner").await.expect("snapshot").test_run;
+    assert_eq!(active.and_then(|run| run.video_id), Some(revision));
+    discard_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect("discard revised test run");
+    let revived: String = sqlx::query_scalar(
+        "UPDATE social_produced_videos SET status = 'review' WHERE id = $1 RETURNING status",
+    )
+    .bind(revision)
+    .fetch_one(&pool)
+    .await
+    .expect("late revision write");
+    assert_eq!(revived, "rejected");
+    let (processed, selected): (Option<DateTime<Utc>>, Option<DateTime<Utc>>) = sqlx::query_as(
+        "SELECT processed_at, selected_at FROM social_clip_pool WHERE clip_db_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("pool row");
+    assert_eq!((processed, selected), (None, None));
+    assert!(snapshot(&pool, "owner")
+        .await
+        .expect("snapshot")
+        .test_run
+        .is_none());
     let again = start_test_run(&pool, "owner").await.expect("second run");
     assert_eq!(again.clip_id, id);
     cleanup(pool).await;

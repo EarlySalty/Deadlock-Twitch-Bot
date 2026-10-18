@@ -26,11 +26,12 @@ pub(super) async fn active_on(
             v.id AS video_id, v.status AS video_status,
             COALESCE((SELECT c.clip_title FROM twitch_clips_social_media c WHERE c.id = j.clip_id), '') AS clip_title
         FROM social_production_jobs j
-        LEFT JOIN LATERAL (SELECT id, status FROM social_produced_videos
-            WHERE job_id = j.id ORDER BY id DESC LIMIT 1) v ON TRUE
+        LEFT JOIN LATERAL (SELECT id, status, metadata ? 'revision_pending' AS revising FROM social_produced_videos
+            WHERE twitch_user_id = j.twitch_user_id AND clip_id = j.clip_id
+            AND social_video_job(job_id, metadata) = j.id ORDER BY id DESC LIMIT 1) v ON TRUE
         WHERE j.twitch_user_id = $1 AND j.source = 'test'
         AND (j.status IN ('queued', 'running', 'review', 'failed')
-            OR (j.status = 'completed' AND v.status IN ('rendering', 'review')))
+            OR (j.status = 'completed' AND (v.status IN ('rendering', 'review') OR v.revising)))
         ORDER BY j.id DESC LIMIT 1",
     )
     .bind(owner)
@@ -107,7 +108,7 @@ pub async fn discard_test_run(
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, owner).await?;
     let row = sqlx::query(
-        "SELECT status, clip_id FROM social_production_jobs
+        "SELECT status FROM social_production_jobs
         WHERE id = $1 AND twitch_user_id = $2 AND source = 'test' FOR UPDATE",
     )
     .bind(job_id)
@@ -116,17 +117,30 @@ pub async fn discard_test_run(
     .await?
     .ok_or(ScheduleError::NotFound)?;
     let status: String = row.try_get("status")?;
-    let clip: i64 = row.try_get("clip_id")?;
-    let videos: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM social_produced_videos WHERE job_id = $1
-        AND status IN ('rendering', 'review') AND publication_executed_at IS NULL FOR UPDATE",
+    let videos: Vec<(i64, Option<i64>)> = sqlx::query_as(
+        "SELECT id, CASE WHEN metadata->>'revision_pending' ~ '^[0-9]{1,18}$'
+            THEN (metadata->>'revision_pending')::bigint END
+        FROM social_produced_videos WHERE twitch_user_id = $2 AND social_video_job(job_id, metadata) = $1
+        AND publication_executed_at IS NULL
+        AND (status IN ('rendering', 'review') OR (status = 'rejected' AND metadata ? 'revision_pending'))
+        FOR UPDATE",
     )
     .bind(job_id)
+    .bind(owner)
     .fetch_all(&mut *tx)
+    .await?;
+    let committed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM social_produced_videos WHERE twitch_user_id = $2 AND social_video_job(job_id, metadata) = $1
+        AND (status IN ('approved', 'scheduled', 'published') OR publication_executed_at IS NOT NULL))",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .fetch_one(&mut *tx)
     .await?;
     match status.as_str() {
         "running" => return Err(ScheduleError::Started),
         "cancelled" => return Err(ScheduleError::NotInReview),
+        _ if committed => return Err(ScheduleError::NotInReview),
         "completed" if videos.is_empty() => return Err(ScheduleError::NotInReview),
         _ => {}
     }
@@ -137,7 +151,7 @@ pub async fn discard_test_run(
     .bind(job_id)
     .execute(&mut *tx)
     .await?;
-    for video in videos {
+    for (video, revision) in videos {
         crate::autopilot_publish::release_slot(&mut tx, video).await?;
         sqlx::query("DELETE FROM social_media_clip_approval WHERE produced_video_id = $1")
             .bind(video)
@@ -145,21 +159,61 @@ pub async fn discard_test_run(
             .await?;
         sqlx::query(
             "UPDATE social_produced_videos SET status = 'rejected', expires_at = clock_timestamp(),
-                needs_review = TRUE WHERE id = $1",
+                needs_review = TRUE, metadata = metadata - 'revision_pending' WHERE id = $1",
         )
         .bind(video)
         .execute(&mut *tx)
         .await?;
+        if let Some(revision) = revision {
+            stop_revision_on(&mut tx, owner, revision).await?;
+        }
     }
     sqlx::query(
-        "UPDATE social_clip_pool SET selected_at = NULL,
-            processed_at = CASE WHEN social_clip_video_holds(clip_db_id) THEN processed_at END
-        WHERE twitch_user_id = $1 AND clip_db_id = $2",
+        "UPDATE social_produced_videos SET expires_at = LEAST(COALESCE(expires_at, clock_timestamp()), clock_timestamp())
+        WHERE twitch_user_id = $2 AND social_video_job(job_id, metadata) = $1 AND status = 'rejected' AND publication_executed_at IS NULL",
     )
+    .bind(job_id)
     .bind(owner)
-    .bind(clip)
     .execute(&mut *tx)
     .await?;
+    release_test_clip_on(&mut tx, owner, job_id).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+async fn stop_revision_on(
+    connection: &mut PgConnection,
+    owner: &str,
+    revision: i64,
+) -> Result<(), ScheduleError> {
+    sqlx::query(
+        "UPDATE social_ai_jobs SET status = 'rejected', updated_at = NOW()
+        WHERE id = $1 AND twitch_user_id::text = $2
+        AND status IN ('queued', 'preparing', 'transcribing', 'analyzing', 'planning',
+            'rendering', 'validating', 'awaiting_confirmation')",
+    )
+    .bind(revision)
+    .bind(owner)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn release_test_clip_on(
+    connection: &mut PgConnection,
+    owner: &str,
+    job_id: i64,
+) -> Result<(), ScheduleError> {
+    sqlx::query(
+        "UPDATE social_clip_pool p SET selected_at = NULL,
+            processed_at = CASE WHEN social_clip_video_holds(p.clip_db_id) THEN p.processed_at END
+        FROM social_production_jobs j
+        WHERE j.id = $2 AND j.twitch_user_id = $1 AND social_video_discarded(j.id)
+        AND p.twitch_user_id = j.twitch_user_id AND p.clip_db_id = j.clip_id",
+    )
+    .bind(owner)
+    .bind(job_id)
+    .execute(connection)
+    .await?;
     Ok(())
 }

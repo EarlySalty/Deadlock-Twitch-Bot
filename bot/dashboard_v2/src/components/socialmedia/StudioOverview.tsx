@@ -264,8 +264,9 @@ export function PipelineOverview({ data, now, onNavigate, activity, twitchUserId
   const clipTitle = (job: QueueJob) => job.clip_title || t('Clip {id}', { id: job.clip_id });
   const videoTitle = (video: PublishVideo) => clips?.find(clip => clip.clip_db_id === video.clip_id)?.title || t('Video {id}', { id: video.id });
   const modeBadge = (mode: 'static' | 'ai' | null | undefined) => mode ? { label: t(mode === 'ai' ? 'KI-Schnitt' : 'Standard-Vorlage'), mode } : undefined;
+  const testRunJob = testRunApi ? schedule?.test_run?.job_id : undefined;
   const nowRows: OverviewRow[] = [
-    ...jobsWithStatus(schedule, 'running').map(job => ({ key: `job-${job.id}`, title: clipTitle(job), meta: job.mode === 'ai' ? t('KI-Bearbeitung läuft') : t('Produktion läuft'), tone: 'gold' as Tone, badge: modeBadge(job.mode ?? job.requested_mode), onClick: () => onNavigate('clips', 'preparing') })),
+    ...jobsWithStatus(schedule, 'running').filter(job => job.id !== testRunJob).map(job => ({ key: `job-${job.id}`, title: clipTitle(job), meta: job.mode === 'ai' ? t('KI-Bearbeitung läuft') : t('Produktion läuft'), tone: 'gold' as Tone, badge: modeBadge(job.mode ?? job.requested_mode), onClick: () => onNavigate('clips', 'preparing') })),
     ...(clips ?? []).filter(clip => clip.status === 'publishing').map(clip => ({ key: `publish-${clip.clip_db_id}`, title: clip.title || clip.clip_id, meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('clips', queueStage(clip)) })),
     ...(publish?.videos ?? []).filter(video => video.event?.destinations.some(destination => ['preparing', 'effect_started', 'processing'].includes(destination.state))).map(video => ({ key: `video-${video.id}`, title: videoTitle(video), meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, badge: modeBadge(video.mode), onClick: () => onNavigate('clips', 'planned') })),
   ];

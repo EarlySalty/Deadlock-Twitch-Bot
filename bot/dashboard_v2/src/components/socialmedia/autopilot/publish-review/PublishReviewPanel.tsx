@@ -283,7 +283,7 @@ function VideoRow({ video, snapshot, busy, owner, client, testRunApi, act, onOpe
     {actionable && !routineOnly && <div className="publish-actions">
       <button type="button" disabled={busy || locked || platforms.every((platform) => !connectedTo(snapshot, platform))} onClick={() => setSelected(platforms.filter((platform) => connectedTo(snapshot, platform) && (platform !== 'tiktok' || canConfigureTikTok)))}>{t('Alle verfügbaren Ziele auswählen')}</button>
       <button type="button" className="publish-primary" disabled={busy || locked || tikTokMissing || (selected.length === 0 && !(willSchedule && approved))} onClick={() => void act(approve, { key: willSchedule ? 'Freigegeben und für den nächsten freien gemeinsamen Termin eingeplant.' : 'Ausgewählte Ziele für genau diese Videoversion freigegeben.' }).then((saved) => { if (saved && mounted.current) setSelected([]); })}>{t(willSchedule ? (testJobId ? 'Für nächsten Termin einplanen' : 'Freigeben und einplanen') : 'Ausgewählte Ziele freigeben')}</button>
-      {testJobId && <button type="button" disabled={busy} onClick={() => void act(async () => { await testRunApi.discardTestRun(testJobId, owner); }, { key: 'Test verworfen. Der Clip ist zurück im Vorrat.' })}>{t('Test verwerfen (Clip zurück in den Vorrat)')}</button>}
+      {testJobId && (video.status === 'review' || video.status === 'rendering') && <button type="button" disabled={busy} onClick={() => void act(async () => { await testRunApi.discardTestRun(testJobId, owner); }, { key: 'Test verworfen. Der Clip ist zurück im Vorrat.' })}>{t('Test verwerfen (Clip zurück in den Vorrat)')}</button>}
     </div>}
   </article>;
 }

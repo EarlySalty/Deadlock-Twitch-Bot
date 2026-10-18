@@ -123,6 +123,7 @@ pub async fn cancel(pool: &PgPool, owner: &str, id: i64) -> Result<(), ScheduleE
         finished_at = NOW(), scheduled_at = NULL, metadata = metadata || '{\"selection_cancelled\":true}'::jsonb
         WHERE id = $1 AND twitch_user_id = $2")
         .bind(id).bind(owner).execute(&mut *tx).await?;
+    super::test_run::release_test_clip_on(&mut tx, owner, id).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -245,7 +246,8 @@ async fn skip_on(
     .execute(&mut *connection)
     .await?;
     discard_review_outputs_on(connection, owner, id).await?;
-    clear_stale_slots_on(connection, owner, id).await
+    clear_stale_slots_on(connection, owner, id).await?;
+    super::test_run::release_test_clip_on(connection, owner, id).await
 }
 
 async fn process_on(
