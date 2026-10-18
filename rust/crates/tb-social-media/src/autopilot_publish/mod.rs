@@ -209,6 +209,7 @@ pub struct PublishVideo {
     pub approvals: Vec<Approval>,
     pub tiktok_consent: &'static str,
     pub event: Option<PublicationEvent>,
+    pub test_job_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -542,7 +543,9 @@ async fn videos_on(
          SELECT id, clip_id, version_no, variant_index, mode, status, duration_ms, expires_at,
             needs_review, review_reasons::text AS review_reasons, file_path, artifact_deleted_at,
             cleanup_error, scheduled_at, publication_executed_at, publication_completed_at,
-            metadata::text AS metadata
+            metadata::text AS metadata,
+            (SELECT j.id FROM social_production_jobs j WHERE j.id = ranked.job_id
+                AND j.source = 'test') AS test_job_id
          FROM ranked WHERE unresolved OR position <= $3
          ORDER BY created_at DESC, id DESC",
     )
@@ -659,6 +662,7 @@ async fn videos_on(
                     }),
                     None => None,
                 },
+                test_job_id: row.try_get("test_job_id")?,
             })
         })
         .collect()

@@ -70,6 +70,22 @@ export function createScheduleQueueFixture(): ScheduleQueueFixture {
       state.distribution_policy = policy.distribution_policy;
       return structuredClone(policy);
     },
+    async startTestRun(owner) {
+      requests.push({ method: 'POST', path: '/autopilot/test-run', body: { twitch_user_id: owner } });
+      if (state.test_run) throw new Error('Es läuft bereits ein Testlauf. Prüfe oder verwirf ihn zuerst.');
+      const mode = state.settings.ai_editing_enabled ? 'ai' as const : 'static' as const;
+      const job = { id: 900, clip_id: 45, clip_title: 'Testclip aus dem Vorrat', source: 'test' as const, mode, requested_mode: null, status: 'running' as const, stage: 'starting', attempts: 1, max_attempts: 3, scheduled_at: null, started_at: new Date().toISOString(), last_error: null, review_explanation: null, review_reasons: [] };
+      state.jobs = [job, ...state.jobs];
+      state.test_run = { job_id: job.id, clip_id: job.clip_id, clip_title: job.clip_title, status: job.status, stage: job.stage, mode, last_error: null, video_id: null, video_status: null };
+      return copy();
+    },
+    async discardTestRun(id, owner) {
+      requests.push({ method: 'POST', path: `/autopilot/test-run/${id}/discard`, body: { twitch_user_id: owner } });
+      if (state.test_run?.job_id !== id) throw new Error('Dieser Testlauf ist nicht mehr aktiv.');
+      state.jobs = state.jobs.map(job => job.id === id ? { ...job, status: 'cancelled', stage: 'test_discarded' } : job);
+      state.test_run = null;
+      return copy();
+    },
     async cancel(id, owner) { requests.push({ method: 'POST', path: `/autopilot/queue/${id}/cancel`, body: { twitch_user_id: owner } }); const job = state.jobs.find(value => value.id === id && value.status === 'queued' && !value.started_at); if (!job) throw new Error('Der Auftrag kann nicht mehr entfernt werden.'); job.status = 'cancelled'; return copy(); },
   };
   return { api, requests, snapshot: copy, policy: () => structuredClone(policy) };

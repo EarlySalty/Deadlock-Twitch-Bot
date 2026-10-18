@@ -2071,3 +2071,24 @@ select.studio-select {
   .social-studio .pipeline-clips .import-pool-clips { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .social-studio .pipeline-clips .import-pool-clip-body { padding: 8px; }
 }
+.studio-overview-column[data-variant='now'] .studio-overview-column-head { flex-wrap: wrap; }
+.studio-overview-column-head .studio-testrun-start { margin-left: auto; }
+.studio-testrun-start { display: grid; gap: 6px; justify-items: start; min-width: 0; }
+.studio-testrun-button { min-height: 32px; padding: 4px 10px; font-size: 12px; white-space: normal; text-align: left; }
+.studio-testrun-error { margin: 0; font-size: 12px; color: var(--color-danger); }
+.studio-testrun-note { margin: 0; font-size: 12px; color: var(--color-text-secondary); }
+.studio-testrun { display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed color-mix(in srgb, var(--color-primary) 55%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--color-primary) 6%, transparent); }
+.studio-testrun[data-state='failed'] { border-color: color-mix(in srgb, var(--color-danger) 60%, transparent); }
+.studio-testrun-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.studio-testrun-head strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.studio-testrun-steps { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.studio-testrun-steps li { display: flex; align-items: baseline; gap: 6px; color: var(--color-text-secondary); }
+.studio-testrun-steps li::before { content: ''; flex: none; width: 8px; height: 8px; border: 1px solid var(--color-border-strong); border-radius: 50%; }
+.studio-testrun-steps li[data-state='done'] { color: var(--color-text-primary); }
+.studio-testrun-steps li[data-state='done']::before { border-color: var(--color-success); background: var(--color-success); }
+.studio-testrun-steps li[data-state='current'] { color: var(--color-text-primary); font-weight: 600; }
+.studio-testrun-steps li[data-state='current']::before { border-color: var(--color-primary); background: var(--color-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 25%, transparent); }
+.studio-testrun-discard { justify-self: start; min-height: 32px; font-size: 12px; }
+.studio-mode-badge[data-mode='test'] { border-color: color-mix(in srgb, var(--color-primary) 55%, transparent); background: color-mix(in srgb, var(--color-primary) 12%, transparent); color: var(--color-primary); }
+.pp-testrun { display: grid; gap: 8px; margin-bottom: 16px; }
+.publish-test-badge { margin-left: 8px; vertical-align: middle; }

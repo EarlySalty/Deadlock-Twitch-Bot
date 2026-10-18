@@ -37,6 +37,7 @@ impl ProductionMode {
 pub enum JobSource {
     Autopilot,
     Manual,
+    Test,
 }
 
 impl JobSource {
@@ -44,6 +45,7 @@ impl JobSource {
         match self {
             Self::Autopilot => "autopilot",
             Self::Manual => "manual",
+            Self::Test => "test",
         }
     }
 }
@@ -113,6 +115,7 @@ fn from_row(row: sqlx::postgres::PgRow) -> Result<ProductionJob, JobError> {
         source: match source.as_str() {
             "autopilot" => JobSource::Autopilot,
             "manual" => JobSource::Manual,
+            "test" => JobSource::Test,
             _ => return Err(JobError::Invalid("Unbekannte Auftragsquelle".into())),
         },
         requested_mode: requested
@@ -174,7 +177,7 @@ pub async fn list(
 pub async fn insert(pool: &PgPool, job: &NewProductionJob) -> Result<ProductionJob, JobError> {
     if job.max_attempts <= 0
         || (job.source == JobSource::Manual && job.requested_mode.is_none())
-        || (job.source == JobSource::Autopilot && job.requested_mode.is_some())
+        || (job.source != JobSource::Manual && job.requested_mode.is_some())
     {
         return Err(JobError::Invalid(
             "Ungültiger Modus oder Versuchslimit".into(),
@@ -213,7 +216,7 @@ async fn eligible_head_on(
         "SELECT j.id, j.twitch_user_id FROM social_production_jobs j WHERE j.status = 'queued'
          AND j.attempts < j.max_attempts
          AND COALESCE((j.metadata->>'retry_after')::timestamptz, '-infinity'::timestamptz) <= clock_timestamp()
-         AND (j.started_at IS NOT NULL OR j.source = 'manual' OR EXISTS (
+         AND (j.started_at IS NOT NULL OR j.source IN ('manual', 'test') OR EXISTS (
              SELECT 1 FROM social_media_autopilot_settings s WHERE s.twitch_user_id = j.twitch_user_id
              AND s.enabled AND NOT s.paused AND {scheduled}
              AND (j.scheduled_at IS NULL OR (j.scheduled_at > clock_timestamp()
@@ -289,7 +292,9 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
     } else {
         match job.source {
             JobSource::Manual => (job.requested_mode.ok_or(JobError::State)?, None),
-            JobSource::Autopilot => automatic_mode(&mut tx, &owner, &settings).await?,
+            JobSource::Autopilot | JobSource::Test => {
+                automatic_mode(&mut tx, &owner, &settings).await?
+            }
         }
     };
     if let Some(policy) = policy {

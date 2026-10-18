@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ShieldCheck } from 'lucide-react';
+import { FlaskConical, ShieldCheck } from 'lucide-react';
 import { StudioSectionHeading } from '../../StudioSectionHeading';
 import { useLanguage } from '../../../../context/LanguageContext';
 import type { TranslateParams } from '../../../../i18n/dictionary';
 import { publishReviewClient } from './api';
 import type { DestinationDecision, NotificationPreferences, PublishDestination, PublishPlatform, PublishReviewClient, PublishSnapshot, PublishVideo, ReviewMode, TikTokConsentState, TikTokVersionOptions } from './api';
 import { AiRevisionPanel } from './AiRevisionPanel';
+import { scheduleQueueApi } from '../schedule-queue/api';
+import type { TestRunApi } from '../../TestRunControl';
 import { TikTokVersionForm } from '../../TikTokPostDialog';
 import { WorkspaceDialog } from '../../WorkspaceDialog';
 import { EnrichmentPanel } from '../../EnrichmentPanel';
@@ -31,6 +33,7 @@ export interface PublishReviewPanelProps {
   clipDbId?: number;
   locked?: boolean;
   textRevision?: number;
+  testRunApi?: TestRunApi;
 }
 
 const names: Record<PublishPlatform, string> = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram' };
@@ -64,7 +67,7 @@ export function PublishReviewPanel(props: PublishReviewPanelProps) {
   return <OwnerPanel key={props.twitchUserId} {...props} />;
 }
 
-function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClient, onChanged, onOpenVideo, onConfigureTikTok, reloadKey = 0, videoId, clipDbId, locked = false, textRevision = 0 }: PublishReviewPanelProps) {
+function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClient, onChanged, onOpenVideo, onConfigureTikTok, reloadKey = 0, videoId, clipDbId, locked = false, textRevision = 0, testRunApi = scheduleQueueApi }: PublishReviewPanelProps) {
   const { t } = useLanguage();
   const [editorVideo, setEditorVideo] = useState<number | null>(null);
   const [editorBusy, setEditorBusy] = useState(false);
@@ -136,7 +139,7 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
       {snapshot.settings.paused && <p className="publish-note" role="status">{t('Pausiert. Keine neuen geplanten Veröffentlichungen. Deine Warteschlange bleibt erhalten.')}</p>}
       {editorVideo !== null && <AiRevisionPanel key={editorVideo} owner={twitchUserId} videoId={editorVideo} onBusyChange={setEditorBusy} onClose={() => setEditorVideo(null)} onRefresh={() => act(async () => {}, { key: 'Stand aktualisiert.' })} />}
       {(section === 'all' || section === 'videos') && <div className="publish-video-list">
-        {visibleVideos.length === 0 ? <p>{videoId === undefined ? t('Noch keine fertigen Videos. Sobald ein Video gerendert ist, findest du es hier.') : t('Diese Fassung wartet nicht mehr auf eine Freigabe.')}</p> : visibleVideos.map((video) => <VideoRow key={video.id} video={video} snapshot={snapshot} busy={busy || editorBusy || editorVideo === video.id} onRevise={editorVideo === null ? setEditorVideo : undefined} onOpenVideo={onOpenVideo} onConfigureTikTok={onConfigureTikTok} act={act} client={client} owner={twitchUserId} inlineTikTok={clipDbId === undefined ? undefined : { clipDbId, revision: textRevision }} locked={locked} />)}
+        {visibleVideos.length === 0 ? <p>{videoId === undefined ? t('Noch keine fertigen Videos. Sobald ein Video gerendert ist, findest du es hier.') : t('Diese Fassung wartet nicht mehr auf eine Freigabe.')}</p> : visibleVideos.map((video) => <VideoRow key={video.id} video={video} snapshot={snapshot} busy={busy || editorBusy || editorVideo === video.id} onRevise={editorVideo === null ? setEditorVideo : undefined} onOpenVideo={onOpenVideo} onConfigureTikTok={onConfigureTikTok} act={act} client={client} testRunApi={testRunApi} owner={twitchUserId} inlineTikTok={clipDbId === undefined ? undefined : { clipDbId, revision: textRevision }} locked={locked} />)}
       </div>}
       {(section === 'all' || section === 'notifications') && preferences && <div className="publish-preferences">
         {section === 'all' && <h3>{t('Benachrichtigungen & Aufbewahrung')}</h3>}
@@ -203,6 +206,7 @@ interface VideoRowProps {
   busy: boolean;
   owner: string;
   client: PublishReviewClient;
+  testRunApi: TestRunApi;
   act: (action: () => Promise<void>, success: PanelMessage) => Promise<boolean>;
   onRevise?: (videoId: number) => void;
   onOpenVideo?: PublishReviewPanelProps['onOpenVideo'];
@@ -215,7 +219,7 @@ function connectedTo(snapshot: PublishSnapshot, platform: PublishPlatform) {
   return snapshot.connections.some((connection) => connection.platform === platform && connection.connected);
 }
 
-function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onConfigureTikTok, onRevise, inlineTikTok, locked = false }: VideoRowProps) {
+function VideoRow({ video, snapshot, busy, owner, client, testRunApi, act, onOpenVideo, onConfigureTikTok, onRevise, inlineTikTok, locked = false }: VideoRowProps) {
   const { t, locale } = useLanguage();
   const date = (value: string | null) => value ? new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : t('Noch kein Termin');
   const [selected, setSelected] = useState<PublishPlatform[]>([]);
@@ -235,6 +239,7 @@ function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onCo
   const approved = video.approvals.some((approval) => approval.state === 'approved');
   const willSchedule = !video.event;
   const tikTokMissing = selected.includes('tiktok') && Boolean(inlineTikTok) && tikTokOptions === null;
+  const testJobId = video.test_job_id ?? null;
   async function approve() {
     const decisions: DestinationDecision[] = [];
     for (const platform of selected) {
@@ -248,7 +253,7 @@ function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onCo
     if (willSchedule) await client.schedule(owner, video.id, platforms);
   }
   return <article className="publish-video" data-unsaved={selected.length > 0 || busy ? 'true' : undefined} aria-label={t('Videoversion {version}, Variante {variant}', { version: video.version_no, variant: video.variant_index + 1 })}>
-    <header><div><h3>{t('Video #{id}', { id: video.id })} <span>{t('Version {version}, Variante {variant}', { version: video.version_no, variant: video.variant_index + 1 })}</span></h3><p>{t(video.mode === 'ai' ? 'KI-bearbeitet' : 'Statisch bearbeitet')}{video.duration_ms ? ` · ${new Intl.NumberFormat(locale, { style: 'unit', unit: 'second', unitDisplay: 'long' }).format(video.duration_ms / 1000)}` : ''}</p></div>{onOpenVideo && !expired && <button type="button" disabled={busy} onClick={() => onOpenVideo(video.id)}>{t('Video prüfen')}</button>}</header>
+    <header><div><h3>{t('Video #{id}', { id: video.id })} <span>{t('Version {version}, Variante {variant}', { version: video.version_no, variant: video.variant_index + 1 })}</span></h3><p>{t(video.mode === 'ai' ? 'KI-bearbeitet' : 'Statisch bearbeitet')}{video.duration_ms ? ` · ${new Intl.NumberFormat(locale, { style: 'unit', unit: 'second', unitDisplay: 'long' }).format(video.duration_ms / 1000)}` : ''}{testJobId && <span className="studio-mode-badge publish-test-badge" data-mode="test"><FlaskConical className="h-3 w-3" aria-hidden />{t('Testlauf')}</span>}</p></div>{onOpenVideo && !expired && <button type="button" disabled={busy} onClick={() => onOpenVideo(video.id)}>{t('Video prüfen')}</button>}</header>
     {!onOpenVideo && !expired && client.videoUrl && <video className="publish-preview" controls preload="none" playsInline aria-label={t('Vorschau Video #{id}', { id: video.id })} src={client.videoUrl(owner, video.id)} />}
     {video.needs_review && <p className="publish-note">{t('Dieses Video benötigt deine Prüfung. Bitte prüfe die Bildqualität und ob die wichtige Spielsituation vollständig erhalten ist.')}</p>}
     {expired ? <p className="publish-note">{t('Aufbewahrungsfrist abgelaufen. Es wird nicht automatisch neu gerendert.')}</p> : <p className="publish-expiry">{video.status === 'review' ? t('Ohne Freigabe verfügbar bis {date}', { date: date(video.expires_at) }) : t('Datei für Freigabe, Veröffentlichung und erforderliche Wiederholungen geschützt.')}</p>}
@@ -277,7 +282,8 @@ function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onCo
     {locked && actionable && !routineOnly && <p className="publish-note" role="status">{t('Speichere oder verwirf zuerst deine Textänderungen. Erst dann kannst du freigeben.')}</p>}
     {actionable && !routineOnly && <div className="publish-actions">
       <button type="button" disabled={busy || locked || platforms.every((platform) => !connectedTo(snapshot, platform))} onClick={() => setSelected(platforms.filter((platform) => connectedTo(snapshot, platform) && (platform !== 'tiktok' || canConfigureTikTok)))}>{t('Alle verfügbaren Ziele auswählen')}</button>
-      <button type="button" className="publish-primary" disabled={busy || locked || tikTokMissing || (selected.length === 0 && !(willSchedule && approved))} onClick={() => void act(approve, { key: willSchedule ? 'Freigegeben und für den nächsten freien gemeinsamen Termin eingeplant.' : 'Ausgewählte Ziele für genau diese Videoversion freigegeben.' }).then((saved) => { if (saved && mounted.current) setSelected([]); })}>{t(willSchedule ? 'Freigeben und einplanen' : 'Ausgewählte Ziele freigeben')}</button>
+      <button type="button" className="publish-primary" disabled={busy || locked || tikTokMissing || (selected.length === 0 && !(willSchedule && approved))} onClick={() => void act(approve, { key: willSchedule ? 'Freigegeben und für den nächsten freien gemeinsamen Termin eingeplant.' : 'Ausgewählte Ziele für genau diese Videoversion freigegeben.' }).then((saved) => { if (saved && mounted.current) setSelected([]); })}>{t(willSchedule ? (testJobId ? 'Für nächsten Termin einplanen' : 'Freigeben und einplanen') : 'Ausgewählte Ziele freigeben')}</button>
+      {testJobId && <button type="button" disabled={busy} onClick={() => void act(async () => { await testRunApi.discardTestRun(testJobId, owner); }, { key: 'Test verworfen. Der Clip ist zurück im Vorrat.' })}>{t('Test verwerfen (Clip zurück in den Vorrat)')}</button>}
     </div>}
   </article>;
 }

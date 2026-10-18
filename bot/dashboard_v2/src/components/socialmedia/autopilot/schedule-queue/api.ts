@@ -48,7 +48,7 @@ export interface QueueJob {
   id: number;
   clip_id: number;
   clip_title: string;
-  source: 'autopilot' | 'manual';
+  source: 'autopilot' | 'manual' | 'test';
   mode: 'static' | 'ai' | null;
   requested_mode: 'static' | 'ai' | null;
   status: 'queued' | 'running' | 'review' | 'completed' | 'failed' | 'cancelled';
@@ -81,6 +81,19 @@ export interface ScheduleQueueSnapshot {
   production_hold: ProductionHold;
   policy_previews?: Record<DistributionPolicy, PolicyPreview>;
   connected_platforms: string[];
+  test_run?: TestRun | null;
+}
+
+export interface TestRun {
+  job_id: number;
+  clip_id: number;
+  clip_title: string;
+  status: QueueJob['status'];
+  stage: string;
+  mode: 'static' | 'ai' | null;
+  last_error: string | null;
+  video_id: number | null;
+  video_status: string | null;
 }
 
 export type ReviewDecision = 'process' | 'skip';
@@ -94,6 +107,8 @@ export interface ScheduleQueueApi {
   resolve(jobId: number, action: ReviewDecision, note: string, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
   loadPolicy(twitchUserId?: string, signal?: AbortSignal): Promise<PipelinePolicy>;
   savePolicy(policy: PipelinePolicy, twitchUserId?: string): Promise<PipelinePolicy>;
+  startTestRun(twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
+  discardTestRun(jobId: number, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
 }
 
 const PREFIX = '/twitch/social-media/api/autopilot';
@@ -147,4 +162,17 @@ export const scheduleQueueApi: ScheduleQueueApi = {
       body: JSON.stringify({ twitch_user_id: twitchUserId }),
     }));
   },
+  startTestRun(twitchUserId) {
+    return postAction(`${PREFIX}/test-run`, twitchUserId);
+  },
+  discardTestRun(jobId, twitchUserId) {
+    return postAction(`${PREFIX}/test-run/${jobId}/discard`, twitchUserId);
+  },
 };
+
+function postAction(url: string, twitchUserId?: string): Promise<ScheduleQueueSnapshot> {
+  return fetchJson(url, withCookieCredentials({
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ twitch_user_id: twitchUserId }),
+  }));
+}

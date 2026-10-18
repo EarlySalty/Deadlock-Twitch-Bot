@@ -62,6 +62,7 @@ export function planPreview(snapshot: ScheduleQueueSnapshot, policy: Distributio
 }
 
 export const PLAN_EN: Record<string, string> = {
+  'Speichere zuerst deine Änderungen, damit der Testlauf sie verwendet.': 'Save your changes first so the test run uses them.',
   'Planen': 'Plan',
   'Schritt {number}': 'Step {number}',
   'Postingplan': 'Posting plan',

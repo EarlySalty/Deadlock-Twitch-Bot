@@ -1,10 +1,11 @@
 import { useEffect, useId, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, Film, MessageSquareText, Sparkles } from 'lucide-react';
+import { CalendarPlus, CheckCircle2, Film, FlaskConical, MessageSquareText, Sparkles, Trash2 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import type { SocialClipMitPosting } from '@/api/socialMedia';
 import type { PublishPlatform, PublishReviewClient, PublishSnapshot, PublishVideo } from './autopilot/publish-review/api';
 import type { AiJobView } from './ai/api';
+import type { TestRunApi } from './TestRunControl';
 import type { SocialMediaViewTarget } from './labels';
 import type { QueueStage } from './queuePresentation';
 import { formatTerminInZone } from './queuePresentation';
@@ -38,13 +39,15 @@ interface ApprovalContext {
   client?: PublishReviewClient;
   timezone: string;
   onNavigate: (view: SocialMediaViewTarget, stage?: QueueStage) => void;
+  testRunApi?: TestRunApi;
+  onTestRunChanged?: () => void;
 }
 
 export function ApprovalEntries({ videos, ...context }: ApprovalContext & { videos: PublishVideo[] }) {
   return <ul className="studio-approvals">{videos.map(video => <li key={video.id}><ApprovalEntry video={video} {...context} /></li>)}</ul>;
 }
 
-function ApprovalEntry({ video, snapshot, clips, owner, client, timezone, onNavigate }: ApprovalContext & { video: PublishVideo }) {
+function ApprovalEntry({ video, snapshot, clips, owner, client, timezone, onNavigate, testRunApi, onTestRunChanged }: ApprovalContext & { video: PublishVideo }) {
   const { t, locale } = useLanguage();
   const clip = clips?.find(item => item.clip_db_id === video.clip_id);
   const title = clip?.generated_title?.trim() || clip?.title || t('Video {id}', { id: video.id });
@@ -58,8 +61,9 @@ function ApprovalEntry({ video, snapshot, clips, owner, client, timezone, onNavi
       <strong title={title}>{title}</strong>
       <span>{planned ? `${t('Geplant für {date}', { date: formatTerminInZone(planned, locale, timezone) })} · ${timezone}` : t('Termin wird nach der Freigabe vergeben')}</span>
       <span className="studio-mode-badge" data-mode={video.mode}>{video.mode === 'ai' ? <Sparkles className="h-3 w-3" aria-hidden /> : <Film className="h-3 w-3" aria-hidden />}{t(video.mode === 'ai' ? 'KI-Schnitt' : 'Standard-Vorlage')}</span>
+      {video.test_job_id && <span className="studio-mode-badge" data-mode="test"><FlaskConical className="h-3 w-3" aria-hidden />{t('Testlauf')}</span>}
     </div>
-    {owner ? <ApprovalActions video={video} snapshot={snapshot} owner={owner} client={client} onNavigate={onNavigate} />
+    {owner ? <ApprovalActions video={video} snapshot={snapshot} owner={owner} client={client} onNavigate={onNavigate} testRunApi={testRunApi} onTestRunChanged={onTestRunChanged} />
       : <div className="studio-approval-actions"><button type="button" className="studio-button" onClick={() => onNavigate('clips', 'review')}>{t('Prüfen')}</button></div>}
   </article>;
 }
@@ -75,9 +79,10 @@ function ApprovalVideo({ owner, videoId, client }: { owner: string; videoId: num
   return src ? <video src={src} preload="metadata" muted playsInline aria-label={t('Vorschau Video #{id}', { id: videoId })} /> : <Film className="h-5 w-5" aria-hidden />;
 }
 
-function ApprovalActions({ video, snapshot, owner, client, onNavigate }: {
+function ApprovalActions({ video, snapshot, owner, client, onNavigate, testRunApi, onTestRunChanged }: {
   video: PublishVideo; snapshot: PublishSnapshot; owner: string; client?: PublishReviewClient;
   onNavigate: (view: SocialMediaViewTarget, stage?: QueueStage) => void;
+  testRunApi?: TestRunApi; onTestRunChanged?: () => void;
 }) {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
@@ -98,7 +103,15 @@ function ApprovalActions({ video, snapshot, owner, client, onNavigate }: {
       await api.approve(owner, video.id, platforms.map(platform => ({ platform })));
       if (!video.event) await api.schedule(owner, video.id, videoPlatforms(snapshot, video));
     },
-    onSuccess: refresh,
+    onSuccess: () => { refresh(); if (video.test_job_id) onTestRunChanged?.(); },
+  });
+  const testJobId = video.test_job_id;
+  const discard = useMutation({
+    mutationFn: async () => {
+      if (!testRunApi || !testJobId) throw new Error(t('Die Aktion ist fehlgeschlagen.'));
+      await testRunApi.discardTestRun(testJobId, owner);
+    },
+    onSuccess: () => { refresh(); onTestRunChanged?.(); },
   });
   const revise = useMutation({
     mutationFn: async (text: string) => {
@@ -126,9 +139,21 @@ function ApprovalActions({ video, snapshot, owner, client, onNavigate }: {
       refresh();
     },
   });
-  const busy = approve.isPending || revise.isPending || decide.isPending;
-  const error = approve.error ?? revise.error ?? decide.error;
+  const busy = approve.isPending || revise.isPending || decide.isPending || discard.isPending;
+  const error = approve.error ?? revise.error ?? decide.error ?? discard.error;
   const proposal = pending?.revision_proposal;
+  if (testJobId) return <div className="studio-approval-actions" data-saving={busy ? 'true' : undefined}>
+    <div className="studio-approval-buttons">
+      <button type="button" className="studio-button studio-primary" disabled={busy || platforms.length === 0} title={platforms.length === 0 ? t('Kein verbundenes Ziel ohne weitere Angaben verfügbar') : undefined} onClick={() => approve.mutate()}>
+        <CalendarPlus className="h-4 w-4" aria-hidden />{t(approve.isPending ? 'Wird eingeplant …' : 'Für nächsten Termin einplanen')}
+      </button>
+      {testRunApi && <button type="button" className="studio-button" disabled={busy} onClick={() => discard.mutate()}>
+        <Trash2 className="h-4 w-4" aria-hidden />{t(discard.isPending ? 'Wird verworfen …' : 'Test verwerfen (Clip zurück in den Vorrat)')}
+      </button>}
+    </div>
+    {approve.isSuccess && <p className="studio-approval-note" role="status">{t('Für den nächsten Termin eingeplant.')}</p>}
+    {error && <p className="studio-approval-error" role="alert">{error instanceof Error ? error.message : t('Die Aktion ist fehlgeschlagen.')}</p>}
+  </div>;
   return <div className="studio-approval-actions" data-unsaved={feedback.trim() || busy ? 'true' : undefined} data-saving={busy ? 'true' : undefined}>
     <div className="studio-approval-buttons">
       <button type="button" className="studio-button studio-primary" disabled={busy || platforms.length === 0} title={platforms.length === 0 ? t('Kein verbundenes Ziel ohne weitere Angaben verfügbar') : undefined} onClick={() => approve.mutate()}>

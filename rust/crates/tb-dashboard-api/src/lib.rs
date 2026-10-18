@@ -405,6 +405,14 @@ fn build_authed_router_with_analysis_store(
             post(social_media::autopilot_queue_resolve_handler),
         )
         .route(
+            "/social-media/api/autopilot/test-run",
+            post(social_media::autopilot_test_run_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/test-run/{job_id}/discard",
+            post(social_media::autopilot_test_run_discard_handler),
+        )
+        .route(
             "/social-media/api/autopilot/pool",
             get(social_media::autopilot::pool_handler),
         )

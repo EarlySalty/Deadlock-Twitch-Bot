@@ -3,6 +3,7 @@ mod planner;
 mod queue;
 mod recovery;
 mod settings;
+mod test_run;
 
 pub(crate) use placement::{place_video_on, queued_platforms_on};
 pub use planner::{plan_owner, PlanReport};
@@ -11,6 +12,7 @@ pub use queue::{cancel, mark_next, reorder, resolve_review, ReviewDecision};
 pub use recovery::{recover_after_lease, retry_or_review, Recovery};
 pub(crate) use settings::retime_on;
 pub use settings::{save_schedule, SchedulePatch, ScheduleSettings};
+pub use test_run::{discard_test_run, start_test_run, TestRun};
 
 use std::collections::BTreeMap;
 
@@ -35,6 +37,10 @@ pub enum ScheduleError {
     Started,
     #[error("Der Auftrag wartet nicht mehr auf eine Entscheidung")]
     NotInReview,
+    #[error("Es läuft bereits ein Testlauf. Prüfe oder verwirf ihn zuerst")]
+    TestRunActive,
+    #[error("Im Clip-Vorrat ist gerade kein passender Clip für einen Testlauf")]
+    EmptyPool,
     #[error("Der Zeitplan konnte nicht gespeichert oder geladen werden")]
     Database(#[from] sqlx::Error),
     #[error(transparent)]
@@ -139,6 +145,7 @@ pub struct ScheduleQueueSnapshot {
     pub production_hold: Option<ProductionHold>,
     pub policy_previews: PolicyPreviews,
     pub connected_platforms: Vec<String>,
+    pub test_run: Option<TestRun>,
 }
 
 pub(crate) fn review_backlog_sql(owner: &str) -> String {
@@ -952,6 +959,7 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
             .filter(|platform| crate::posting_plan::PLATFORMS.contains(&platform.as_str()))
             .collect();
     connected_platforms.sort_unstable();
+    let test_run = test_run::active_on(&mut tx, owner).await?;
     tx.commit().await?;
     Ok(ScheduleQueueSnapshot {
         settings: ScheduleSettings::from(&settings),
@@ -965,6 +973,7 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
         production_hold: current.production_hold,
         policy_previews,
         connected_platforms,
+        test_run,
     })
 }
 

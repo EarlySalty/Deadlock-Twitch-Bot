@@ -563,6 +563,7 @@ fn job_source(raw: &str) -> Result<JobSource, PoolError> {
     match raw {
         "autopilot" => Ok(JobSource::Autopilot),
         "manual" => Ok(JobSource::Manual),
+        "test" => Ok(JobSource::Test),
         _ => Err(PoolError::InvalidSource),
     }
 }

@@ -695,7 +695,7 @@ impl AutopilotWorker {
         let settings = autopilot_settings::load(&self.pool, &job.twitch_user_id)
             .await
             .map_err(ScheduleError::from)?;
-        let needs_review = job.source == JobSource::Manual
+        let needs_review = job.source != JobSource::Autopilot
             || settings.publish_mode == autopilot_settings::PublishMode::Review;
         produced_video::complete_render(
             &self.pool,

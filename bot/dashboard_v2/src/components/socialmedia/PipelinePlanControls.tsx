@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 
 import { CalendarClock, Plus, X } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { platformIconUrl } from './platformIcon';
+import { TestRunButton, TestRunStatus } from './TestRunControl';
 import type { PolicyPreview, PolicyScope, ScheduleQueueApi, WeeklySlot } from './autopilot/schedule-queue/api';
 import {
   AI_MODES, DISTRIBUTION_NOTES, HOLDS, PATHS, REVIEWS, SCOPES, SHARED_TEXT, TAB_ORDER, TEXT_SCOPES, WEEKDAYS, addTime, failureText, invalidPlatforms, isDirty, loadPlan, normalizeTime, planDraft, planPreview,
@@ -110,6 +111,11 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
     changed.current?.();
   }
 
+  const testRunChanged = () => {
+    void reload(false);
+    changed.current?.();
+  };
+
   const scheduleScope = (scope: PolicyScope) => {
     setMerged(scope === 'shared' && scopeMergeChanges(draft));
     edit(switchScope(draft, scope));
@@ -132,6 +138,11 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
       <h2 id={`${id}-heading`}><CalendarClock size={18} aria-hidden="true" />{text('Planen')}</h2>
       <p className="sq-help">{text('Lege fest, wie deine Clips vorbereitet werden, wer sie freigibt und wann sie erscheinen.')}</p>
     </header>
+    <div className="pp-testrun">
+      <TestRunButton testRun={base.snapshot.test_run} available={!dirty && !saving} api={api} owner={twitchUserId} onChanged={testRunChanged} />
+      {dirty && !base.snapshot.test_run && <p className="sq-help">{text('Speichere zuerst deine Änderungen, damit der Testlauf sie verwendet.')}</p>}
+      {base.snapshot.test_run && <TestRunStatus testRun={base.snapshot.test_run} api={api} owner={twitchUserId} onChanged={testRunChanged} />}
+    </div>
     <form className="pp-form" onSubmit={event => { event.preventDefault(); void submit(); }}>
       <fieldset className="pp-steps" disabled={saving}>
         <Step id={`${id}-step-1`} number={1} title={text('Postingplan')} question={text('Wann soll gepostet werden?')} text={text}

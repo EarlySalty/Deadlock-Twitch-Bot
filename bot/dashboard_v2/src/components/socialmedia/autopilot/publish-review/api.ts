@@ -80,6 +80,7 @@ export interface PublishVideo {
   cleanup_error: string | null;
   approvals: { platform: PublishPlatform; state: string; approver_user_id: string | null; decided_at: string | null }[];
   event: PublicationEvent | null;
+  test_job_id?: number | null;
 }
 
 export interface TikTokVersionContext {

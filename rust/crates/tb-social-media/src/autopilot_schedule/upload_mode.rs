@@ -487,7 +487,9 @@ impl AutopilotWorker {
             .map(|platforms| platforms.keys().cloned().collect())
             .unwrap_or_default();
         let tasks = preparation_tasks(&media, &platforms);
-        let needs_review = !tasks.is_empty() || policy.review_policy == ReviewPolicy::Required;
+        let needs_review = !tasks.is_empty()
+            || policy.review_policy == ReviewPolicy::Required
+            || job.source == JobSource::Test;
         let metadata = json!({
             "upload_artifact": {
                 "sha256": output_sha256,

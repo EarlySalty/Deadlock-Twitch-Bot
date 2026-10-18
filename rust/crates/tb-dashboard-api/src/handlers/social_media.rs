@@ -117,6 +117,8 @@ pub use autopilot_schedule::{
     get_handler as autopilot_schedule_get_handler, next_handler as autopilot_queue_next_handler,
     order_handler as autopilot_queue_order_handler, put_handler as autopilot_schedule_put_handler,
     resolve_handler as autopilot_queue_resolve_handler,
+    test_run_discard_handler as autopilot_test_run_discard_handler,
+    test_run_handler as autopilot_test_run_handler,
 };
 
 const MAX_PARAMETER_LAENGE: usize = 64;

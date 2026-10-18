@@ -8,7 +8,7 @@ use super::{
 };
 use crate::autopilot_settings::{self, AutopilotSettings, ClipSort};
 
-type ClipBounds = (DateTime<Utc>, DateTime<Utc>);
+pub(super) type ClipBounds = (DateTime<Utc>, DateTime<Utc>);
 
 #[derive(Debug, Default, Serialize)]
 pub struct PlanReport {
@@ -18,7 +18,7 @@ pub struct PlanReport {
     pub production_hold: Option<ProductionHold>,
 }
 
-async fn select_on(
+pub(super) async fn select_on(
     connection: &mut PgConnection,
     owner: &str,
     bounds: ClipBounds,
@@ -29,8 +29,11 @@ async fn select_on(
         WHERE p.twitch_user_id = $1 AND p.game_id = '2132205352'
         AND p.source_created_at >= $2 AND p.source_created_at < $3
         AND p.processed_at IS NULL AND p.published_at IS NULL AND NOT p.legacy_reserved
-        AND NOT EXISTS(SELECT 1 FROM social_production_jobs j WHERE j.clip_id = p.clip_db_id)
-        AND NOT EXISTS(SELECT 1 FROM social_produced_videos v WHERE v.clip_id = p.clip_db_id)
+        AND NOT EXISTS(SELECT 1 FROM social_production_jobs j WHERE j.clip_id = p.clip_db_id
+            AND NOT (j.source = 'test' AND j.status = 'cancelled'))
+        AND NOT EXISTS(SELECT 1 FROM social_produced_videos v WHERE v.clip_id = p.clip_db_id
+            AND NOT EXISTS(SELECT 1 FROM social_production_jobs dj WHERE dj.id = v.job_id
+                AND dj.source = 'test' AND dj.status = 'cancelled'))
         AND NOT EXISTS(SELECT 1 FROM twitch_clips_upload_queue q WHERE q.clip_id = p.clip_db_id)
         ORDER BY p.selected_at IS NULL, CASE WHEN $4 THEN p.source_created_at END DESC,
             CASE WHEN NOT $4 THEN p.source_created_at END ASC, p.clip_id ASC

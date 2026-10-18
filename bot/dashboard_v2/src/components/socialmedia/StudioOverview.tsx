@@ -6,6 +6,7 @@ import type { PlatformStatus, SocialClipMitPosting } from '@/api/socialMedia';
 import type { QueueJob, ScheduleQueueSnapshot } from './autopilot/schedule-queue';
 import type { PublishReviewClient, PublishSnapshot, PublishVideo } from './autopilot/publish-review/api';
 import { ApprovalEntries } from './StudioApprovals';
+import { TestRunButton, TestRunStatus, type TestRunApi } from './TestRunControl';
 import { approvalVideos } from './approvalVideos';
 import { StudioOverviewTiles } from './StudioOverviewTiles';
 import type { SocialPlatform } from '@/types/socialMedia';
@@ -108,7 +109,7 @@ export function StudioStatusStrip({ data, onNavigate }: {
   const reviews = unavailable(data.scheduleFailed || data.clipsFailed);
   const terms = [
     ...[schedule?.next_slot, ...jobsWithStatus(schedule, 'queued').map(job => job.scheduled_at),
-      ...jobsWithStatus(schedule, 'running').map(job => job.scheduled_at)]
+      ...jobsWithStatus(schedule, 'running').filter(job => job.source !== 'test').map(job => job.scheduled_at)]
       .filter((value): value is string => Boolean(value))
       .map(at => ({ at, timezone: schedule?.settings.timezone ?? data.timezone, view: 'planen' as const })),
     ...scheduledVideos(publish).map(video => ({ at: video.event!.scheduled_at, timezone: schedule?.settings.timezone ?? data.timezone, view: 'clips' as const })),
@@ -151,7 +152,7 @@ interface OverviewRow {
   onClick: () => void;
 }
 
-function OverviewColumn({ icon: Icon, title, count, rows, empty, lead, footer, variant }: {
+function OverviewColumn({ icon: Icon, title, count, rows, empty, lead, footer, variant, action }: {
   icon: IconComponent;
   title: string;
   count: number | null;
@@ -160,9 +161,10 @@ function OverviewColumn({ icon: Icon, title, count, rows, empty, lead, footer, v
   lead?: ReactNode;
   footer?: ReactNode;
   variant?: 'actions' | 'now' | 'next';
+  action?: ReactNode;
 }) {
   return <section className="studio-overview-column" data-variant={variant}>
-    <header className="studio-overview-column-head"><Icon className="h-4 w-4" aria-hidden /><h2>{title}</h2>{count !== null && count > 0 && <span>{count}</span>}</header>
+    <header className="studio-overview-column-head"><Icon className="h-4 w-4" aria-hidden /><h2>{title}</h2>{count !== null && count > 0 && <span>{count}</span>}{action}</header>
     {lead}
     {rows.length === 0 ? (empty && !lead ? <p className="studio-overview-empty">{empty}</p> : null) : <ul className="studio-overview-rows" data-scroll={rows.length > 8 ? 'true' : undefined}>{rows.map(row => <li key={row.key}>
       <button type="button" className="studio-overview-row" data-tone={row.tone ?? 'neutral'} onClick={row.onClick}>
@@ -237,7 +239,7 @@ function ownerFromActivity(activity: ReactNode): string | undefined {
   return isValidElement<{ twitchUserId?: string }>(activity) ? activity.props.twitchUserId : undefined;
 }
 
-export function PipelineOverview({ data, now, onNavigate, activity, twitchUserId, streamer, isAdmin = false, statisticsPlatforms, publishClient }: {
+export function PipelineOverview({ data, now, onNavigate, activity, twitchUserId, streamer, isAdmin = false, statisticsPlatforms, publishClient, testRunApi, onTestRunChanged }: {
   data: StudioOverviewData;
   now: number;
   activity?: ReactNode;
@@ -247,6 +249,8 @@ export function PipelineOverview({ data, now, onNavigate, activity, twitchUserId
   isAdmin?: boolean;
   statisticsPlatforms?: string[];
   publishClient?: PublishReviewClient;
+  testRunApi?: TestRunApi;
+  onTestRunChanged?: () => void;
 }) {
   const { t, locale } = useLanguage();
   const { timezone } = data;
@@ -308,7 +312,7 @@ export function PipelineOverview({ data, now, onNavigate, activity, twitchUserId
   const lead = showHold || legacyReviews > 0 || chips.length > 0 || (publish && approvals.length > 0) ? <>
     {holdRow && hold && <HoldBanner row={{ ...holdRow, hold }} onNavigate={onNavigate} />}
     {legacyReviews > 0 && <LegacyClipsBanner count={legacyReviews} onNavigate={onNavigate} />}
-    {publish && approvals.length > 0 && <ApprovalEntries videos={approvals} snapshot={publish} clips={clips} owner={owner} client={publishClient} timezone={zone} onNavigate={onNavigate} />}
+    {publish && approvals.length > 0 && <ApprovalEntries videos={approvals} snapshot={publish} clips={clips} owner={owner} client={publishClient} timezone={zone} onNavigate={onNavigate} testRunApi={testRunApi} onTestRunChanged={onTestRunChanged} />}
     <IssueChips chips={chips} />
   </> : undefined;
   return <div className="studio-overview" aria-busy={loading || undefined}>
@@ -317,7 +321,9 @@ export function PipelineOverview({ data, now, onNavigate, activity, twitchUserId
       <OverviewColumn variant="actions" icon={AlertTriangle} title={t('Prüfung & Freigabe')} count={chips.length + approvals.length + (legacyReviews > 0 ? 1 : 0)} rows={[]} lead={lead}
         empty={unavailable ?? t('Nichts offen. Du bist auf dem aktuellen Stand.')} />
       <div className="studio-overview-side">
-        <OverviewColumn variant="now" icon={CircleDot} title={t('Läuft gerade')} count={null} rows={nowRows} empty={activity ? '' : unavailable ?? t('Gerade läuft nichts.')} footer={activity} />
+        <OverviewColumn variant="now" icon={CircleDot} title={t('Läuft gerade')} count={null} rows={nowRows} empty={activity ? '' : unavailable ?? t('Gerade läuft nichts.')} footer={activity}
+          action={testRunApi && <TestRunButton testRun={schedule?.test_run} available={Boolean(schedule)} api={testRunApi} owner={owner} onChanged={onTestRunChanged} />}
+          lead={testRunApi && schedule?.test_run ? <TestRunStatus testRun={schedule.test_run} api={testRunApi} owner={owner} onChanged={onTestRunChanged} /> : undefined} />
         <OverviewColumn variant="next" icon={Clock3} title={t('Als Nächstes')} count={null} rows={nextRows} empty={unavailable ?? t('Noch nichts eingeplant.')}
           footer={<button type="button" className="studio-overview-link" onClick={() => onNavigate('planen')}>{t('Zeitplan öffnen')}<ArrowRight className="h-4 w-4" aria-hidden /></button>} />
       </div>

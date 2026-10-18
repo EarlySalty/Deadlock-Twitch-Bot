@@ -1578,7 +1578,7 @@ async fn review_required(ctx: &StageContext<'_>) -> Result<bool, AiEditorError> 
         return Ok(true);
     }
     if let Some(job) = ctx.identity.production() {
-        let frozen: Option<String> = sqlx::query_scalar("SELECT policy_snapshot->>'review_policy' FROM social_production_jobs WHERE id=$1 AND twitch_user_id=$2")
+        let frozen: Option<String> = sqlx::query_scalar("SELECT CASE WHEN source = 'test' THEN 'required' ELSE policy_snapshot->>'review_policy' END FROM social_production_jobs WHERE id=$1 AND twitch_user_id=$2")
             .bind(job).bind(ctx.owner).fetch_optional(ctx.pool).await.map_err(|_| AiEditorError::Storage)?.flatten();
         if let Some(policy) = frozen {
             return Ok(policy == "required");
