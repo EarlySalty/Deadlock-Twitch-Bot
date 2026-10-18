@@ -441,6 +441,8 @@ test('route discovery observes schedule and queue callers with optional query st
     `${prefix}/queue/:p/resolve`,
     `${prefix}/queue/order`,
     `${prefix}/schedule`,
+    `${prefix}/test-run`,
+    `${prefix}/test-run/:p/discard`,
   ]);
   const routes = new Set(registrierteRouten());
   for (const [original, replacement, missing] of [
