@@ -5,6 +5,7 @@ import { useLanguage } from '@/context/LanguageContext';
 import type { SocialClipMitPosting } from '@/api/socialMedia';
 import type { PublishPlatform, PublishReviewClient, PublishSnapshot, PublishVideo } from './autopilot/publish-review/api';
 import type { AiJobView } from './ai/api';
+import { proposalCost } from './ai/proposalCost';
 import type { TestRunApi } from './TestRunControl';
 import type { SocialMediaViewTarget } from './labels';
 import type { QueueStage } from './queuePresentation';
@@ -84,7 +85,7 @@ function ApprovalActions({ video, snapshot, owner, client, onNavigate, testRunAp
   onNavigate: (view: SocialMediaViewTarget, stage?: QueueStage) => void;
   testRunApi?: TestRunApi; onTestRunChanged?: () => void;
 }) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const queryClient = useQueryClient();
   const feedbackId = useId();
   const [revising, setRevising] = useState(false);
@@ -142,30 +143,22 @@ function ApprovalActions({ video, snapshot, owner, client, onNavigate, testRunAp
   const busy = approve.isPending || revise.isPending || decide.isPending || discard.isPending;
   const error = approve.error ?? revise.error ?? decide.error ?? discard.error;
   const proposal = pending?.revision_proposal;
-  if (testJobId) return <div className="studio-approval-actions" data-saving={busy ? 'true' : undefined}>
-    <div className="studio-approval-buttons">
-      <button type="button" className="studio-button studio-primary" disabled={busy || platforms.length === 0} title={platforms.length === 0 ? t('Kein verbundenes Ziel ohne weitere Angaben verfügbar') : undefined} onClick={() => approve.mutate()}>
-        <CalendarPlus className="h-4 w-4" aria-hidden />{t(approve.isPending ? 'Wird eingeplant …' : 'Für nächsten Termin einplanen')}
-      </button>
-      {testRunApi && <button type="button" className="studio-button" disabled={busy} onClick={() => discard.mutate()}>
-        <Trash2 className="h-4 w-4" aria-hidden />{t(discard.isPending ? 'Wird verworfen …' : 'Test verwerfen (Clip zurück in den Vorrat)')}
-      </button>}
-    </div>
-    {approve.isSuccess && <p className="studio-approval-note" role="status">{t('Für den nächsten Termin eingeplant.')}</p>}
-    {error && <p className="studio-approval-error" role="alert">{error instanceof Error ? error.message : t('Die Aktion ist fehlgeschlagen.')}</p>}
-  </div>;
   return <div className="studio-approval-actions" data-unsaved={feedback.trim() || busy ? 'true' : undefined} data-saving={busy ? 'true' : undefined}>
     <div className="studio-approval-buttons">
       <button type="button" className="studio-button studio-primary" disabled={busy || platforms.length === 0} title={platforms.length === 0 ? t('Kein verbundenes Ziel ohne weitere Angaben verfügbar') : undefined} onClick={() => approve.mutate()}>
-        <CheckCircle2 className="h-4 w-4" aria-hidden />{t(approve.isPending ? 'Wird freigegeben …' : 'Freigeben')}
+        {testJobId ? <CalendarPlus className="h-4 w-4" aria-hidden /> : <CheckCircle2 className="h-4 w-4" aria-hidden />}
+        {testJobId ? t(approve.isPending ? 'Wird eingeplant …' : 'Für nächsten Termin einplanen') : t(approve.isPending ? 'Wird freigegeben …' : 'Freigeben')}
       </button>
       <button type="button" className="studio-button" disabled={busy} aria-expanded={revising} aria-controls={feedbackId}
         onClick={() => video.mode === 'ai' ? setRevising(open => !open) : onNavigate('clips', 'review')}>
         <MessageSquareText className="h-4 w-4" aria-hidden />{t('Änderung wünschen')}
       </button>
+      {testJobId && testRunApi && <button type="button" className="studio-button" disabled={busy} onClick={() => discard.mutate()}>
+        <Trash2 className="h-4 w-4" aria-hidden />{t(discard.isPending ? 'Wird verworfen …' : 'Test verwerfen (Clip zurück in den Vorrat)')}
+      </button>}
     </div>
     {videoPlatforms(snapshot, video).includes('tiktok') && <p className="studio-approval-note">{t('TikTok braucht eigene Angaben und wird beim Prüfen freigegeben.')}</p>}
-    {approve.isSuccess && <p className="studio-approval-note" role="status">{t('Freigegeben.')}</p>}
+    {approve.isSuccess && <p className="studio-approval-note" role="status">{t(testJobId ? 'Für den nächsten Termin eingeplant.' : 'Freigegeben.')}</p>}
     {revising && <form id={feedbackId} className="studio-approval-feedback" onSubmit={event => { event.preventDefault(); if (feedback.trim() && feedbackBytes <= 2000) revise.mutate(feedback.trim()); }}>
       <label>
         <span>{t('Was soll die KI ändern?')}</span>
@@ -184,6 +177,7 @@ function ApprovalActions({ video, snapshot, owner, client, onNavigate, testRunAp
       <p>{proposal.summary}</p>
       <p>{proposal.impact}</p>
       <p>{proposal.reanalyze ? t('Dafür ist eine erneute KI-Analyse nötig.') : t('Der geplante Schnitt verändert die bisherige Fassung deutlich.')}</p>
+      <p>{proposalCost(proposal, locale, t)}</p>
       <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={event => setConfirmed(event.target.checked)} />{t('Ich bestätige den vorgeschlagenen nächsten Bearbeitungsschritt und mögliche zusätzliche KI-Kosten.')}</label>
       <div className="studio-approval-buttons">
         <button type="button" className="studio-button studio-primary" disabled={busy || !confirmed} onClick={() => decide.mutate({ id: pending.id, accept: true })}>{t('Änderung bestätigen')}</button>

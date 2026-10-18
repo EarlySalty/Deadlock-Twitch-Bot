@@ -5,13 +5,9 @@ import type { AiJobView, AiVideoVersion } from './api';
 import { approveAiVersion, decideAiProposal, decideAiVersion, fetchAiPublishingContext, reviseAiVersion, scheduleAiVersion, selectAiVersion } from './api';
 import { MetadataPanel } from './MetadataPanel';
 import { editorErrorExplanation } from './failure';
+import { proposalCost } from './proposalCost';
 
 type Action = 'revise' | 'confirm' | 'cancel' | 'select' | 'accept' | 'reject' | 'approve' | 'schedule';
-function proposalCost(proposal: NonNullable<AiJobView['revision_proposal']>, locale: string, t: ReturnType<typeof useT>) {
-  if (proposal.estimated_provider_cost_usd === null) return t('Die zusätzlichen Anbieter-Kosten sind noch nicht zuverlässig schätzbar.');
-  if (!proposal.reanalyze) return t('Dafür fallen keine weiteren KI-Kosten an, nur die Videoerstellung auf unserem Server.');
-  return t('Geschätzte zusätzliche Anbieter-Kosten: etwa {cost} US-Dollar, gemessen am ersten Durchlauf dieses Clips.', { cost: proposal.estimated_provider_cost_usd.toLocaleString(locale, { maximumFractionDigits: 4 }) });
-}
 
 const platforms = [{id:'youtube',label:'YouTube'},{id:'tiktok',label:'TikTok'},{id:'instagram',label:'Instagram'}];
 
