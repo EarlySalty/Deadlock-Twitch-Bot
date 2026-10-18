@@ -154,7 +154,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
               <input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} />
               <span>{text('h vor Termin')}</span>
             </label>
-            <NextSlots base={base} preview={preview} targets={draft.target_platforms} locale={locale} text={text} />
+            <NextSlots base={base} preview={preview} targets={draft.target_platforms} independent={draft.distribution_policy === 'independent_clips'} locale={locale} text={text} />
           </div>
           {merged && draft.schedule_scope === 'shared' && <p className="sq-help pp-merge-note">{text('Die Zeiten aller Plattformen wurden zusammengeführt. Mit „Verwerfen“ kannst du das rückgängig machen.')}</p>}
           {!draft.target_platforms.length && <p className="sq-help">{text('Noch keine Plattform für Auto-Posting aktiv. Aktiviere sie unter Einstellungen bei den Konten.')}</p>}
@@ -314,15 +314,19 @@ function WeekEditor({ label, slots, text, onChange }: { label: string; slots: We
   </div>;
 }
 
-function NextSlots({ base, preview, targets, locale, text }: { base: PlanState; preview: PolicyPreview; targets: string[]; locale: string; text: PlanText }) {
+function NextSlots({ base, preview, targets, independent, locale, text }: { base: PlanState; preview: PolicyPreview; targets: string[]; independent: boolean; locale: string; text: PlanText }) {
   const timezone = base.snapshot.settings.timezone;
   const next = preview.next_slots;
   const shown = targets.filter(platform => base.snapshot.settings.target_platforms.includes(platform));
   const titleId = useId();
+  const common = !independent && shown.length > 1 && new Set(shown.map(platform => next[platform] ?? '')).size === 1;
   return <div className="pp-info-item pp-next-block">
-    <span id={titleId} className="pp-next-title">{text('Nächster Termin')}</span>
+    <span id={titleId} className="pp-next-title">{text(independent && shown.length > 1 ? 'Nächster Termin je Plattform' : 'Nächster Termin')}</span>
     <dl className="pp-next" aria-labelledby={titleId}>
-      {shown.length ? shown.map(platform => <div key={platform}>
+      {common ? <div>
+        <dt>{shown.map(platform => <img key={platform} src={platformIconUrl(platform)} width="14" height="14" alt={platformLabel(platform)} />)}</dt>
+        <dd>{text('{slot}, gemeinsam', { slot: slotLabel(next[shown[0]], timezone, locale, text) })}</dd>
+      </div> : shown.length ? shown.map(platform => <div key={platform}>
         <dt><img src={platformIconUrl(platform)} width="14" height="14" alt={platformLabel(platform)} /></dt>
         <dd>{slotLabel(next[platform], timezone, locale, text)}</dd>
       </div>) : <div><dt>{text('Alle Plattformen')}</dt><dd>{slotLabel(preview.next_slot ?? undefined, timezone, locale, text)}</dd></div>}

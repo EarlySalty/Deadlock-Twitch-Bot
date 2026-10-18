@@ -71,7 +71,7 @@
 .pp-next-title { color: var(--sq-muted); }
 .pp-next { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; }
 .pp-next > div { display: inline-flex; align-items: center; gap: 6px; }
-.pp-next dt { display: inline-flex; color: var(--sq-muted); }
+.pp-next dt { display: inline-flex; gap: 3px; color: var(--sq-muted); }
 .pp-next img { display: block; width: 14px; height: 14px; flex: none; }
 .pp-next dd { margin: 0; font-weight: 600; color: var(--color-text-primary, #f2eee6); }
 .pp-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; border-bottom: 1px solid var(--sq-border); }

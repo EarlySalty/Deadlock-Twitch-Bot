@@ -68,7 +68,7 @@ test('plan timestamps use the selected locale rather than a fixed German locale'
   assert.equal(formatters.length, 1);
   assert.equal(formatters[0].arguments?.[0].getText(tree), 'locale');
   const calls = nodes.filter(ts.isCallExpression).filter(node => node.expression.getText(tree) === 'slotLabel');
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.ok(calls.every(call => call.arguments[2].getText(tree) === 'locale'));
   const rawText = nodes.filter(ts.isJsxText).map(node => node.text.trim()).filter(Boolean);
   assert.deepEqual(rawText, []);

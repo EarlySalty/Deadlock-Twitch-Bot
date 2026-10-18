@@ -114,6 +114,8 @@ export const PLAN_EN: Record<string, string> = {
   'Aktiv: Jede Plattform zieht sich einen eigenen, anderen Clip aus dem Vorrat (verbraucht mehr Clips).': 'Active: Each platform takes its own, different clip from the pool (uses more clips).',
   'Zeiten für {platform}': 'Times for {platform}',
   'Alle Plattformen': 'All platforms',
+  'Nächster Termin je Plattform': 'Next slot per platform',
+  '{slot}, gemeinsam': '{slot}, shared',
   'Noch kein Termin': 'No time yet',
   'Termin nicht verfügbar': 'Time unavailable',
   'Ungespeicherte Änderungen': 'Unsaved changes',
