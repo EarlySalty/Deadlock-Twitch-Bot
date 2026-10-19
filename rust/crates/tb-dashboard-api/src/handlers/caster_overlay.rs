@@ -509,6 +509,10 @@ pub async fn html_handler() -> impl IntoResponse {
     overlay_page(include_str!("caster_overlay.html"))
 }
 
+pub async fn scoreboard_handler() -> impl IntoResponse {
+    overlay_page(include_str!("caster_scoreboard.html"))
+}
+
 pub async fn background_handler() -> impl IntoResponse {
     (
         [

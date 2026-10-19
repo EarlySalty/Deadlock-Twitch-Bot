@@ -190,6 +190,10 @@ pub fn build_public_router_with_brain(
             get(crate::handlers::caster_overlay::html_handler),
         )
         .route(
+            "/twitch/caster-overlay/scoreboard",
+            get(crate::handlers::caster_overlay::scoreboard_handler),
+        )
+        .route(
             "/twitch/caster-overlay/background.png",
             get(crate::handlers::caster_overlay::background_handler),
         )
