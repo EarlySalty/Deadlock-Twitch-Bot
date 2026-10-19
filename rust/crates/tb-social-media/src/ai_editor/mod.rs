@@ -93,35 +93,35 @@ impl AiEditorError {
     pub fn is_human_review_hold(&self) -> bool {
         matches!(self, Self::Consent)
     }
-}
 
-#[cfg(test)]
-mod completion_mapping_tests {
-    use super::AiEditorError;
+    const UNIT_VARIANTS: [AiEditorError; 19] = [
+        Self::Configuration,
+        Self::Source,
+        Self::SourceDownload,
+        Self::SourceMissing,
+        Self::SourceUnreadable,
+        Self::Consent,
+        Self::Budget,
+        Self::Provider,
+        Self::Transcription,
+        Self::Plan,
+        Self::Render,
+        Self::Validation,
+        Self::Storage,
+        Self::Conflict,
+        Self::Attempts,
+        Self::Deadline,
+        Self::Input,
+        Self::NotFound,
+        Self::PipelineBusy,
+    ];
 
-    #[test]
-    fn consent_is_the_only_produce_error_that_holds_for_review() {
-        assert!(AiEditorError::Consent.is_human_review_hold());
-        for error in [
-            AiEditorError::Source,
-            AiEditorError::SourceDownload,
-            AiEditorError::SourceMissing,
-            AiEditorError::SourceUnreadable,
-            AiEditorError::Attempts,
-            AiEditorError::Render,
-            AiEditorError::Validation,
-            AiEditorError::Deadline,
-            AiEditorError::Provider,
-            AiEditorError::Transcription,
-            AiEditorError::Plan,
-            AiEditorError::Budget,
-            AiEditorError::Configuration,
-        ] {
-            assert!(
-                !error.is_human_review_hold(),
-                "{error} must finish as failed"
-            );
-        }
+    pub fn failure_messages() -> Vec<String> {
+        Self::UNIT_VARIANTS
+            .iter()
+            .filter(|error| !error.is_human_review_hold())
+            .map(ToString::to_string)
+            .collect()
     }
 }
 
@@ -149,5 +149,26 @@ impl From<tb_llm::social_editor::EditorError> for AiEditorError {
             tb_llm::social_editor::ErrorKind::Configuration => Self::Configuration,
             _ => Self::Provider,
         }
+    }
+}
+
+#[cfg(test)]
+mod completion_mapping_tests {
+    use super::AiEditorError;
+
+    #[test]
+    fn consent_is_the_only_produce_error_that_holds_for_review() {
+        assert!(AiEditorError::Consent.is_human_review_hold());
+        for error in AiEditorError::UNIT_VARIANTS
+            .iter()
+            .filter(|error| !matches!(error, AiEditorError::Consent))
+        {
+            assert!(
+                !error.is_human_review_hold(),
+                "{error} must finish as failed"
+            );
+        }
+        assert!(!AiEditorError::failure_messages().contains(&AiEditorError::Consent.to_string()));
+        assert!(AiEditorError::failure_messages().contains(&AiEditorError::Source.to_string()));
     }
 }

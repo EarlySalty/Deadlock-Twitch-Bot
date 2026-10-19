@@ -6,12 +6,14 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool, Row};
 
+use crate::ai_editor::AiEditorError;
 use crate::autopilot_settings::{
     self, AutopilotSettings, DistributionPolicy, MigrationDisposition, PipelineMigrationMapping,
     PipelineMode, PipelinePolicy, PolicyScope, PublishMode, ReviewPolicy, ScheduleSlot,
     SettingsError,
 };
 use crate::posting_plan::PLATFORMS;
+use crate::production_jobs::UNSUITABLE_REASON;
 
 pub const MIGRATION_VERSION: i32 = 1;
 
@@ -1929,19 +1931,30 @@ pub async fn clear_legacy_review_jam(
 ) -> Result<LegacyReviewClearReport, MigrationError> {
     let mut tx = pool.begin().await?;
     let cancelled: Vec<(String, i64)> = sqlx::query_as(
-        "UPDATE social_production_jobs j
-        SET status = 'cancelled', stage = 'cleared_no_video',
-            finished_at = COALESCE(finished_at, NOW()), scheduled_at = NULL
-        WHERE j.status IN ('review', 'failed')
-        AND NOT EXISTS (
-            SELECT 1 FROM social_produced_videos v
-            WHERE v.twitch_user_id = j.twitch_user_id
-            AND social_video_job(v.job_id, v.metadata) = j.id
-            AND v.file_path IS NOT NULL
-            AND v.status NOT IN ('rejected', 'expired')
+        "WITH jammed AS (
+            SELECT j.id FROM social_production_jobs j
+            WHERE j.status = 'review'
+            AND j.review_reasons ?| $1::text[]
+            AND NOT j.review_reasons ? $2
+            AND NOT EXISTS (
+                SELECT 1 FROM social_produced_videos v
+                WHERE v.twitch_user_id = j.twitch_user_id
+                AND social_video_job(v.job_id, v.metadata) = j.id
+                AND v.file_path IS NOT NULL
+                AND v.status NOT IN ('rejected', 'expired')
+            )
+            FOR UPDATE OF j
         )
-        RETURNING twitch_user_id, clip_id",
+        UPDATE social_production_jobs j
+        SET status = CASE WHEN j.source = 'test' THEN 'failed' ELSE 'cancelled' END,
+            stage = CASE WHEN j.source = 'test' THEN 'failed' ELSE 'cleared_no_video' END,
+            last_error = COALESCE(j.last_error, j.review_reasons->>0),
+            finished_at = COALESCE(j.finished_at, NOW()), scheduled_at = NULL
+        FROM jammed WHERE j.id = jammed.id
+        RETURNING j.twitch_user_id, j.clip_id",
     )
+    .bind(AiEditorError::failure_messages())
+    .bind(UNSUITABLE_REASON)
     .fetch_all(&mut *tx)
     .await?;
     let clip_ids: Vec<i64> = cancelled.iter().map(|(_, clip_id)| *clip_id).collect();
@@ -1969,6 +1982,12 @@ pub async fn clear_legacy_review_jam(
         AND EXISTS (
             SELECT 1 FROM social_pipeline_cutover o
             WHERE o.twitch_user_id = c.twitch_user_id AND o.state = 'unified'
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM social_produced_videos v
+            WHERE v.twitch_user_id = c.twitch_user_id AND v.clip_id = c.id
+            AND v.file_path IS NOT NULL
+            AND v.status NOT IN ('rejected', 'expired')
         )",
     )
     .execute(&mut *tx)

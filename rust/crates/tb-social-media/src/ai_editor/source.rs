@@ -58,10 +58,9 @@ pub fn authorized_path(root: &Path, path: &Path, max_bytes: u64) -> Result<PathB
 
 fn classify_download(error: &str) -> AiEditorError {
     let lower = error.to_ascii_lowercase();
-    if lower.contains("404")
-        || lower.contains("unavailable")
-        || lower.contains("not found")
-        || lower.contains("no longer available")
+    if ["http error 404", "http error 410", "no longer available"]
+        .iter()
+        .any(|marker| lower.contains(marker))
     {
         AiEditorError::SourceMissing
     } else {
@@ -385,6 +384,35 @@ impl Drop for Workspace {
             if error.kind() != std::io::ErrorKind::NotFound {
                 tracing::warn!("AI editor workspace cleanup failed");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod classify_download_tests {
+    use super::{classify_download, AiEditorError};
+
+    #[test]
+    fn only_gone_clips_count_as_missing() {
+        for missing in [
+            "ERROR: [twitch:clips] abc: HTTP Error 404: Not Found",
+            "ERROR: [twitch:clips] abc: HTTP Error 410: Gone",
+            "ERROR: [twitch:clips] abc: This clip is no longer available",
+        ] {
+            assert!(matches!(
+                classify_download(missing),
+                AiEditorError::SourceMissing
+            ));
+        }
+        for transient in [
+            "ERROR: [twitch:clips] abc: HTTP Error 503: Service Unavailable",
+            "ERROR: Requested format is not available",
+            "ERROR: ffmpeg not found",
+        ] {
+            assert!(matches!(
+                classify_download(transient),
+                AiEditorError::SourceDownload
+            ));
         }
     }
 }

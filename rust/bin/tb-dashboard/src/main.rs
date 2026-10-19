@@ -495,6 +495,17 @@ async fn main() {
         brain_runtime,
     );
     app = app.layer(axum::Extension(readiness_fingerprint));
+    app = app.layer(axum::Extension(
+        tb_dashboard_api::handlers::social_media_ai::AiSourceDownloader(std::sync::Arc::new(
+            tb_social_media::clip_prep_worker::YtDlpDownloader::new(
+                private_vod_runtime
+                    .paths
+                    .yt_dlp
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        )),
+    ));
     app = app.layer(axum::Extension(private_vod_runtime));
     if let Some(avatar_cache) = tb_dashboard_api::handlers::internal_home::AvatarCache::from_env() {
         app = app.layer(axum::Extension(avatar_cache));

@@ -1804,6 +1804,9 @@ async fn main() {
                     pool.clone(),
                     runtime,
                     Some(settings.internal_api.token.clone()),
+                    Arc::new(tb_social_media::clip_prep_worker::YtDlpDownloader::new(
+                        yt_dlp_path(snapshot).to_string_lossy().into_owned(),
+                    )),
                 );
                 supervisor.spawn("social_manual_ai_worker", async move {
                     tracing::info!(task = "social_manual_ai_worker", "SOCIAL_AI_WORKER_STARTED");

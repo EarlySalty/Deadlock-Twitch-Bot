@@ -387,7 +387,7 @@ async fn manual_resume_materializes_one_owned_version_and_preserves_frozen_layou
         .await
         .expect("default C1");
     assert!(!settings.enabled && !settings.ai_editing_enabled);
-    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
         .await
         .expect("manual create independent of autopilot");
     assert!(matches!(
@@ -455,7 +455,12 @@ async fn manual_resume_materializes_one_owned_version_and_preserves_frozen_layou
         .await
         .expect("durable proxy before checkpoint save");
     lease.release().await.expect("handover before worker");
-    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
     assert!(worker
         .process_next()
         .await
@@ -612,7 +617,7 @@ async fn failed_original_preview_still_expires_the_partial_owned_output() {
     let runtime = EditorRuntime::from_configuration(directory.path(), configuration)
         .expect("bounded failing preview configuration");
     let clip = source(&db.pool, &runtime).await;
-    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
         .await
         .expect("manual job");
     let mut lease = super::super::store::acquire_production_lease(&db.pool)
@@ -722,10 +727,15 @@ async fn static_full_video_and_manual_ai_share_the_lease_and_busy_previews_remai
     let original = runtime.limits.source_root.join("fixture-original.mp4");
     let output = runtime.limits.output_root.join("static-fixture.mp4");
     let processor = crate::video_processor::VideoProcessor::default();
-    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
         .await
         .expect("queued manual AI");
-    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
     let mut lease = super::super::store::acquire_production_lease(&db.pool)
         .await
         .expect("lease")
@@ -824,7 +834,7 @@ async fn invalid_frozen_checkpoint_fails_visibly_without_starving_the_queue() {
     let directory = tempfile::tempdir().expect("package root");
     let runtime = runtime(directory.path());
     let clip = source(&db.pool, &runtime).await;
-    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
         .await
         .expect("manual job");
     let mut lease = super::super::store::acquire_production_lease(&db.pool)
@@ -861,7 +871,12 @@ async fn invalid_frozen_checkpoint_fails_visibly_without_starving_the_queue() {
     .await
     .expect("bounded but incompatible checkpoint");
     lease.release().await.expect("release");
-    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
     assert!(worker.process_next().await.is_err());
     let view = super::super::get_manual_job(&db.pool, &runtime, "101", job.id)
         .await
@@ -1005,7 +1020,7 @@ async fn expired_manual_media_retries_rebuild_without_replaying_provider_stages(
         let directory = tempfile::tempdir().expect("package root");
         let runtime = runtime(directory.path());
         let clip = source(&db.pool, &runtime).await;
-        let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+        let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
             .await
             .expect("manual job");
         let identity = Identity::Manual(job.id);
@@ -1104,7 +1119,12 @@ async fn expired_manual_media_retries_rebuild_without_replaying_provider_stages(
             .await
             .expect("advertised retry accepted");
         lease.release().await.expect("worker handover");
-        let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+        let worker = super::super::ManualWorker::new(
+            db.pool.clone(),
+            runtime.clone(),
+            None,
+            std::sync::Arc::new(NoDownload),
+        );
         assert!(worker
             .process_next()
             .await
@@ -1369,7 +1389,7 @@ async fn expiry_after_queueing_does_not_spend_validation_attempts_when_rendering
     let directory = tempfile::tempdir().expect("package root");
     let runtime = runtime(directory.path());
     let clip = source(&db.pool, &runtime).await;
-    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
         .await
         .expect("job");
     let identity = Identity::Manual(job.id);
@@ -1413,7 +1433,12 @@ async fn expiry_after_queueing_does_not_spend_validation_attempts_when_rendering
         .expect("queue before expiry");
     expire_fixture(&db.pool, video.id).await;
     lease.release().await.expect("handover");
-    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
     assert!(matches!(
         worker.process_next().await,
         Err(AiEditorError::Attempts)
@@ -1449,7 +1474,7 @@ async fn revision_fixture(
     runtime: &EditorRuntime,
     clip: i64,
 ) -> (i64, ProducedVideo, BTreeMap<AiStage, StageCheckpoint>) {
-    let job = super::super::create_manual_job(pool, runtime, "101", clip)
+    let job = super::super::create_manual_job(pool, runtime, "101", clip, &NoDownload)
         .await
         .expect("manual root");
     let mut lease = super::super::store::acquire_production_lease(pool)
@@ -1467,10 +1492,15 @@ async fn revision_fixture(
             .expect("checkpoint");
     }
     lease.release().await.expect("release");
-    super::super::ManualWorker::new(pool.clone(), runtime.clone(), None)
-        .process_next()
-        .await
-        .expect("real render and validation");
+    super::super::ManualWorker::new(
+        pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    )
+    .process_next()
+    .await
+    .expect("real render and validation");
     let video = produced_video::find_ai_version(pool, "101", clip, Some(job.id), None)
         .await
         .expect("C2")
@@ -1606,7 +1636,12 @@ async fn revisions_preserve_parent_reuse_checkpoints_and_confirm_before_renderin
         .await
         .expect("awaiting");
     assert_eq!(awaiting.status, "awaiting_confirmation");
-    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
     assert!(!worker.process_next().await.expect("paused worker"));
     assert!(
         produced_video::find_ai_version(&db.pool, "101", clip, Some(child.id), None)
@@ -1968,7 +2003,7 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
     autopilot_settings::save(&db.pool, "101", &settings)
         .await
         .expect("explicit isolated opt-in");
-    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
         .await
         .expect("job");
     let mut lease = super::super::store::acquire_production_lease(&db.pool)
@@ -2081,10 +2116,15 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
             .expect("checkpoint");
     }
     lease.release().await.expect("release");
-    super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None)
-        .process_next()
-        .await
-        .expect("actual multiple FFmpeg outputs");
+    super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    )
+    .process_next()
+    .await
+    .expect("actual multiple FFmpeg outputs");
     let view = super::super::get_manual_job(&db.pool, &runtime, "101", job.id)
         .await
         .expect("variants view");
@@ -2471,7 +2511,12 @@ async fn autopilot_revisions_replace_review_and_invalidate_old_file_approvals() 
     revision::decide_proposal(&db.pool, &runtime, "101", child.id, true)
         .await
         .expect("confirm held parent");
-    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
     assert!(worker.process_next().await.expect("revision render"));
     let completed = super::super::get_manual_job(&db.pool, &runtime, "101", child.id)
         .await
@@ -2766,13 +2811,12 @@ async fn load_source_maps_twitch_404_to_source_missing() {
     };
     assert!(matches!(error, AiEditorError::SourceMissing));
     assert!(error.is_source_fetch_failure());
-    let stored: Option<String> = sqlx::query_scalar(
-        "SELECT local_file_path FROM twitch_clips_social_media WHERE id = $1",
-    )
-    .bind(clip)
-    .fetch_one(&db.pool)
-    .await
-    .expect("unchanged path");
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT local_file_path FROM twitch_clips_social_media WHERE id = $1")
+            .bind(clip)
+            .fetch_one(&db.pool)
+            .await
+            .expect("unchanged path");
     assert!(stored.is_none());
 }
 

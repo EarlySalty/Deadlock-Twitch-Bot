@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tb_social_media::{
     ai_editor::{self, store, AiEditorError, EditorRuntime},
+    clip_prep_worker::ClipDownloader,
     produced_video,
 };
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -42,6 +43,9 @@ impl AiRuntime {
             .ok_or_else(|| ApiError::from(AiEditorError::Configuration))
     }
 }
+
+#[derive(Clone)]
+pub struct AiSourceDownloader(pub Arc<dyn ClipDownloader>);
 
 pub fn routes(runtime: AiRuntime) -> Router<PgPool> {
     Router::new()
@@ -346,12 +350,19 @@ pub async fn jobs_create(
     State(pool): State<PgPool>,
     auth: DashboardAuthLevel,
     Extension(runtime): Extension<AiRuntime>,
+    Extension(downloader): Extension<AiSourceDownloader>,
     Json(input): Json<CreateInput>,
 ) -> Result<Json<Value>, ApiError> {
     let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
-    Ok(Json(
-        json!({ "job": ai_editor::create_manual_job(&pool, runtime.required()?, &owner, input.clip_db_id).await? }),
-    ))
+    let job = ai_editor::create_manual_job(
+        &pool,
+        runtime.required()?,
+        &owner,
+        input.clip_db_id,
+        downloader.0.as_ref(),
+    )
+    .await?;
+    Ok(Json(json!({ "job": job })))
 }
 
 pub async fn job_get(

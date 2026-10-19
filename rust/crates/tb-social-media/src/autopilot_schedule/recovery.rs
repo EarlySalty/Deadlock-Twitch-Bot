@@ -51,7 +51,7 @@ pub async fn recover_after_lease(pool: &PgPool) -> Result<Recovery, ScheduleErro
     Ok(Recovery { resumed, failed })
 }
 
-pub async fn retry_or_review(
+pub async fn retry_or_fail(
     pool: &PgPool,
     job: &ProductionJob,
     reason: &str,
@@ -76,7 +76,7 @@ pub async fn retry_or_review(
             job.id,
             JobCompletion::Failed,
             &[reason.into()],
-            Some("Die Produktion konnte nicht abgeschlossen werden. Bitte prüfe den Auftrag."),
+            Some("Die Produktion konnte nicht abgeschlossen werden. Der Autopilot macht mit dem nächsten Clip weiter, Testläufe kannst du erneut starten."),
         )
         .await?;
         return Ok(());

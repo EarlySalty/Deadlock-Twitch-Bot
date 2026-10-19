@@ -12,7 +12,7 @@ mod text_mode;
 mod upload_mode;
 
 use crate::production_jobs::autopilot_schedule::{
-    plan_owner, recover_after_lease, retry_or_review, ScheduleError,
+    plan_owner, recover_after_lease, retry_or_fail, ScheduleError,
 };
 use crate::{
     ai_editor::{self, EditorRuntime, MediaInfo, MediaRuntime, ProductionContext, ResourceLimits},
@@ -196,7 +196,7 @@ impl AutopilotWorker {
                                 autopilot_settings::SettingsError::Database(_)
                             ))
                     );
-                    retry_or_review(&self.pool, job, "static_production_failed", retryable).await?;
+                    retry_or_fail(&self.pool, job, "static_production_failed", retryable).await?;
                     if !retryable || job.attempts >= job.max_attempts {
                         self.fail_static_video(job).await?;
                     }
@@ -234,7 +234,7 @@ impl AutopilotWorker {
                 job.id,
                 JobCompletion::Failed,
                 &["ai_editor_unavailable".into()],
-                Some("Der KI-Editor ist noch nicht verfügbar. Bitte prüfe den Auftrag."),
+                Some("Der KI-Editor ist gerade nicht verfügbar. Der Autopilot macht mit dem nächsten Clip weiter, Testläufe kannst du später erneut starten."),
             )
             .await?;
             return Ok(());

@@ -405,6 +405,8 @@ export const SOCIAL_EN: Record<string, string> = {
   'Behalten': 'Keep',
   'Die Produktion konnte nicht abgeschlossen werden. Bitte prüfe den Auftrag.': 'Production could not be completed. Please review the job.',
   'Der KI-Editor ist noch nicht verfügbar. Bitte prüfe den Auftrag.': 'The AI editor is not available yet. Please review the job.',
+  'Die Produktion konnte nicht abgeschlossen werden. Der Autopilot macht mit dem nächsten Clip weiter, Testläufe kannst du erneut starten.': 'Production could not be completed. Autopilot continues with the next clip, and you can restart test runs.',
+  'Der KI-Editor ist gerade nicht verfügbar. Der Autopilot macht mit dem nächsten Clip weiter, Testläufe kannst du später erneut starten.': 'The AI editor is currently unavailable. Autopilot continues with the next clip, and you can restart test runs later.',
   'Die statische Produktion konnte nicht abgeschlossen werden': 'Static production could not be completed',
   'Die Produktionsdaten konnten nicht geladen oder gespeichert werden': 'Production data could not be loaded or saved',
   'Die Produktionsdatei konnte nicht verwendet werden': 'The production file could not be used',

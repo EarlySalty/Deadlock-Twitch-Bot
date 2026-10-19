@@ -276,7 +276,7 @@ async fn one_failed_or_review_job_does_not_block_the_next_clip_in_both_publish_m
                     1
                 );
             } else {
-                retry_or_review(
+                retry_or_fail(
                     &pool,
                     &running,
                     "resource_unavailable",
@@ -651,7 +651,7 @@ async fn completion_retry_and_recovery_lock_owner_before_the_job_row() {
                 )
                 .await
                 .map_err(ScheduleError::from),
-                "retry" => retry_or_review(&task_pool, &running, "transient", true).await,
+                "retry" => retry_or_fail(&task_pool, &running, "transient", true).await,
                 _ => recover_after_lease(&task_pool).await.map(|_| ()),
             }
         });
@@ -901,7 +901,7 @@ async fn dst_retry_pause_and_missing_targets_keep_reservations_consistent() {
         .expect("running queue")
         .remove(0);
     assert_eq!(reserved(&pool, "owner").await.len(), 1);
-    retry_or_review(&pool, &claimed, "temporary", true)
+    retry_or_fail(&pool, &claimed, "temporary", true)
         .await
         .expect("retry");
     assert_eq!(
