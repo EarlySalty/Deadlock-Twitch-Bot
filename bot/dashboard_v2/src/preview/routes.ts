@@ -30,6 +30,17 @@ export function isPreviewLocalhost(): boolean {
 }
 
 export function getPlanCheckoutHref(planId?: string | null, isFreePlan = false, cycle: 1 | 12 = 1): string {
+  if (typeof window !== 'undefined') {
+    const path = (window.location?.pathname ?? '').replace(/\/+$/, '') || '/';
+    if (
+      path === '/twitch/rundgang' ||
+      path.startsWith('/twitch/rundgang/') ||
+      path === '/demo/twitch/rundgang' ||
+      path.startsWith('/demo/twitch/rundgang/')
+    ) {
+      return '/twitch/auth/login?next=%2Ftwitch%2Fdashboard';
+    }
+  }
   if (PREVIEW_MODE) {
     return PREVIEW_BILLING_ROUTE;
   }

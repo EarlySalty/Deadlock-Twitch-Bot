@@ -33,6 +33,8 @@ import { shouldRetryApiQuery } from '@/api/httpError';
 import {
   dashboardRuntimeConfig,
   hasDemoRuntimeConfig,
+  isPublicTourPath,
+  livePathFromTourPath,
   resolveEffectiveDemoMode,
 } from '@/runtimeConfig';
 import { AlertTriangle } from 'lucide-react';
@@ -317,7 +319,7 @@ function AnalyticsDashboard() {
             isDemoMode={isDemoMode}
           />
 
-          {isDemoMode && (
+          {isDemoMode && !isPublicTourPath(window.location.pathname) && (
             <div className="mb-4 rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3 text-sm text-warning/90">
               {t(
                 'Demo-Daten aus einem statischen Snapshot. Profilwechsel und Analysen laufen ausschließlich über den Demo-Namespace.',
@@ -423,7 +425,8 @@ function PricingRoute() {
 
 export default function App() {
   const location = useSyncExternalStore(subscribeNavigation, navigationSnapshot);
-  const path = normalizePathname(window.location.pathname);
+  const rawPath = normalizePathname(window.location.pathname);
+  const path = livePathFromTourPath(rawPath) ?? rawPath;
   if (path === '/twitch/guild-onboarding') {
     return <QueryClientProvider client={queryClient}><LanguageProvider><ErrorBoundary><GuildOnboardingPage /></ErrorBoundary></LanguageProvider></QueryClientProvider>;
   }

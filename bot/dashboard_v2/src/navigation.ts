@@ -25,9 +25,22 @@ function navigationIndex(): number | null {
   return index !== undefined && index >= 0 ? index : null;
 }
 
+function isDashboardPath(pathname: string): boolean {
+  const normalized = pathname.replace(/\/+$/, '') || '/';
+  if (dashboardPaths.has(normalized)) {
+    return true;
+  }
+  return (
+    normalized === '/twitch/rundgang' ||
+    normalized.startsWith('/twitch/rundgang/') ||
+    normalized === '/demo/twitch/rundgang' ||
+    normalized.startsWith('/demo/twitch/rundgang/')
+  );
+}
+
 export function dashboardDestination(href: string): URL | null {
   const url = new URL(href, window.location.href);
-  return url.origin === window.location.origin && dashboardPaths.has(url.pathname.replace(/\/+$/, '') || '/')
+  return url.origin === window.location.origin && isDashboardPath(url.pathname)
     ? url : null;
 }
 

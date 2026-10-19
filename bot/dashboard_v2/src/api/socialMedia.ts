@@ -1,6 +1,7 @@
 import { withCookieCredentials } from './core';
 import { mainDomainOAuthUrl } from '../i18n/oauthLinks';
 import { isPreviewLocalhost, PREVIEW_SOCIAL_ROUTE } from '@/preview/routes';
+import { isPublicTourPath } from '@/runtimeConfig';
 import { getPreviewSocialResponse } from '@/preview/fixtures';
 import { fetchAuthStatus } from './auth';
 import type {
@@ -104,7 +105,9 @@ export class SocialMediaForbiddenError extends SocialMediaApiError {
 }
 
 async function socialRequest(path: string, init: RequestInit = {}): Promise<Response> {
-  if (isPreviewLocalhost()) return getPreviewSocialResponse(path, init);
+  if (isPreviewLocalhost() || (typeof window !== 'undefined' && isPublicTourPath(window.location.pathname))) {
+    return getPreviewSocialResponse(path, init);
+  }
   return fetch(path, withCookieCredentials(init));
 }
 
@@ -266,7 +269,7 @@ export async function getPreviewStatus(clipDbId: number): Promise<ClipPreviewSta
 }
 
 export function previewFileUrl(clipDbId: number): string {
-  if (isPreviewLocalhost()) return 'data:video/mp4;base64,';
+  if (isPreviewLocalhost() || (typeof window !== 'undefined' && isPublicTourPath(window.location.pathname))) return 'data:video/mp4;base64,';
   return `${ADMIN_PREFIX}/clips/${clipDbId}/preview/file`;
 }
 
@@ -491,7 +494,7 @@ export interface ClipContestResult {
  * lesbarer Satz zurück, deshalb hier ohne `fetchJson`.
  */
 export async function submitClipToContest(clipDbId: number): Promise<ClipContestResult> {
-  const auth = isPreviewLocalhost() ? null : await fetchAuthStatus();
+  const auth = isPreviewLocalhost() || (typeof window !== 'undefined' && isPublicTourPath(window.location.pathname)) ? null : await fetchAuthStatus();
   const csrf = auth?.csrfToken ?? auth?.csrf_token;
   const response = await socialRequest(
     `/twitch/social-media/api/clips/${clipDbId}/clip-contest`,
@@ -730,7 +733,9 @@ export async function fetchPlatformStatus(
 }
 
 export function oauthStartUrl(platform: string, twitchUserId: string | undefined): string {
-  if (isPreviewLocalhost()) return `${PREVIEW_SOCIAL_ROUTE}?view=konten#preview-read-only`;
+  if (isPreviewLocalhost() || (typeof window !== 'undefined' && isPublicTourPath(window.location.pathname))) {
+    return `${PREVIEW_SOCIAL_ROUTE}?view=konten#preview-read-only`;
+  }
   const qs = buildQuery({ twitch_user_id: twitchUserId });
   return mainDomainOAuthUrl(`/twitch/social-media/oauth/start/${platform}${qs}`);
 }

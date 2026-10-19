@@ -3,6 +3,25 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { dashboardDestination, navigateDashboard, subscribeNavigation } from '../src/navigation';
 
+test('public tour paths stay inside dashboard navigation', () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      location: { href: 'https://dashboard.example/twitch/rundgang', origin: 'https://dashboard.example' },
+    },
+  });
+  try {
+    assert.ok(dashboardDestination('/twitch/rundgang'));
+    assert.ok(dashboardDestination('/twitch/rundgang/analyse'));
+    assert.ok(dashboardDestination('/twitch/rundgang/social-media'));
+    assert.equal(dashboardDestination('/twitch/auth/logout'), null);
+  } finally {
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
+
 test('dashboard navigation retains the document only for owned unmodified links', () => {
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');

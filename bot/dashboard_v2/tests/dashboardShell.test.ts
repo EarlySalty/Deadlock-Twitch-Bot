@@ -43,7 +43,7 @@ test('App.tsx importiert die Shell und wickelt jede der sieben Routen darin ein'
 test('Deadlock weltweit nutzt die bereits veröffentlichte Analyse-Route statt eines separaten Caddy-Pfads', () => {
   assert.match(
     SIDEBAR,
-    /href: '\/twitch\/analyse\?view=category'.*icon: BarChart3, active: activeRoute === 'category'/,
+    /href: toHref\('\/twitch\/analyse\?view=category'\).*icon: BarChart3, active: activeRoute === 'category'/,
     'Die Admin-Navigation darf nicht von einer separaten /twitch/kategorie-Caddyfreigabe abhängen',
   );
   assert.doesNotMatch(
@@ -78,7 +78,8 @@ test('die Shell trägt den Marken-Hintergrund, volle Breite, Sidebar-Spalte und 
   assert.doesNotMatch(SHELL, /max-w-\[/);
   assert.match(SHELL, /lg:grid-cols-\[240px_minmax\(0,1fr\)\]/);
   assert.match(SHELL, /<DashboardSidebar activeRoute=\{activeRoute\} \/>/);
-  assert.match(SHELL, /<main[^>]*>\{children\}<\/main>/);
+  assert.match(SHELL, /<main[^>]*>/);
+  assert.match(SHELL, /\{children\}/);
 });
 
 test('Social Media nutzt dieselbe farbige Shell und Navigation wie Home und Uplink', () => {
@@ -141,6 +142,12 @@ test('der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite', () => {
   );
 });
 
+test('DashboardShell zeigt im Rundgang Banner und Sidebar', () => {
+  assert.match(SHELL, /function TourBanner/);
+  assert.match(SHELL, /isPublicTourPath\(window\.location\.pathname\)/);
+  assert.match(SIDEBAR, /tourHref\(href, tourPath\)/);
+});
+
 test('App.tsx reicht die Demo-Entscheidung an die Shell durch', () => {
   assert.match(
     APP,
@@ -154,7 +161,7 @@ test('DashboardShell laesst ohne Sidebar-Freigabe Sidebar und Profil-Hook aus', 
   assert.match(SHELL, /showSidebar\?:\s*boolean/, 'Shell braucht eine showSidebar-Prop');
   assert.match(
     SHELL,
-    /const withSidebar = !demoMode && showSidebar;/,
+    /const withSidebar = showSidebar && \(!demoMode \|\| tourMode\);/,
     'Shell muss Sidebar an demoMode und showSidebar koppeln',
   );
   const gateStart = SHELL.indexOf('withSidebar ?');
