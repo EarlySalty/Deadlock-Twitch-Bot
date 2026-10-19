@@ -513,6 +513,14 @@ pub async fn scoreboard_handler() -> impl IntoResponse {
     overlay_page(include_str!("caster_scoreboard.html"))
 }
 
+pub async fn versus_handler() -> impl IntoResponse {
+    overlay_page(include_str!("caster_versus.html"))
+}
+
+pub async fn countdown_handler() -> impl IntoResponse {
+    overlay_page(include_str!("caster_countdown.html"))
+}
+
 pub async fn background_handler() -> impl IntoResponse {
     (
         [

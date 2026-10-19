@@ -20,6 +20,8 @@ export const builtinEventLogos: Array<{ id: CasterBuiltinEventLogo; label: strin
 export const overlayPages = [
   { id: 'caster', label: 'Caster-Szene', url: OVERLAY_BASE },
   { id: 'scoreboard', label: 'Scoreboard', url: `${OVERLAY_BASE}/scoreboard` },
+  { id: 'versus', label: 'Versus-Bild', url: `${OVERLAY_BASE}/versus` },
+  { id: 'countdown', label: 'Countdown', url: `${OVERLAY_BASE}/countdown` },
 ] as const;
 
 export type OverlayPageId = (typeof overlayPages)[number]['id'];

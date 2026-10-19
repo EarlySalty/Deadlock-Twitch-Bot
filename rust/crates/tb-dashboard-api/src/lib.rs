@@ -194,6 +194,14 @@ pub fn build_public_router_with_brain(
             get(crate::handlers::caster_overlay::scoreboard_handler),
         )
         .route(
+            "/twitch/caster-overlay/versus",
+            get(crate::handlers::caster_overlay::versus_handler),
+        )
+        .route(
+            "/twitch/caster-overlay/countdown",
+            get(crate::handlers::caster_overlay::countdown_handler),
+        )
+        .route(
             "/twitch/caster-overlay/background.png",
             get(crate::handlers::caster_overlay::background_handler),
         )
