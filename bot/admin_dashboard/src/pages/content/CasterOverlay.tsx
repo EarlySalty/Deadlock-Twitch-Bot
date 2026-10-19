@@ -674,13 +674,13 @@ export default function CasterOverlayPage() {
               </p>
             </div>
 
-            <div className="grid gap-3 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
               {casters.map((member) => {
                 const state = cameraStatus(member);
                 const invite = invites[member.discordId];
                 const active = !!member.camera && !member.camera.revoked;
                 return (
-                  <div key={member.discordId} className="space-y-3 rounded-xl border border-white/10 bg-black/25 p-4">
+                  <div key={member.discordId} className="min-w-0 space-y-3 rounded-xl border border-white/10 bg-black/25 p-4">
                     <div className="flex flex-wrap items-center gap-3">
                       {member.avatarUrl ? (
                         <img src={member.avatarUrl} alt="" className="h-11 w-11 rounded-full object-cover" />
@@ -709,7 +709,7 @@ export default function CasterOverlayPage() {
                       )}
                     </div>
                     {invite && (
-                      <div className="rounded-lg border border-primary/35 bg-primary/5 p-3">
+                      <div className="min-w-0 rounded-lg border border-primary/35 bg-primary/5 p-3">
                         <p className="text-xs text-white/55">Nur jetzt sichtbar. Schick den Link direkt an {member.displayName}.</p>
                         <div className="mt-2 flex flex-col gap-2 md:flex-row">
                           <input className={input} readOnly aria-label={`Kamera-Link für ${member.displayName}`} value={invite} onFocus={(event) => event.target.select()} />
@@ -726,7 +726,7 @@ export default function CasterOverlayPage() {
             {legacyCameras.length > 0 && (
               <details className="rounded-xl border border-white/10 bg-black/20 p-4">
                 <summary className="cursor-pointer text-sm text-white/70">Ältere Kamera-Links ({legacyCameras.length})</summary>
-                <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
                   {legacyCameras.map((camera) => (
                     <div key={camera.cameraId} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/25 p-4">
                       <div>
