@@ -58,6 +58,7 @@ function publicTeam(team: CasterSceneTeam | null | undefined) {
     short: team.short ?? null,
     logoUrl: team.logoAssetId ? assetUrl(team.logoAssetId) : null,
     players: team.players,
+    coach: team.coach?.name || null,
   };
 }
 

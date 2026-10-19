@@ -1,13 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  createCasterLibraryTeam,
   deleteCasterAsset,
+  deleteCasterLibraryTeam,
   fetchCasterAssets,
+  fetchCasterTeamLibrary,
+  searchCasterCoachMembers,
+  updateCasterLibraryTeam,
   uploadCasterAsset,
   type CasterAsset,
   type CasterAssetKind,
+  type CasterCoachMember,
   type CasterContextTeam,
   type CasterEventLogo,
   type CasterScene,
+  type CasterSceneCoach,
   type CasterSceneTeam,
 } from '@/api/client';
 import { builtinEventLogos, eventLogoUrl, fromLocalInput, publicUrl, toLocalInput } from './casterScene';
@@ -67,6 +74,84 @@ function useAssets(kind: CasterAssetKind, notify: Notify) {
   return { assets, upload, remove };
 }
 
+function useTeamLibrary(notify: Notify) {
+  const [teams, setTeams] = useState<CasterSceneTeam[]>([]);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    fetchCasterTeamLibrary()
+      .then(setTeams)
+      .catch((cause) => notify.error(errorText(cause, 'Teambibliothek konnte nicht geladen werden.')));
+  }, []);
+
+  async function save(team: CasterSceneTeam): Promise<CasterSceneTeam | null> {
+    if (!team.name.trim()) {
+      notify.error('Für die Teambibliothek braucht das Team einen Namen.');
+      return null;
+    }
+    setSaving(true);
+    try {
+      const known = team.libraryId ? teams.some((item) => item.libraryId === team.libraryId) : false;
+      const saved = known && team.libraryId ? await updateCasterLibraryTeam(team.libraryId, team) : await createCasterLibraryTeam(team);
+      setTeams((items) =>
+        [...items.filter((item) => item.libraryId !== saved.libraryId), saved].sort((a, b) => a.name.localeCompare(b.name, 'de')),
+      );
+      notify.status(`${saved.name} in der Teambibliothek gespeichert.`);
+      return saved;
+    } catch (cause) {
+      notify.error(errorText(cause, 'Team konnte nicht gespeichert werden.'));
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove(team: CasterSceneTeam) {
+    if (!team.libraryId || !window.confirm(`${team.name} aus der Teambibliothek löschen? Das laufende Overlay bleibt unverändert.`)) return false;
+    setSaving(true);
+    try {
+      await deleteCasterLibraryTeam(team.libraryId);
+      setTeams((items) => items.filter((item) => item.libraryId !== team.libraryId));
+      notify.status(`${team.name} aus der Teambibliothek gelöscht.`);
+      return true;
+    } catch (cause) {
+      notify.error(errorText(cause, 'Team konnte nicht gelöscht werden.'));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return { teams, saving, save, remove };
+}
+
+function useCoachSearch(query: string, enabled: boolean) {
+  const [hits, setHits] = useState<CasterCoachMember[]>([]);
+  const [unavailable, setUnavailable] = useState(false);
+  const latest = useRef(0);
+  useEffect(() => {
+    const term = query.trim();
+    if (!enabled || term.length < 2) {
+      setHits([]);
+      return;
+    }
+    const ticket = latest.current + 1;
+    latest.current = ticket;
+    const timer = window.setTimeout(() => {
+      searchCasterCoachMembers(term)
+        .then((result) => {
+          if (latest.current !== ticket) return;
+          setUnavailable(!result.available);
+          setHits(result.items.slice(0, 6));
+        })
+        .catch(() => {
+          if (latest.current === ticket) setUnavailable(true);
+        });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [query, enabled]);
+  return { hits, unavailable, clear: () => setHits([]) };
+}
+
 function UploadButton({ label, disabled, onFile }: { label: string; disabled: boolean; onFile: (file: File) => void }) {
   return (
     <label className={`${button} inline-flex cursor-pointer items-center justify-center ${disabled ? 'pointer-events-none opacity-40' : ''}`}>
@@ -94,16 +179,117 @@ function LogoPreview({ url, alt }: { url: string | null; alt: string }) {
   );
 }
 
+const MAX_PLAYERS = 12;
+
 function emptyTeam(): CasterSceneTeam {
-  return { id: null, name: '', short: null, logoAssetId: null, players: [] };
+  return { id: null, libraryId: null, name: '', short: null, logoAssetId: null, players: [], coach: null };
+}
+
+function CoachField({ coach, busy, onChange }: { coach: CasterSceneCoach | null; busy: boolean; onChange: (coach: CasterSceneCoach | null) => void }) {
+  const [focused, setFocused] = useState(false);
+  const name = coach?.name ?? '';
+  const search = useCoachSearch(name, focused && !coach?.discordId);
+  return (
+    <div className="space-y-2">
+      <label className="block text-sm text-white/65">
+        Coach
+        <input
+          className={`${input} mt-1`}
+          value={name}
+          maxLength={80}
+          disabled={busy}
+          placeholder="Discord-Name suchen oder frei eintragen"
+          onFocus={() => setFocused(true)}
+          onBlur={() => window.setTimeout(() => setFocused(false), 200)}
+          onChange={(event) => onChange(event.target.value ? { name: event.target.value, discordId: null } : null)}
+        />
+      </label>
+      {coach?.discordId && (
+        <p className="flex flex-wrap items-center gap-2 text-xs text-white/55">
+          <span className="rounded-full border border-primary/50 px-2 py-1 text-primary">Discord-Mitglied verknüpft</span>
+          <button className="underline hover:text-white" disabled={busy} onClick={() => onChange({ name, discordId: null })}>
+            Verknüpfung lösen
+          </button>
+        </p>
+      )}
+      {search.unavailable && focused && <p className="text-xs text-white/45">Discord-Suche gerade nicht erreichbar. Der Name wird als freier Text gespeichert.</p>}
+      {search.hits.length > 0 && (
+        <ul className="space-y-1" aria-label="Discord-Treffer">
+          {search.hits.map((hit) => (
+            <li key={hit.discordId}>
+              <button
+                className="flex min-h-11 w-full min-w-0 items-center justify-between gap-3 rounded-lg bg-white/[0.05] px-3 py-2 text-left text-sm hover:bg-white/[0.1]"
+                disabled={busy}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange({ name: hit.displayName.slice(0, 80), discordId: hit.discordId });
+                  search.clear();
+                }}
+              >
+                <span className="truncate text-white">{hit.displayName}</span>
+                {hit.username && <span className="truncate text-xs text-white/40">@{hit.username}</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function PlayersEditor({ team, busy, update }: { team: CasterSceneTeam | null; busy: boolean; update: (change: (value: CasterSceneTeam) => CasterSceneTeam) => void }) {
+  const players = team?.players ?? [];
+  return (
+    <div className="space-y-2">
+      <strong className="block text-sm text-white/80">Spieler</strong>
+      {players.map((player, playerIndex) => (
+        <div key={playerIndex} className="flex min-w-0 items-center gap-2">
+          <input
+            className={`${input} min-w-0 flex-1`}
+            aria-label={`Spieler ${playerIndex + 1}`}
+            value={player.displayName}
+            maxLength={80}
+            disabled={busy}
+            onChange={(event) =>
+              update((value) => ({
+                ...value,
+                players: value.players.map((item, index) => (index === playerIndex ? { ...item, displayName: event.target.value } : item)),
+              }))
+            }
+          />
+          <span className="hidden w-28 shrink-0 font-mono text-xs text-white/35 sm:block">
+            {player.accountId ? `AID ${player.accountId}` : 'Steam nicht verknüpft'}
+          </span>
+          <button
+            className={`${button} shrink-0`}
+            disabled={busy}
+            aria-label={`${player.displayName || `Spieler ${playerIndex + 1}`} entfernen`}
+            onClick={() => update((value) => ({ ...value, players: value.players.filter((_, index) => index !== playerIndex) }))}
+          >
+            Entfernen
+          </button>
+        </div>
+      ))}
+      <button
+        className={button}
+        disabled={busy || players.length >= MAX_PLAYERS}
+        onClick={() => update((value) => ({ ...value, players: [...value.players, { displayName: '', steamId64: null, accountId: null }] }))}
+      >
+        Spieler hinzufügen
+      </button>
+      {players.length >= MAX_PLAYERS && <p className="text-xs text-white/45">Höchstens zwölf Spieler pro Team.</p>}
+    </div>
+  );
 }
 
 function fromContext(team: CasterContextTeam): CasterSceneTeam {
   return {
     id: team.id,
+    libraryId: null,
     name: team.name,
     short: null,
     logoAssetId: null,
+    coach: null,
     players: team.players
       .filter((player) => !player.isBench)
       .map((player) => ({ displayName: player.displayName, steamId64: player.steamId64 ?? null, accountId: player.accountId ?? null })),
@@ -124,9 +310,10 @@ type TeamCardProps = {
   edit: Edit;
   busy: boolean;
   logos: ReturnType<typeof useAssets>;
+  library: ReturnType<typeof useTeamLibrary>;
 };
 
-function TeamCard({ side, index, scene, teams, edit, busy, logos }: TeamCardProps) {
+function TeamCard({ side, index, scene, teams, edit, busy, logos, library }: TeamCardProps) {
   const team = scene.matchContext[side] ?? null;
   const update = (change: (value: CasterSceneTeam) => CasterSceneTeam | null) =>
     edit((value) => ({
@@ -136,8 +323,17 @@ function TeamCard({ side, index, scene, teams, edit, busy, logos }: TeamCardProp
   const selectedLogo = logos.assets.find((asset) => asset.id === team?.logoAssetId) ?? null;
   const fillFrom = (teamId: string) => {
     const selected = teams.find((item) => item.id === teamId);
-    update(() => (selected ? fromContext(selected) : null));
+    if (selected) update(() => fromContext(selected));
+    else if (team) update((value) => ({ ...value, id: null }));
   };
+  const pickLibrary = (libraryId: string) => {
+    const selected = library.teams.find((item) => item.libraryId === libraryId);
+    if (selected) update(() => ({ ...selected, id: null }));
+    else if (team) update((value) => ({ ...value, libraryId: null }));
+  };
+  const missingContext = team?.id && !teams.some((item) => item.id === team.id) ? team : null;
+  const missingLibrary = team?.libraryId && !library.teams.some((item) => item.libraryId === team.libraryId) ? team : null;
+  const libraryBusy = busy || library.saving;
 
   return (
     <div className="space-y-3 rounded-xl border border-white/10 bg-black/25 p-4">
@@ -146,9 +342,18 @@ function TeamCard({ side, index, scene, teams, edit, busy, logos }: TeamCardProp
         <strong className="text-white">{index === 0 ? 'Team links' : 'Team rechts'} (vor dem Tausch)</strong>
       </div>
       <label className="block text-sm text-white/65">
+        Aus Teambibliothek
+        <select className={`${input} mt-1`} value={team?.libraryId ?? ''} disabled={libraryBusy} onChange={(event) => pickLibrary(event.target.value)}>
+          <option value="">Nicht aus der Bibliothek</option>
+          {missingLibrary && <option value={missingLibrary.libraryId ?? ''}>{missingLibrary.name || 'Team'} (gelöscht)</option>}
+          {library.teams.map((item) => <option key={item.libraryId} value={item.libraryId ?? ''}>{item.name}{item.short ? ` · ${item.short}` : ''}</option>)}
+        </select>
+      </label>
+      <label className="block text-sm text-white/65">
         Aus Turnierverwaltung übernehmen
         <select className={`${input} mt-1`} value={team?.id ?? ''} disabled={busy} onChange={(event) => fillFrom(event.target.value)}>
-          <option value="">Freies Team / kein Team</option>
+          <option value="">Freies Team (nicht verknüpft)</option>
+          {missingContext && <option value={missingContext.id ?? ''}>{missingContext.name || 'Team'} (nicht mehr in der Turnierverwaltung)</option>}
           {teams.map((item) => <option key={item.id} value={item.id}>{teamLabel(item)}</option>)}
         </select>
       </label>
@@ -210,16 +415,33 @@ function TeamCard({ side, index, scene, teams, edit, busy, logos }: TeamCardProp
           <button className={button} disabled={busy} onClick={() => update(() => null)}>Team leeren</button>
         )}
       </div>
-      {team && team.players.length > 0 && (
-        <div className="space-y-1 text-sm">
-          {team.players.map((player) => (
-            <div key={`${player.displayName}-${player.accountId ?? ''}`} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-2">
-              <span className="text-white/85">{player.displayName}</span>
-              <span className="font-mono text-xs text-white/35">{player.accountId ? `AID ${player.accountId}` : 'Steam nicht verknüpft'}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      <CoachField coach={team?.coach ?? null} busy={busy} onChange={(coach) => update((value) => ({ ...value, coach }))} />
+      <PlayersEditor team={team} busy={busy} update={update} />
+      <div className="flex flex-wrap gap-2 border-t border-white/10 pt-3">
+        <button
+          className={button}
+          disabled={libraryBusy || !team?.name.trim()}
+          onClick={async () => {
+            if (!team) return;
+            const saved = await library.save(team);
+            if (saved) update((value) => ({ ...value, libraryId: saved.libraryId, logoAssetId: saved.logoAssetId }));
+          }}
+        >
+          {team?.libraryId && !missingLibrary ? 'Bibliothek aktualisieren' : 'In Teambibliothek speichern'}
+        </button>
+        {team?.libraryId && !missingLibrary && (
+          <button
+            className={button}
+            disabled={libraryBusy}
+            onClick={async () => {
+              const stored = library.teams.find((item) => item.libraryId === team.libraryId);
+              if (stored && (await library.remove(stored))) update((value) => ({ ...value, libraryId: null }));
+            }}
+          >
+            Aus Bibliothek löschen
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -228,6 +450,7 @@ type TeamsProps = { scene: CasterScene; teams: CasterContextTeam[]; edit: Edit; 
 
 export function CasterTeamsEditor({ scene, teams, edit, busy, notify }: TeamsProps) {
   const logos = useAssets('team_logo', notify);
+  const library = useTeamLibrary(notify);
   const left = scene.sidesSwapped ? scene.matchContext.teamB : scene.matchContext.teamA;
   const right = scene.sidesSwapped ? scene.matchContext.teamA : scene.matchContext.teamB;
   return (
@@ -246,7 +469,7 @@ export function CasterTeamsEditor({ scene, teams, edit, busy, notify }: TeamsPro
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         {(['teamA', 'teamB'] as const).map((side, index) => (
-          <TeamCard key={side} side={side} index={index} scene={scene} teams={teams} edit={edit} busy={busy} logos={logos} />
+          <TeamCard key={side} side={side} index={index} scene={scene} teams={teams} edit={edit} busy={busy} logos={logos} library={library} />
         ))}
       </div>
     </div>
