@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use tokio::io::AsyncReadExt;
 
+use crate::clip_prep_worker::{download_atomic, register_local_file, ClipDownloader};
 use crate::layout::StreamerLayout;
 
 use super::{AiEditorError, EditorRuntime, ResourceLimits};
@@ -55,14 +56,101 @@ pub fn authorized_path(root: &Path, path: &Path, max_bytes: u64) -> Result<PathB
     Ok(path)
 }
 
+fn classify_download(error: &str) -> AiEditorError {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("404")
+        || lower.contains("unavailable")
+        || lower.contains("not found")
+        || lower.contains("no longer available")
+    {
+        AiEditorError::SourceMissing
+    } else {
+        AiEditorError::SourceDownload
+    }
+}
+
+fn stored_path(runtime: &EditorRuntime, stored: &str) -> PathBuf {
+    let path = PathBuf::from(stored);
+    if path.is_absolute() {
+        path
+    } else {
+        runtime.package_root.join(path)
+    }
+}
+
+fn owned_source_path(runtime: &EditorRuntime, path: &Path) -> Result<PathBuf, AiEditorError> {
+    let canonical = authorized_path(
+        &runtime.limits.source_root,
+        path,
+        runtime.limits.resources.max_source_bytes,
+    )
+    .map_err(|_| AiEditorError::SourceUnreadable)?;
+    let canonical_root = runtime
+        .limits
+        .source_root
+        .canonicalize()
+        .map_err(|_| AiEditorError::SourceUnreadable)?;
+    let relative = canonical
+        .strip_prefix(canonical_root)
+        .map_err(|_| AiEditorError::SourceUnreadable)?;
+    Ok(runtime.limits.source_root.join(relative))
+}
+
+async fn ensure_local_file(
+    pool: &PgPool,
+    runtime: &EditorRuntime,
+    clip_id: i64,
+    clip_url: &str,
+    stored: Option<&str>,
+    downloader: Option<&dyn ClipDownloader>,
+) -> Result<PathBuf, AiEditorError> {
+    let stored = stored.filter(|path| !path.is_empty());
+    if let Some(stored) = stored {
+        if let Ok(path) = owned_source_path(runtime, &stored_path(runtime, stored)) {
+            return Ok(path);
+        }
+    }
+    let unreadable = stored.is_some();
+    if clip_url.trim().is_empty() {
+        return Err(if unreadable {
+            AiEditorError::SourceUnreadable
+        } else {
+            AiEditorError::SourceMissing
+        });
+    }
+    let Some(downloader) = downloader else {
+        return Err(if unreadable {
+            AiEditorError::SourceUnreadable
+        } else {
+            AiEditorError::SourceDownload
+        });
+    };
+    tokio::fs::create_dir_all(&runtime.limits.source_root)
+        .await
+        .map_err(|_| AiEditorError::SourceDownload)?;
+    let dest = runtime.limits.source_root.join(format!("{clip_id}.mp4"));
+    let target = dest
+        .to_str()
+        .ok_or(AiEditorError::SourceDownload)?
+        .to_owned();
+    if let Err(error) = download_atomic(downloader, clip_url, &target).await {
+        return Err(classify_download(&error));
+    }
+    register_local_file(pool, clip_id, &target)
+        .await
+        .map_err(|_| AiEditorError::Storage)?;
+    owned_source_path(runtime, Path::new(&target))
+}
+
 pub(super) async fn load_source(
     pool: &PgPool,
     runtime: &EditorRuntime,
     owner: &str,
     clip_id: i64,
+    downloader: Option<&dyn ClipDownloader>,
 ) -> Result<SourceRecord, AiEditorError> {
     numeric_owner(owner)?;
-    let row = sqlx::query("SELECT c.clip_id, c.local_file_path, c.streamer_login, COALESCE(c.clip_title, '') AS title,
+    let row = sqlx::query("SELECT c.clip_id, c.clip_url, c.local_file_path, c.streamer_login, COALESCE(c.clip_title, '') AS title,
         c.layout_override_json::text AS override_json, l.layout_json::text AS layout_json, l.cam_enabled, l.mode,
         c.custom_description, c.hashtags
         FROM twitch_clips_social_media c JOIN social_media_category k ON k.category_key = c.category_key
@@ -71,29 +159,22 @@ pub(super) async fn load_source(
         AND c.game_id = k.twitch_game_id AND k.twitch_game_id IS NOT NULL AND c.discarded_at IS NULL")
         .bind(clip_id).bind(owner).fetch_optional(pool).await.map_err(|_| AiEditorError::Storage)?
         .ok_or(AiEditorError::Source)?;
-    let path: Option<String> = row
+    let stored: Option<String> = row
         .try_get("local_file_path")
         .map_err(|_| AiEditorError::Storage)?;
-    let path = PathBuf::from(path.ok_or(AiEditorError::Source)?);
-    let path = if path.is_absolute() {
-        path
-    } else {
-        runtime.package_root.join(path)
-    };
-    let canonical = authorized_path(
-        &runtime.limits.source_root,
-        &path,
-        runtime.limits.resources.max_source_bytes,
-    )?;
-    let canonical_root = runtime
-        .limits
-        .source_root
-        .canonicalize()
-        .map_err(|_| AiEditorError::Source)?;
-    let relative = canonical
-        .strip_prefix(canonical_root)
-        .map_err(|_| AiEditorError::Source)?;
-    let path = runtime.limits.source_root.join(relative);
+    let clip_url: Option<String> = row
+        .try_get("clip_url")
+        .map_err(|_| AiEditorError::Storage)?;
+    let clip_url = clip_url.unwrap_or_default();
+    let path = ensure_local_file(
+        pool,
+        runtime,
+        clip_id,
+        &clip_url,
+        stored.as_deref(),
+        downloader,
+    )
+    .await?;
     let override_json: Option<String> = row
         .try_get("override_json")
         .map_err(|_| AiEditorError::Storage)?;

@@ -158,6 +158,7 @@ async fn prepared(
             expected_twitch_clip_id: Some("fixture-original"),
             checkpoints: &checkpoints,
             brain_token: None,
+            downloader: None,
         },
         AiStage::Preparing,
     )
@@ -310,6 +311,7 @@ async fn analyzed_highlights_guard_fresh_and_resumed_plans_before_render_and_qa(
                         expected_twitch_clip_id: Some("fixture-original"),
                         checkpoints: &checkpoints,
                         brain_token: None,
+                        downloader: None,
                     },
                     stage
                 )
@@ -439,6 +441,7 @@ async fn manual_resume_materializes_one_owned_version_and_preserves_frozen_layou
             expected_twitch_clip_id: Some("fixture-original"),
             checkpoints: &checkpoints,
             brain_token: None,
+            downloader: None,
         },
         AiStage::Rendering,
     )
@@ -635,6 +638,7 @@ async fn failed_original_preview_still_expires_the_partial_owned_output() {
             expected_twitch_clip_id: Some("fixture-original"),
             checkpoints: &checkpoints,
             brain_token: None,
+            downloader: None,
         },
         AiStage::Rendering,
     )
@@ -920,6 +924,7 @@ async fn c3_resume_reuses_the_pipeline_and_exact_durable_version_under_the_exist
             runtime: &runtime,
             lease: &mut lease,
             brain_token: None,
+            downloader: None,
         },
         job.clone(),
     )
@@ -949,6 +954,7 @@ async fn c3_resume_reuses_the_pipeline_and_exact_durable_version_under_the_exist
             runtime: &runtime,
             lease: &mut lease,
             brain_token: None,
+            downloader: None,
         },
         job,
     )
@@ -1033,6 +1039,7 @@ async fn expired_manual_media_retries_rebuild_without_replaying_provider_stages(
                 expected_twitch_clip_id: Some("fixture-original"),
                 checkpoints: &checkpoints,
                 brain_token: None,
+                downloader: None,
             },
             AiStage::Rendering,
         )
@@ -1064,6 +1071,7 @@ async fn expired_manual_media_retries_rebuild_without_replaying_provider_stages(
                         expected_twitch_clip_id: Some("fixture-original"),
                         checkpoints: &checkpoints,
                         brain_token: None,
+                        downloader: None,
                     },
                     AiStage::Validating,
                 )
@@ -1206,6 +1214,7 @@ async fn expired_production_media_resumes_rebuild_and_reconcile_completed_checkp
                 expected_twitch_clip_id: None,
                 checkpoints: &checkpoints,
                 brain_token: None,
+                downloader: None,
             },
             AiStage::Rendering,
         )
@@ -1231,6 +1240,7 @@ async fn expired_production_media_resumes_rebuild_and_reconcile_completed_checkp
                         expected_twitch_clip_id: None,
                         checkpoints: &checkpoints,
                         brain_token: None,
+                        downloader: None,
                     },
                     AiStage::Validating,
                 )
@@ -1257,6 +1267,7 @@ async fn expired_production_media_resumes_rebuild_and_reconcile_completed_checkp
                 runtime: &runtime,
                 lease: &mut lease,
                 brain_token: None,
+                downloader: None,
             },
             job.clone(),
         )
@@ -1306,6 +1317,7 @@ async fn expired_production_media_resumes_rebuild_and_reconcile_completed_checkp
                 runtime: &runtime,
                 lease: &mut lease,
                 brain_token: None,
+                downloader: None,
             },
             job.clone(),
         )
@@ -1324,6 +1336,7 @@ async fn expired_production_media_resumes_rebuild_and_reconcile_completed_checkp
                     runtime: &runtime,
                     lease: &mut lease,
                     brain_token: None,
+                    downloader: None,
                 },
                 job.clone(),
             )
@@ -1376,6 +1389,7 @@ async fn expiry_after_queueing_does_not_spend_validation_attempts_when_rendering
             expected_twitch_clip_id: None,
             checkpoints: &checkpoints,
             brain_token: None,
+            downloader: None,
         },
         AiStage::Rendering,
     )
@@ -1573,7 +1587,8 @@ async fn revisions_preserve_parent_reuse_checkpoints_and_confirm_before_renderin
                 identity: Identity::Manual(child.id),
                 expected_twitch_clip_id: Some("fixture-original"),
                 checkpoints: &reused,
-                brain_token: None
+                brain_token: None,
+                downloader: None,
             },
             AiStage::Analyzing
         )
@@ -1914,7 +1929,8 @@ async fn c3_consent_failure_stays_review_without_static_fallback_or_manual_ident
                 pool: &db.pool,
                 runtime: &runtime,
                 lease: &mut lease,
-                brain_token: None
+                brain_token: None,
+                downloader: None,
             },
             job
         )
@@ -2186,6 +2202,7 @@ async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or
             runtime: &runtime,
             lease: &mut lease,
             brain_token: None,
+            downloader: None,
         },
         job.clone(),
     )
@@ -2213,6 +2230,7 @@ async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or
             runtime: &runtime,
             lease: &mut lease,
             brain_token: None,
+            downloader: None,
         },
         job.clone(),
     )
@@ -2263,6 +2281,7 @@ async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or
             runtime: &runtime,
             lease: &mut lease,
             brain_token: None,
+            downloader: None,
         },
         job,
     )
@@ -2329,6 +2348,7 @@ async fn autopilot_revisions_replace_review_and_invalidate_old_file_approvals() 
             runtime: &runtime,
             lease: &mut lease,
             brain_token: None,
+            downloader: None,
         },
         job.clone(),
     )
@@ -2653,6 +2673,183 @@ impl crate::clip_prep_worker::ClipDownloader for NoDownload {
     async fn download(&self, _url: &str, _destination: &Path) -> Result<(), String> {
         Err("local production must not download media".into())
     }
+}
+
+struct RegisteringDownloader;
+
+#[async_trait::async_trait]
+impl crate::clip_prep_worker::ClipDownloader for RegisteringDownloader {
+    async fn download(&self, _url: &str, dest: &Path) -> Result<(), String> {
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        tokio::fs::write(dest, b"fake-mp4")
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
+struct MissingTwitchDownloader;
+
+#[async_trait::async_trait]
+impl crate::clip_prep_worker::ClipDownloader for MissingTwitchDownloader {
+    async fn download(&self, _url: &str, _dest: &Path) -> Result<(), String> {
+        Err("HTTP Error 404: Unable to download webpage".into())
+    }
+}
+
+async fn clip_without_file(pool: &PgPool, twitch_clip_id: &str) -> i64 {
+    sqlx::raw_sql(
+        "ALTER TABLE twitch_clips_social_media ADD COLUMN IF NOT EXISTS downloaded_at TIMESTAMPTZ;
+        ALTER TABLE twitch_clips_social_media ADD COLUMN IF NOT EXISTS download_failed_at TIMESTAMPTZ;",
+    )
+    .execute(pool)
+    .await
+    .expect("download bookkeeping columns");
+    sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id,clip_url,clip_title,streamer_login,created_at,twitch_user_id,category_key,game_id) VALUES ($1,$2,'Fixture','fixture-one','2026-10-11T00:00:00Z','101','deadlock','fixture-game') RETURNING id")
+        .bind(twitch_clip_id)
+        .bind(format!("https://clips.twitch.tv/{twitch_clip_id}"))
+        .fetch_one(pool)
+        .await
+        .expect("clip without local file")
+}
+
+#[tokio::test]
+async fn load_source_downloads_missing_file_and_registers_it() {
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let clip = clip_without_file(&db.pool, "fixture-download").await;
+    let loaded = super::super::source::load_source(
+        &db.pool,
+        &runtime,
+        "101",
+        clip,
+        Some(&RegisteringDownloader),
+    )
+    .await
+    .expect("downloaded source");
+    assert!(loaded.path.exists());
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT local_file_path FROM twitch_clips_social_media WHERE id = $1")
+            .bind(clip)
+            .fetch_one(&db.pool)
+            .await
+            .expect("registered path");
+    let stored = stored.expect("local_file_path after download");
+    assert!(stored.ends_with(&format!("{clip}.mp4")));
+    assert_eq!(
+        tokio::fs::read(&loaded.path).await.expect("bytes"),
+        b"fake-mp4"
+    );
+}
+
+#[tokio::test]
+async fn load_source_maps_twitch_404_to_source_missing() {
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let clip = clip_without_file(&db.pool, "fixture-gone").await;
+    let error = match super::super::source::load_source(
+        &db.pool,
+        &runtime,
+        "101",
+        clip,
+        Some(&MissingTwitchDownloader),
+    )
+    .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("missing twitch clip"),
+    };
+    assert!(matches!(error, AiEditorError::SourceMissing));
+    assert!(error.is_source_fetch_failure());
+    let stored: Option<String> = sqlx::query_scalar(
+        "SELECT local_file_path FROM twitch_clips_social_media WHERE id = $1",
+    )
+    .bind(clip)
+    .fetch_one(&db.pool)
+    .await
+    .expect("unchanged path");
+    assert!(stored.is_none());
+}
+
+#[tokio::test]
+async fn produce_download_failure_fails_job_and_unpins_clip() {
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let clip = clip_without_file(&db.pool, "fixture-fail-download").await;
+    sqlx::raw_sql(
+        "CREATE TABLE IF NOT EXISTS social_clip_pool (
+            twitch_user_id TEXT NOT NULL,
+            clip_id TEXT NOT NULL,
+            clip_db_id BIGINT,
+            selected_at TIMESTAMPTZ,
+            PRIMARY KEY (twitch_user_id, clip_id)
+        );
+        CREATE OR REPLACE FUNCTION social_clip_video_holds(clip BIGINT) RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT FALSE $$;",
+    )
+    .execute(&db.pool)
+    .await
+    .expect("pool unpin schema");
+    sqlx::query("INSERT INTO social_clip_pool (twitch_user_id, clip_id, clip_db_id, selected_at) VALUES ('101', 'fixture-fail-download', $1, clock_timestamp())")
+        .bind(clip)
+        .execute(&db.pool)
+        .await
+        .expect("pinned clip");
+    production_jobs::insert(
+        &db.pool,
+        &production_jobs::NewProductionJob {
+            twitch_user_id: "101".into(),
+            clip_id: clip,
+            source: production_jobs::JobSource::Manual,
+            requested_mode: Some(ProductionMode::Ai),
+            scheduled_at: None,
+            max_attempts: 2,
+        },
+    )
+    .await
+    .expect("test job");
+    let mut lease = super::super::store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    let job = production_jobs::claim_next(&db.pool)
+        .await
+        .expect("claim")
+        .expect("running job");
+    let error = match produce(
+        ProductionContext {
+            pool: &db.pool,
+            runtime: &runtime,
+            lease: &mut lease,
+            brain_token: None,
+            downloader: Some(&MissingTwitchDownloader),
+        },
+        job.clone(),
+    )
+    .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("download failure must stop produce"),
+    };
+    assert!(error.is_source_fetch_failure());
+    let current = production_jobs::get(&db.pool, "101", job.id)
+        .await
+        .expect("finished job")
+        .expect("owned job");
+    assert_eq!(current.status, "failed");
+    let selected: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT selected_at FROM social_clip_pool WHERE clip_db_id = $1")
+            .bind(clip)
+            .fetch_one(&db.pool)
+            .await
+            .expect("pool pin");
+    assert!(selected.is_none());
+    lease.release().await.expect("release");
 }
 
 async fn unified_ai_channel(

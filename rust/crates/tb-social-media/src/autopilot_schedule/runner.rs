@@ -249,6 +249,7 @@ impl AutopilotWorker {
                 runtime,
                 lease,
                 brain_token: self.config.brain_token.as_deref(),
+                downloader: Some(self.downloader.as_ref()),
             },
             job.clone(),
         )
@@ -277,16 +278,19 @@ impl AutopilotWorker {
                     .ok_or(RunnerError::Source)?;
                 if current.status == "running" {
                     lease.ensure_held().await?;
-                    let reason = if matches!(error, ai_editor::AiEditorError::Consent) {
-                        "external_ai_consent_required"
+                    let (completion, reason) = if matches!(error, ai_editor::AiEditorError::Consent)
+                    {
+                        (JobCompletion::Review, "external_ai_consent_required")
+                    } else if error.is_source_fetch_failure() {
+                        (JobCompletion::Failed, "ai_source_download_failed")
                     } else {
-                        "ai_production_failed"
+                        (JobCompletion::Review, "ai_production_failed")
                     };
                     production_jobs::finish(
                         &self.pool,
                         &job.twitch_user_id,
                         job.id,
-                        JobCompletion::Review,
+                        completion,
                         &[reason.into()],
                         Some(&error.to_string()),
                     )

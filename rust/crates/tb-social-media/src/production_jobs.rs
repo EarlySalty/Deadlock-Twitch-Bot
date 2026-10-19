@@ -408,8 +408,11 @@ pub async fn finish(
     if changed != 1 {
         return Err(JobError::State);
     }
-    if matches!(completion, JobCompletion::Review) {
+    if matches!(completion, JobCompletion::Review | JobCompletion::Failed) {
         release_unfinished_slots_on(&mut tx, twitch_user_id, id).await?;
+    }
+    if matches!(completion, JobCompletion::Failed) {
+        release_pool_selection_on(&mut tx, twitch_user_id, id).await?;
     }
     tx.commit().await?;
     Ok(())
@@ -426,6 +429,25 @@ pub(crate) async fn release_unfinished_slots_on(
     )
     .bind(id)
     .bind(twitch_user_id)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+async fn release_pool_selection_on(
+    connection: &mut PgConnection,
+    twitch_user_id: &str,
+    id: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE social_clip_pool p SET selected_at = NULL
+        FROM social_production_jobs j
+        WHERE j.id = $2 AND j.twitch_user_id = $1
+        AND p.twitch_user_id = j.twitch_user_id AND p.clip_db_id = j.clip_id
+        AND NOT social_clip_video_holds(p.clip_db_id)",
+    )
+    .bind(twitch_user_id)
+    .bind(id)
     .execute(connection)
     .await?;
     Ok(())

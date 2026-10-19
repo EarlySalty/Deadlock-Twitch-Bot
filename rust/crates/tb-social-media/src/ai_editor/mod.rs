@@ -44,6 +44,12 @@ pub enum AiEditorError {
     Configuration,
     #[error("Der ursprüngliche Deadlock-Clip ist nicht verfügbar oder hat sich geändert.")]
     Source,
+    #[error("Der Clip konnte nicht von Twitch geladen werden.")]
+    SourceDownload,
+    #[error("Der Clip ist auf Twitch nicht mehr verfügbar.")]
+    SourceMissing,
+    #[error("Die gespeicherte Clip-Datei ist nicht lesbar.")]
+    SourceUnreadable,
     #[error("Für die externe KI-Verarbeitung fehlt die Einwilligung.")]
     Consent,
     #[error("Das freigegebene Kostenlimit ist erreicht.")]
@@ -74,6 +80,15 @@ pub enum AiEditorError {
     NotFound,
     #[error("Für diesen Clip läuft auf dieser Plattform schon eine Veröffentlichung.")]
     PipelineBusy,
+}
+
+impl AiEditorError {
+    pub fn is_source_fetch_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::SourceDownload | Self::SourceMissing | Self::SourceUnreadable
+        )
+    }
 }
 
 impl From<store::AiStoreError> for AiEditorError {

@@ -39,6 +39,7 @@ pub struct ProductionContext<'a> {
     pub runtime: &'a EditorRuntime,
     pub lease: &'a mut ProductionLease,
     pub brain_token: Option<&'a str>,
+    pub downloader: Option<&'a dyn crate::clip_prep_worker::ClipDownloader>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -386,6 +387,7 @@ pub(super) struct StageContext<'a> {
     pub expected_twitch_clip_id: Option<&'a str>,
     pub checkpoints: &'a BTreeMap<AiStage, StageCheckpoint>,
     pub brain_token: Option<&'a str>,
+    pub downloader: Option<&'a dyn crate::clip_prep_worker::ClipDownloader>,
 }
 
 pub(super) async fn execute_stage(
@@ -422,7 +424,14 @@ pub(super) async fn execute_stage(
 }
 
 async fn prepare(ctx: &StageContext<'_>) -> Result<StageCheckpoint, AiEditorError> {
-    let source = super::source::load_source(ctx.pool, ctx.current, ctx.owner, ctx.clip_id).await?;
+    let source = super::source::load_source(
+        ctx.pool,
+        ctx.current,
+        ctx.owner,
+        ctx.clip_id,
+        ctx.downloader,
+    )
+    .await?;
     if ctx
         .expected_twitch_clip_id
         .is_some_and(|id| id != source.twitch_clip_id)
@@ -1816,6 +1825,7 @@ async fn produce_inner(
                     expected_twitch_clip_id: None,
                     checkpoints: &state.checkpoints,
                     brain_token: ctx.brain_token,
+                    downloader: ctx.downloader,
                 },
                 stage,
             ),
@@ -1894,7 +1904,11 @@ pub async fn produce(
             ctx.pool,
             &job.twitch_user_id,
             job.id,
-            production_jobs::JobCompletion::Review,
+            if error.is_source_fetch_failure() {
+                production_jobs::JobCompletion::Failed
+            } else {
+                production_jobs::JobCompletion::Review
+            },
             &[error.to_string()],
             Some(&error.to_string()),
         )

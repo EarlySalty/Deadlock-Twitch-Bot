@@ -132,7 +132,10 @@ impl From<AiEditorError> for ApiError {
                 | produced_video::ProducedVideoError::NoPlatforms => StatusCode::BAD_REQUEST,
                 _ => StatusCode::CONFLICT,
             },
-            AiEditorError::NotFound | AiEditorError::Source => StatusCode::NOT_FOUND,
+            AiEditorError::NotFound
+            | AiEditorError::Source
+            | AiEditorError::SourceMissing
+            | AiEditorError::SourceUnreadable => StatusCode::NOT_FOUND,
             AiEditorError::Consent => StatusCode::FORBIDDEN,
             AiEditorError::Conflict | AiEditorError::Attempts => StatusCode::CONFLICT,
             AiEditorError::Configuration | AiEditorError::Storage => {

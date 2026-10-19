@@ -212,7 +212,8 @@ pub async fn create_manual_job(
     clip_id: i64,
 ) -> Result<AiJobView, AiEditorError> {
     social_editor::consent_allowed(pool, owner).await?;
-    super::source::load_source(pool, runtime, owner, clip_id).await?;
+    let downloader = crate::clip_prep_worker::YtDlpDownloader::new("yt-dlp");
+    super::source::load_source(pool, runtime, owner, clip_id, Some(&downloader)).await?;
     let job = store::create_job(pool, owner, clip_id, attempt_limit(runtime)?).await?;
     project(pool, runtime, owner, job).await
 }
@@ -235,7 +236,11 @@ pub async fn retry_manual_job(
 
 fn failure(error: &AiEditorError, stage: AiStage) -> JobFailure {
     match error {
-        AiEditorError::Source | AiEditorError::NotFound => JobFailure::SourceUnavailable,
+        AiEditorError::Source
+        | AiEditorError::SourceDownload
+        | AiEditorError::SourceMissing
+        | AiEditorError::SourceUnreadable
+        | AiEditorError::NotFound => JobFailure::SourceUnavailable,
         AiEditorError::Consent => JobFailure::ConsentMissing,
         AiEditorError::Budget => JobFailure::BudgetExceeded,
         AiEditorError::Provider => JobFailure::ProviderUnavailable,
@@ -454,6 +459,7 @@ impl ManualWorker {
             }
             let remaining = Duration::from_millis(frozen_runtime.limits.job_deadline_ms)
                 .saturating_sub(started.elapsed());
+            let downloader = crate::clip_prep_worker::YtDlpDownloader::new("yt-dlp");
             let result = if remaining.is_zero() {
                 Err(AiEditorError::Deadline)
             } else {
@@ -470,6 +476,7 @@ impl ManualWorker {
                             expected_twitch_clip_id: Some(&job.source_twitch_clip_id),
                             checkpoints: &job.checkpoints,
                             brain_token: self.brain_token.as_deref(),
+                            downloader: Some(&downloader),
                         },
                         job.stage,
                     ),
