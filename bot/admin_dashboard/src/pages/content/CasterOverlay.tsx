@@ -21,8 +21,8 @@ import {
   normalizedCountdown,
   normalizedEvent,
   overlayPages,
+  overlayPreviewSrc,
   previewPayload,
-  PUBLIC_ORIGIN,
   type OverlayPageId,
 } from './casterScene';
 
@@ -117,8 +117,11 @@ export default function CasterOverlayPage() {
   );
 
   function preview(nextScene = scene) {
-    if (!nextScene) return;
-    iframe.current?.contentWindow?.postMessage(previewPayload(nextScene), PUBLIC_ORIGIN);
+    if (!nextScene || !iframe.current?.contentWindow) return;
+    const target = iframe.current.src
+      ? new URL(iframe.current.src, window.location.href).origin
+      : window.location.origin;
+    iframe.current.contentWindow.postMessage(previewPayload(nextScene), target);
   }
 
   useEffect(() => preview(), [scene]);
@@ -426,7 +429,7 @@ export default function CasterOverlayPage() {
               <iframe
                 ref={iframe}
                 title="Vorschau der Overlay-Seite"
-                src={`${previewUrl}?preview=1`}
+                src={overlayPreviewSrc(previewUrl)}
                 onLoad={() => preview()}
                 className="absolute inset-0 h-full w-full border-0"
               />

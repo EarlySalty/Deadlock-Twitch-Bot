@@ -568,10 +568,13 @@ fn overlay_page(html: &'static str) -> impl IntoResponse {
     (
         [
             (header::CACHE_CONTROL, "no-cache"),
-            (header::X_FRAME_OPTIONS, "SAMEORIGIN"),
+            (
+                header::X_FRAME_OPTIONS,
+                "ALLOW-FROM https://admin.deutsche-deadlock-community.de",
+            ),
             (
                 header::CONTENT_SECURITY_POLICY,
-                "default-src 'none'; img-src 'self'; frame-src 'self' https:; media-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self' ws: wss:; base-uri 'none'; frame-ancestors 'self' https://admin.deutsche-deadlock-community.de",
+                "default-src 'none'; img-src 'self'; frame-src 'self' https:; media-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self' ws: wss:; base-uri 'none'; frame-ancestors 'self' https://admin.deutsche-deadlock-community.de http://127.0.0.1:* http://localhost:*",
             ),
         ],
         Html(html),

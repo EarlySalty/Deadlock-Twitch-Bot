@@ -17,7 +17,7 @@ use tb_http_core::ApiError;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-const SELECT_TEAM: &str = "SELECT id::text AS id, name, short, logo_asset_id::text AS logo_asset_id, players, coach_name, coach_discord_id FROM twitch_caster_teams";
+const LIST_TEAMS: &str = "SELECT id::text AS id, name, short, logo_asset_id::text AS logo_asset_id, players, coach_name, coach_discord_id FROM twitch_caster_teams ORDER BY lower(name), id";
 const MEMBER_CACHE_TTL: Duration = Duration::from_secs(120);
 const MEMBER_SEARCH_LIMIT: usize = 20;
 const MEMBER_QUERY_MAX: usize = 60;
@@ -105,7 +105,7 @@ pub async fn list_handler(
     if let Some(error) = crate::auth::require_admin(&auth) {
         return Err(error);
     }
-    let rows = sqlx::query(&format!("{SELECT_TEAM} ORDER BY lower(name), id"))
+    let rows = sqlx::query(LIST_TEAMS)
         .fetch_all(&pool)
         .await
         .map_err(db_error)?;

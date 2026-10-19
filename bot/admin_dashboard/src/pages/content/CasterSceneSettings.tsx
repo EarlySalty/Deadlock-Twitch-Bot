@@ -311,9 +311,10 @@ type TeamCardProps = {
   busy: boolean;
   logos: ReturnType<typeof useAssets>;
   library: ReturnType<typeof useTeamLibrary>;
+  notify: Notify;
 };
 
-function TeamCard({ side, index, scene, teams, edit, busy, logos, library }: TeamCardProps) {
+function TeamCard({ side, index, scene, teams, edit, busy, logos, library, notify }: TeamCardProps) {
   const team = scene.matchContext[side] ?? null;
   const update = (change: (value: CasterSceneTeam) => CasterSceneTeam | null) =>
     edit((value) => ({
@@ -432,7 +433,10 @@ function TeamCard({ side, index, scene, teams, edit, busy, logos, library }: Tea
           onClick={async () => {
             if (!team) return;
             const saved = await library.save(team);
-            if (saved) update((value) => ({ ...value, libraryId: saved.libraryId, logoAssetId: saved.logoAssetId }));
+            if (saved) {
+              update((value) => ({ ...value, libraryId: saved.libraryId, logoAssetId: saved.logoAssetId }));
+              notify.status(`${saved.name} in der Teambibliothek gespeichert.`);
+            }
           }}
         >
           {team?.libraryId && !missingLibrary ? 'Bibliothek aktualisieren' : 'In Teambibliothek speichern'}
@@ -477,7 +481,7 @@ export function CasterTeamsEditor({ scene, teams, edit, busy, notify }: TeamsPro
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         {(['teamA', 'teamB'] as const).map((side, index) => (
-          <TeamCard key={side} side={side} index={index} scene={scene} teams={teams} edit={edit} busy={busy} logos={logos} library={library} />
+          <TeamCard key={side} side={side} index={index} scene={scene} teams={teams} edit={edit} busy={busy} logos={logos} library={library} notify={notify} />
         ))}
       </div>
     </div>

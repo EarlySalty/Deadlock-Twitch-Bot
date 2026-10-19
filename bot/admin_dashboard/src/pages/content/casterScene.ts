@@ -26,8 +26,25 @@ export const overlayPages = [
 
 export type OverlayPageId = (typeof overlayPages)[number]['id'];
 
+export function overlayPath(url: string) {
+  return url.startsWith(PUBLIC_ORIGIN) ? url.slice(PUBLIC_ORIGIN.length) : url;
+}
+
+export function overlayPreviewSrc(url: string) {
+  const path = overlayPath(url);
+  if (typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname)) {
+    return `${path}?preview=1`;
+  }
+  return `${url}?preview=1`;
+}
+
 export function publicUrl(path: string | null) {
-  return path ? `${PUBLIC_ORIGIN}${path}` : null;
+  if (!path) return null;
+  if (/^https?:\/\//.test(path)) return path;
+  if (typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname)) {
+    return path;
+  }
+  return `${PUBLIC_ORIGIN}${path}`;
 }
 
 export function assetUrl(id: string) {
