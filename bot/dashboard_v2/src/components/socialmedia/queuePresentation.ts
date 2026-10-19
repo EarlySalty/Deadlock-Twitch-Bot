@@ -48,7 +48,6 @@ export function queueStage(clip: SocialClipMitPosting): Exclude<QueueStage, 'all
   if (['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? ''))
     return clip.status === 'approved' || clip.status === 'publishing' ? 'planned' : 'review';
   if (clip.status === 'publishing' || queuedSlots(clip) > 0) return 'planned';
-  if (clip.status === 'awaiting_approval') return 'review';
   return 'new';
 }
 
@@ -152,8 +151,12 @@ export function legacyUncertainPlatforms(source: PipelineSource): string[] {
     .map((destination) => destination.platform);
 }
 
+function sourceHasReviewVideo(source: PipelineSource): boolean {
+  return source.versions.some((version) => version.status === 'review');
+}
+
 function sourceInReview(source: PipelineSource): boolean {
-  return source.jobs.some((job) => job.status === 'review') || source.versions.some((version) => version.status === 'review')
+  return sourceHasReviewVideo(source)
     || source.destinations.some((destination) => destination.status === 'autopilot_held')
     || legacyUncertainPlatforms(source).length > 0;
 }
@@ -163,7 +166,7 @@ export function sourceStage(source: PipelineSource): Exclude<QueueStage, 'all'> 
   if (sourcePlanned(source)) return 'planned';
   if (sourcePreparing(source)) return 'preparing';
   if (sourceInReview(source)) return 'review';
-  if (failedPlatforms(source).length > 0 || (publishedPlatforms(source).length === 0 && source.jobs.some((job) => job.status === 'failed'))) return 'failed';
+  if (failedPlatforms(source).length > 0 || (publishedPlatforms(source).length === 0 && source.jobs.some((job) => job.status === 'failed' || (job.status === 'review' && !sourceHasReviewVideo(source))))) return 'failed';
   if (publishedPlatforms(source).length > 0 || source.published_at) return 'posted';
   return 'new';
 }

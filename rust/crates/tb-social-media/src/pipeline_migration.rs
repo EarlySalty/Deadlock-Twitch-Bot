@@ -1916,3 +1916,68 @@ fn text<'v>(value: &'v Value, key: &str) -> Option<&'v str> {
 fn int(value: &Value, key: &str) -> Option<i64> {
     value.get(key).and_then(Value::as_i64)
 }
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct LegacyReviewClearReport {
+    pub jobs_cleared: u64,
+    pub clips_unpinned: u64,
+    pub awaiting_returned: u64,
+}
+
+pub async fn clear_legacy_review_jam(
+    pool: &PgPool,
+) -> Result<LegacyReviewClearReport, MigrationError> {
+    let mut tx = pool.begin().await?;
+    let cancelled: Vec<(String, i64)> = sqlx::query_as(
+        "UPDATE social_production_jobs j
+        SET status = 'cancelled', stage = 'cleared_no_video',
+            finished_at = COALESCE(finished_at, NOW()), scheduled_at = NULL
+        WHERE j.status IN ('review', 'failed')
+        AND NOT EXISTS (
+            SELECT 1 FROM social_produced_videos v
+            WHERE v.twitch_user_id = j.twitch_user_id
+            AND social_video_job(v.job_id, v.metadata) = j.id
+            AND v.file_path IS NOT NULL
+            AND v.status NOT IN ('rejected', 'expired')
+        )
+        RETURNING twitch_user_id, clip_id",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let clip_ids: Vec<i64> = cancelled.iter().map(|(_, clip_id)| *clip_id).collect();
+    let clips_unpinned = if clip_ids.is_empty() {
+        0
+    } else {
+        sqlx::query(
+            "UPDATE social_clip_pool p SET selected_at = NULL
+            WHERE p.clip_db_id = ANY($1)
+            AND p.selected_at IS NOT NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM social_production_jobs other
+                WHERE other.twitch_user_id = p.twitch_user_id AND other.clip_id = p.clip_db_id
+                AND other.status IN ('queued', 'running', 'review')
+            )",
+        )
+        .bind(&clip_ids)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+    };
+    let awaiting_returned = sqlx::query(
+        "UPDATE twitch_clips_social_media c SET status = 'pool'
+        WHERE c.status = 'awaiting_approval'
+        AND EXISTS (
+            SELECT 1 FROM social_pipeline_cutover o
+            WHERE o.twitch_user_id = c.twitch_user_id AND o.state = 'unified'
+        )",
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    tx.commit().await?;
+    Ok(LegacyReviewClearReport {
+        jobs_cleared: cancelled.len() as u64,
+        clips_unpinned,
+        awaiting_returned,
+    })
+}

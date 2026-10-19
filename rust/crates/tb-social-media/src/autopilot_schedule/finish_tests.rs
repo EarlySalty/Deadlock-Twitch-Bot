@@ -804,3 +804,108 @@ async fn retrying_a_test_with_a_review_video_is_rejected() {
     assert!(matches!(error, ScheduleError::Invalid(_)));
     cleanup(pool).await;
 }
+
+#[tokio::test]
+async fn clear_legacy_review_jam_cancels_parked_jobs_without_video() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    sqlx::query(
+        "INSERT INTO social_pipeline_cutover (twitch_user_id, state, migration_version)
+        VALUES ('owner', 'unified', 1)
+        ON CONFLICT (twitch_user_id) DO UPDATE SET state = 'unified'",
+    )
+    .execute(&pool)
+    .await
+    .expect("unified owner");
+    let empty = clip(&pool, "owner", "jam-empty", utc("2025-01-01T00:00:00Z")).await;
+    let ready = clip(&pool, "owner", "jam-ready", utc("2025-01-02T00:00:00Z")).await;
+    sqlx::query(
+        "UPDATE twitch_clips_social_media SET status = 'awaiting_approval' WHERE id IN ($1, $2)",
+    )
+    .bind(empty)
+    .bind(ready)
+    .execute(&pool)
+    .await
+    .expect("legacy approval status");
+    let parked = job(&pool, "owner", empty, Some(ProductionMode::Ai)).await;
+    let kept = job(&pool, "owner", ready, Some(ProductionMode::Static)).await;
+    sqlx::query(
+        "UPDATE social_production_jobs SET status = 'review', stage = 'review', finished_at = NOW()
+        WHERE id IN ($1, $2)",
+    )
+    .bind(parked.id)
+    .bind(kept.id)
+    .execute(&pool)
+    .await
+    .expect("park both");
+    sqlx::query("UPDATE social_clip_pool SET selected_at = NOW() WHERE clip_db_id IN ($1, $2)")
+        .bind(empty)
+        .bind(ready)
+        .execute(&pool)
+        .await
+        .expect("pin both");
+    sqlx::query(
+        "INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at)
+        VALUES ('owner', $1, $2, 'static', 'review', '/fixture/ready.mp4', 1000, clock_timestamp() + INTERVAL '7 days')",
+    )
+    .bind(ready)
+    .bind(kept.id)
+    .execute(&pool)
+    .await
+    .expect("kept video");
+    let parked_before: String =
+        sqlx::query_scalar("SELECT status FROM social_production_jobs WHERE id = $1")
+            .bind(parked.id)
+            .fetch_one(&pool)
+            .await
+            .expect("parked before");
+    assert_eq!(parked_before, "review");
+    let report = crate::pipeline_migration::clear_legacy_review_jam(&pool)
+        .await
+        .expect("clear jam");
+    assert_eq!(report.jobs_cleared, 1);
+    assert_eq!(report.clips_unpinned, 1);
+    assert_eq!(report.awaiting_returned, 2);
+    let parked_status: String =
+        sqlx::query_scalar("SELECT status FROM social_production_jobs WHERE id = $1")
+            .bind(parked.id)
+            .fetch_one(&pool)
+            .await
+            .expect("parked");
+    let parked_stage: String =
+        sqlx::query_scalar("SELECT stage FROM social_production_jobs WHERE id = $1")
+            .bind(parked.id)
+            .fetch_one(&pool)
+            .await
+            .expect("stage");
+    let kept_status: String =
+        sqlx::query_scalar("SELECT status FROM social_production_jobs WHERE id = $1")
+            .bind(kept.id)
+            .fetch_one(&pool)
+            .await
+            .expect("kept");
+    let empty_status: String =
+        sqlx::query_scalar("SELECT status FROM twitch_clips_social_media WHERE id = $1")
+            .bind(empty)
+            .fetch_one(&pool)
+            .await
+            .expect("empty clip");
+    let selected: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT selected_at FROM social_clip_pool WHERE clip_db_id = $1")
+            .bind(empty)
+            .fetch_one(&pool)
+            .await
+            .expect("unpin");
+    assert_eq!(parked_status, "cancelled");
+    assert_eq!(parked_stage, "cleared_no_video");
+    assert_eq!(kept_status, "review");
+    assert_eq!(empty_status, "pool");
+    assert!(selected.is_none());
+    let again = crate::pipeline_migration::clear_legacy_review_jam(&pool)
+        .await
+        .expect("idempotent");
+    assert_eq!(again.jobs_cleared, 0);
+    assert_eq!(again.clips_unpinned, 0);
+    assert_eq!(again.awaiting_returned, 0);
+    cleanup(pool).await;
+}

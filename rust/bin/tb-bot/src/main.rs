@@ -570,6 +570,20 @@ async fn main() {
     } else if !dry_run {
         tracing::warn!("DB-Migrationen laut Betriebskonfiguration deaktiviert");
     }
+    if !dry_run {
+        match tb_social_media::pipeline_migration::clear_legacy_review_jam(&pool).await {
+            Ok(report) => tracing::info!(
+                jobs_cleared = report.jobs_cleared,
+                clips_unpinned = report.clips_unpinned,
+                awaiting_returned = report.awaiting_returned,
+                "Studio-Jobs ohne Video wurden in den Clip-Bestand zurückgelegt"
+            ),
+            Err(error) => tracing::error!(
+                error = %error,
+                "Studio-Jobs ohne Video konnten nicht zurückgelegt werden"
+            ),
+        }
+    }
     if let Some(command) = social_cutover {
         let result = tb_social_media::pipeline_migration::run_command(&pool, &command).await;
         pool.close().await;

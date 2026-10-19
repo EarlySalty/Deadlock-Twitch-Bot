@@ -47,7 +47,7 @@ test('veröffentlichte und archivierte Clips bleiben trotz altem Freigabestand t
   const approval = { state: 'awaiting_approval' } as SocialClipMitPosting['approval'];
   assert.equal(queueStage(clip(1, { status: 'published_all', approval })), 'posted');
   assert.equal(queueStage(clip(2, { status: 'discarded', approval })), 'archive');
-  assert.equal(queueStage(clip(3, { status: 'awaiting_approval' })), 'review');
+  assert.equal(queueStage(clip(3, { status: 'awaiting_approval' })), 'new');
   assert.equal(queueStage(clip(4, { status: 'approved' })), 'new');
 });
 
@@ -73,10 +73,10 @@ test('Suche, Plattform und Status kombinieren sich über den gesamten Bestand', 
     clip(2),
   ];
   assert.deepEqual(
-    filterQueue(data, 'review', 'überlebt', 'youtube').map((c) => c.clip_db_id),
+    filterQueue(data, 'new', 'überlebt', 'youtube').map((c) => c.clip_db_id),
     [1],
   );
-  assert.equal(filterQueue(data, 'review', 'überlebt', 'tiktok').length, 0);
+  assert.equal(filterQueue(data, 'review', 'überlebt', 'youtube').length, 0);
 });
 
 test('Bestandsabfrage lädt nachfolgende Seiten und zählt nicht bloß die ersten 100', async () => {
@@ -268,6 +268,7 @@ test('approved clips awaiting TikTok remain planned rather than needing clip app
   assert.equal(queueStage(approved), 'planned');
   assert.equal(filterQueue([approved], 'review', '', 'all').length, 0);
   assert.equal(queueStage(clip(2, { status: 'awaiting_approval', upload_states: { tiktok: 'waiting_tiktok_approval' } })), 'review');
+  assert.equal(queueStage(clip(3, { status: 'awaiting_approval' })), 'new');
 });
 
 test('generated titles win while duplicate Twitch titles gain date and time', () => {
@@ -281,7 +282,7 @@ test('generated titles win while duplicate Twitch titles gain date and time', ()
 test('Today prioritizes the same action as its overview and ignores failed sources', () => {
   const data = { clips: [clip(1, { status: 'awaiting_approval' })], clipsFailed: false, platforms: [], platformsFailed: false, scheduleFailed: false, publishFailed: false, timezone: 'Europe/Berlin' };
   const t = (key: string) => key;
-  assert.deepEqual(studioActions(data, 0, t).map(action => [action.key, action.view, action.stage]), [['clips', 'freigabe', 'review']]);
+  assert.deepEqual(studioActions(data, 0, t).map(action => [action.key, action.view, action.stage]), []);
   assert.deepEqual(studioActions({ ...data, clipsFailed: true }, 0, t), []);
 });
 
@@ -309,6 +310,11 @@ test('eingeplante Ziele landen in Geplant, laufende Produktion in Vorbereitung',
   assert.equal(sourceStage(source({ versions: [{ status: 'scheduled' }] } as Partial<PipelineSource>)), 'planned');
   assert.equal(sourceStage(source({ jobs: [{ status: 'queued', reservations: [] }] } as Partial<PipelineSource>)), 'preparing');
   assert.equal(sourceStage(source({ versions: [{ status: 'rendering' }] } as Partial<PipelineSource>)), 'preparing');
+  assert.equal(sourceStage(source({ jobs: [{ status: 'review', reservations: [] }] } as Partial<PipelineSource>)), 'failed');
+  assert.equal(sourceStage(source({
+    jobs: [{ id: 1, status: 'review', reservations: [] }],
+    versions: [{ id: 9, job_id: 1, status: 'review' }],
+  } as Partial<PipelineSource>)), 'review');
 });
 
 test('archivierte Clips erscheinen nur unter Archiv, nicht unter Aussortiert / Fehler', () => {
