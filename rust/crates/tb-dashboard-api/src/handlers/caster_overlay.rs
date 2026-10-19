@@ -1,4 +1,4 @@
-//! Persistente Caster-Szene, Kamera-Freigaben und WebRTC-Signaling.
+use super::caster_overlay_assets;
 use crate::auth::level::DashboardAuthLevel;
 use axum::{
     extract::{
@@ -9,6 +9,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     Json,
 };
+use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -26,6 +27,9 @@ const STEAM64_BASE: u64 = 76_561_197_960_265_728;
 const MAX_CASTERS: usize = 100;
 const MAX_CAMERA_URL: usize = 2048;
 const MAX_TEAM_PLAYERS: usize = 12;
+const MAX_TEAM_SHORT: usize = 8;
+const MAX_COUNTDOWN_TITLE: usize = 60;
+const BRAND_URL: &str = "/twitch/caster-overlay/builtin/dachlock.png";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -77,6 +81,14 @@ pub struct SceneTeam {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short: Option<String>,
+    #[serde(
+        default,
+        rename = "logoAssetId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub logo_asset_id: Option<String>,
     #[serde(default)]
     pub players: Vec<ScenePlayer>,
 }
@@ -91,6 +103,93 @@ pub struct MatchContext {
     pub observer_account_id: Option<i64>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltinEventLogo {
+    #[default]
+    Wochenende,
+    Community,
+    FunTurnier,
+}
+impl BuiltinEventLogo {
+    fn url(self) -> &'static str {
+        match self {
+            Self::Wochenende => "/twitch/caster-overlay/builtin/wochenende.webp",
+            Self::Community => "/twitch/caster-overlay/builtin/community.webp",
+            Self::FunTurnier => "/twitch/caster-overlay/builtin/fun-turnier.webp",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EventLogo {
+    None,
+    Builtin {
+        id: BuiltinEventLogo,
+    },
+    Asset {
+        #[serde(rename = "assetId")]
+        asset_id: String,
+    },
+}
+impl Default for EventLogo {
+    fn default() -> Self {
+        Self::Builtin {
+            id: BuiltinEventLogo::default(),
+        }
+    }
+}
+impl EventLogo {
+    fn url(&self) -> Option<String> {
+        match self {
+            Self::None => None,
+            Self::Builtin { id } => Some(id.url().to_owned()),
+            Self::Asset { asset_id } => Some(caster_overlay_assets::asset_url(asset_id)),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EventSettings {
+    #[serde(default)]
+    pub logo: EventLogo,
+    #[serde(default = "default_true", rename = "showBrand")]
+    pub show_brand: bool,
+}
+impl Default for EventSettings {
+    fn default() -> Self {
+        Self {
+            logo: EventLogo::default(),
+            show_brand: true,
+        }
+    }
+}
+
+fn default_countdown_title() -> String {
+    "Stream startet in".to_owned()
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Countdown {
+    #[serde(default = "default_countdown_title")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<DateTime<Utc>>,
+}
+impl Default for Countdown {
+    fn default() -> Self {
+        Self {
+            title: default_countdown_title(),
+            target: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Scene {
     pub roster: Vec<Caster>,
@@ -100,6 +199,12 @@ pub struct Scene {
     pub layout: CasterLayout,
     #[serde(default, rename = "matchContext")]
     pub match_context: MatchContext,
+    #[serde(default)]
+    pub event: EventSettings,
+    #[serde(default)]
+    pub countdown: Countdown,
+    #[serde(default, rename = "sidesSwapped")]
+    pub sides_swapped: bool,
 }
 
 #[derive(Deserialize)]
@@ -142,18 +247,59 @@ fn normalize_scene(scene: &mut Scene) {
             .take()
             .map(|id| id.trim().to_owned())
             .filter(|id| !id.is_empty());
+        team.short = trimmed_option(team.short.take());
+        team.logo_asset_id = trimmed_option(team.logo_asset_id.take());
         team.players.truncate(MAX_TEAM_PLAYERS);
         for player in &mut team.players {
             player.display_name = player.display_name.trim().to_owned();
         }
     }
+    normalize_event_and_countdown(scene);
+}
+
+fn trimmed_option(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn normalize_event_and_countdown(scene: &mut Scene) {
+    if let EventLogo::Asset { asset_id } = &mut scene.event.logo {
+        *asset_id = asset_id.trim().to_owned();
+    }
+    scene.countdown.title = scene.countdown.title.trim().to_owned();
+    if scene.countdown.title.is_empty() {
+        scene.countdown.title = default_countdown_title();
+    }
+}
+
+fn valid_text(value: &str, max: usize) -> bool {
+    value.chars().count() <= max && !value.chars().any(char::is_control)
+}
+
+fn team_extras_valid(team: &SceneTeam) -> bool {
+    team.short
+        .as_deref()
+        .is_none_or(|short| valid_text(short, MAX_TEAM_SHORT))
+        && team
+            .logo_asset_id
+            .as_deref()
+            .is_none_or(caster_overlay_assets::is_asset_id)
+}
+
+fn event_and_countdown_valid(scene: &Scene) -> bool {
+    let logo_valid = match &scene.event.logo {
+        EventLogo::Asset { asset_id } => caster_overlay_assets::is_asset_id(asset_id),
+        EventLogo::None | EventLogo::Builtin { .. } => true,
+    };
+    logo_valid && valid_text(&scene.countdown.title, MAX_COUNTDOWN_TITLE)
 }
 
 fn validate(scene: &mut Scene) -> Result<(), ApiError> {
     normalize_scene(scene);
     let invalid = || {
         ApiError::bad_request_with_body(json!({
-            "message":"Ungültige Caster-Szene. Erlaubt sind Solo/Duo/Trio, höchstens 100 Personen, sichere HTTPS-Kameraquellen und maximal zwölf Spieler je Team."
+            "message":"Ungültige Caster-Szene. Erlaubt sind Solo/Duo/Trio, höchstens 100 Personen, sichere HTTPS-Kameraquellen, maximal zwölf Spieler je Team, Teamkürzel bis acht Zeichen und ein Countdown-Titel bis 60 Zeichen."
         }))
     };
     if scene.roster.len() > MAX_CASTERS {
@@ -202,8 +348,8 @@ fn validate(scene: &mut Scene) -> Result<(), ApiError> {
         .into_iter()
         .flatten()
     {
-        if team.name.chars().count() > 80
-            || team.name.chars().any(char::is_control)
+        if !valid_text(&team.name, 80)
+            || !team_extras_valid(team)
             || team.players.len() > MAX_TEAM_PLAYERS
             || team.players.iter().any(|player| {
                 player.display_name.is_empty()
@@ -213,6 +359,9 @@ fn validate(scene: &mut Scene) -> Result<(), ApiError> {
         {
             return Err(invalid());
         }
+    }
+    if !event_and_countdown_valid(scene) {
+        return Err(invalid());
     }
     Ok(())
 }
@@ -309,11 +458,40 @@ pub async fn public_handler(State(pool): State<PgPool>) -> Result<impl IntoRespo
             "layout":scene.layout,
             "slots":slots,
             "matchContext":scene.match_context,
+            "teams":public_teams(&scene),
+            "sidesSwapped":scene.sides_swapped,
+            "event":{
+                "logoUrl":scene.event.logo.url(),
+                "showBrand":scene.event.show_brand,
+                "brandUrl":BRAND_URL,
+            },
+            "countdown":scene.countdown,
         })),
     ))
 }
 
-pub async fn html_handler() -> impl IntoResponse {
+fn public_team(team: Option<&SceneTeam>) -> Value {
+    team.map_or(Value::Null, |team| {
+        json!({
+            "name":team.name,
+            "short":team.short,
+            "logoUrl":team.logo_asset_id.as_deref().map(caster_overlay_assets::asset_url),
+            "players":team.players,
+        })
+    })
+}
+
+fn public_teams(scene: &Scene) -> Value {
+    let team_a = public_team(scene.match_context.team_a.as_ref());
+    let team_b = public_team(scene.match_context.team_b.as_ref());
+    if scene.sides_swapped {
+        json!({"left":team_b,"right":team_a})
+    } else {
+        json!({"left":team_a,"right":team_b})
+    }
+}
+
+fn overlay_page(html: &'static str) -> impl IntoResponse {
     (
         [
             (header::CACHE_CONTROL, "no-cache"),
@@ -323,8 +501,12 @@ pub async fn html_handler() -> impl IntoResponse {
                 "default-src 'none'; img-src 'self'; frame-src 'self' https:; media-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self' ws: wss:; base-uri 'none'; frame-ancestors 'self' https://admin.deutsche-deadlock-community.de",
             ),
         ],
-        Html(include_str!("caster_overlay.html")),
+        Html(html),
     )
+}
+
+pub async fn html_handler() -> impl IntoResponse {
+    overlay_page(include_str!("caster_overlay.html"))
 }
 
 pub async fn background_handler() -> impl IntoResponse {
@@ -336,9 +518,6 @@ pub async fn background_handler() -> impl IntoResponse {
         include_bytes!("caster_background.png").as_slice(),
     )
 }
-
-// ---------------------------------------------------------------------------
-// Verwaltete Kamera-Einladungen
 
 #[derive(Debug, Deserialize)]
 pub struct CreateCameraRequest {
@@ -498,9 +677,6 @@ pub async fn camera_page_handler(
     )
         .into_response()
 }
-
-// ---------------------------------------------------------------------------
-// WebRTC-Signaling. Medien laufen Browser-zu-Browser; der Server sieht nur SDP/ICE.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CameraRole {
@@ -811,9 +987,6 @@ async fn remove_camera_peer(camera_id: &str, peer_id: &str, role: CameraRole) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Team-/Player-Kontext aus Turniere + Steam-Verknüpfung.
-
 #[derive(Debug, Deserialize)]
 struct TurnierTeam {
     id: Value,
@@ -983,6 +1156,9 @@ mod tests {
             slots: vec![Some("caster-1".into()), None],
             layout: CasterLayout::Duo,
             match_context: MatchContext::default(),
+            event: EventSettings::default(),
+            countdown: Countdown::default(),
+            sides_swapped: false,
         }
     }
     #[test]
@@ -1041,6 +1217,68 @@ mod tests {
         assert_eq!(value.layout, CasterLayout::Duo);
         assert_eq!(value.slots.len(), 2);
         assert!(value.roster[0].camera_id.is_none());
+        assert!(value.event.show_brand);
+        assert_eq!(
+            value.event.logo,
+            EventLogo::Builtin {
+                id: BuiltinEventLogo::Wochenende
+            }
+        );
+        assert_eq!(value.countdown.title, "Stream startet in");
+        assert!(!value.sides_swapped);
+    }
+    #[test]
+    fn freie_teams_und_eventlogo_werden_geprueft() {
+        let mut value = scene();
+        value.match_context.team_a = Some(SceneTeam {
+            name: "Team Rot".into(),
+            short: Some(" ROT ".into()),
+            logo_asset_id: Some("6f1c2a52-6a8e-4c43-9f43-1d5d0c6b8a11".into()),
+            ..SceneTeam::default()
+        });
+        value.event.logo = EventLogo::Asset {
+            asset_id: "6f1c2a52-6a8e-4c43-9f43-1d5d0c6b8a12".into(),
+        };
+        validate(&mut value).unwrap();
+        assert_eq!(
+            value
+                .match_context
+                .team_a
+                .as_ref()
+                .and_then(|t| t.short.as_deref()),
+            Some("ROT")
+        );
+        let mut broken = value.clone();
+        if let Some(team) = broken.match_context.team_a.as_mut() {
+            team.logo_asset_id = Some("../etc/passwd".into());
+        }
+        assert!(validate(&mut broken).is_err());
+        let mut broken = value.clone();
+        if let Some(team) = broken.match_context.team_a.as_mut() {
+            team.short = Some("VIELZULANG".into());
+        }
+        assert!(validate(&mut broken).is_err());
+        let mut broken = value;
+        broken.event.logo = EventLogo::Asset {
+            asset_id: "kein-bild".into(),
+        };
+        assert!(validate(&mut broken).is_err());
+    }
+    #[test]
+    fn seitentausch_dreht_die_teams() {
+        let mut value = scene();
+        value.match_context.team_a = Some(SceneTeam {
+            name: "Links".into(),
+            ..SceneTeam::default()
+        });
+        value.match_context.team_b = Some(SceneTeam {
+            name: "Rechts".into(),
+            ..SceneTeam::default()
+        });
+        assert_eq!(public_teams(&value)["left"]["name"], "Links");
+        value.sides_swapped = true;
+        assert_eq!(public_teams(&value)["left"]["name"], "Rechts");
+        assert_eq!(public_teams(&value)["right"]["name"], "Links");
     }
     #[test]
     fn token_hash_ist_stabil_und_kamera_id_strikt() {

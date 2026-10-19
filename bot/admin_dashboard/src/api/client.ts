@@ -1441,6 +1441,8 @@ export interface CasterScenePlayer {
 export interface CasterSceneTeam {
   id?: string | null;
   name: string;
+  short?: string | null;
+  logoAssetId?: string | null;
   players: CasterScenePlayer[];
 }
 export interface CasterMatchContext {
@@ -1448,11 +1450,37 @@ export interface CasterMatchContext {
   teamB?: CasterSceneTeam | null;
   observerAccountId?: number | null;
 }
+export type CasterBuiltinEventLogo = 'wochenende' | 'community' | 'fun_turnier';
+export type CasterEventLogo =
+  | { kind: 'none' }
+  | { kind: 'builtin'; id: CasterBuiltinEventLogo }
+  | { kind: 'asset'; assetId: string };
+export interface CasterEvent {
+  logo: CasterEventLogo;
+  showBrand: boolean;
+}
+export interface CasterCountdown {
+  title: string;
+  target?: string | null;
+}
 export interface CasterScene {
   roster: CasterPerson[];
   slots: Array<string | null>;
   layout: CasterLayout;
   matchContext: CasterMatchContext;
+  event: CasterEvent;
+  countdown: CasterCountdown;
+  sidesSwapped: boolean;
+}
+export type CasterAssetKind = 'team_logo' | 'event_logo' | 'brand';
+export interface CasterAsset {
+  id: string;
+  kind: CasterAssetKind;
+  name: string;
+  mime: string;
+  size: number;
+  createdAt: string;
+  url: string;
 }
 export interface CasterDocument { revision: number; scene: CasterScene }
 export interface CasterCamera {
@@ -1492,6 +1520,26 @@ export const fetchCasterCameras = async () => {
 };
 export const createCasterCamera = (ownerLogin: string, label: string) =>
   postAdminJson<CreatedCasterCamera, { ownerLogin: string; label: string }>('/caster-cameras', { ownerLogin, label });
+export const fetchCasterAssets = async (kind: CasterAssetKind) => {
+  const result = await admin<{ assets: CasterAsset[] }>(`/caster-overlay/assets?kind=${encodeURIComponent(kind)}`);
+  return result.assets ?? [];
+};
+export async function uploadCasterAsset(kind: CasterAssetKind, name: string, file: File): Promise<CasterAsset> {
+  const csrfToken = await resolveJsonCsrfToken({});
+  const query = `kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`;
+  return admin<CasterAsset>(`/caster-overlay/assets?${query}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': file.type || 'application/octet-stream', 'X-CSRF-Token': csrfToken },
+    body: file,
+  });
+}
+export async function deleteCasterAsset(assetId: string): Promise<{ deleted: string }> {
+  const csrfToken = await resolveJsonCsrfToken({});
+  return admin<{ deleted: string }>(`/caster-overlay/assets/${encodeURIComponent(assetId)}`, {
+    method: 'DELETE',
+    headers: { 'X-CSRF-Token': csrfToken },
+  });
+}
 export async function revokeCasterCamera(cameraId: string): Promise<{ ok: boolean; cameraId: string }> {
   const csrfToken = await resolveJsonCsrfToken({});
   return admin<{ ok: boolean; cameraId: string }>(`/caster-cameras/${encodeURIComponent(cameraId)}`, {

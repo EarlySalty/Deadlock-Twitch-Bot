@@ -194,6 +194,14 @@ pub fn build_public_router_with_brain(
             get(crate::handlers::caster_overlay::background_handler),
         )
         .route(
+            "/twitch/caster-overlay/assets/{asset_id}",
+            get(crate::handlers::caster_overlay_assets::public_handler),
+        )
+        .route(
+            "/twitch/caster-overlay/builtin/{name}",
+            get(crate::handlers::caster_overlay_assets::builtin_handler),
+        )
+        .route(
             "/twitch/caster-camera/{camera_id}",
             get(crate::handlers::caster_overlay::camera_page_handler),
         )
@@ -1403,6 +1411,18 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/admin/caster-overlay/context",
             get(crate::handlers::caster_overlay::context_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-overlay/assets",
+            post(crate::handlers::caster_overlay_assets::upload_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    crate::handlers::caster_overlay_assets::UPLOAD_BODY_LIMIT,
+                ))
+                .get(crate::handlers::caster_overlay_assets::list_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-overlay/assets/{asset_id}",
+            delete(crate::handlers::caster_overlay_assets::delete_handler),
         )
         .route(
             "/twitch/api/admin/caster-cameras",

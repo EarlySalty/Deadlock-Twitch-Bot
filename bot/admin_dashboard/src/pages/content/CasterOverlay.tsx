@@ -15,12 +15,18 @@ import {
   type CasterLayout,
   type CasterPerson,
   type CasterScene,
-  type CasterSceneTeam,
   type CreatedCasterCamera,
 } from '@/api/client';
+import { CasterEventEditor, CasterTeamsEditor } from './CasterSceneSettings';
+import {
+  normalizedCountdown,
+  normalizedEvent,
+  overlayPages,
+  previewPayload,
+  PUBLIC_ORIGIN,
+  type OverlayPageId,
+} from './casterScene';
 
-const OBS_URL = 'https://deutsche-deadlock-community.de/twitch/caster-overlay';
-const OBS_ORIGIN = new URL(OBS_URL).origin;
 const button =
   'min-h-11 rounded-lg border border-white/20 px-3 py-2 text-sm hover:border-primary focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40';
 const input =
@@ -44,6 +50,9 @@ function normalizedScene(scene: CasterScene): CasterScene {
     layout,
     slots,
     matchContext: scene.matchContext ?? {},
+    event: normalizedEvent(scene.event),
+    countdown: normalizedCountdown(scene.countdown),
+    sidesSwapped: scene.sidesSwapped ?? false,
     roster: (scene.roster ?? []).map((person) => ({
       ...person,
       cameraUrl: person.cameraUrl ?? '',
@@ -53,26 +62,6 @@ function normalizedScene(scene: CasterScene): CasterScene {
       teamId: person.teamId ?? null,
     })),
   };
-}
-
-function toSceneTeam(team: CasterContextTeam | undefined): CasterSceneTeam | null {
-  if (!team) return null;
-  const activePlayers = team.players.filter((player) => !player.isBench);
-  return {
-    id: team.id,
-    name: team.name,
-    players: activePlayers.map((player) => ({
-      displayName: player.displayName,
-      steamId64: player.steamId64 ?? null,
-      accountId: player.accountId ?? null,
-    })),
-  };
-}
-
-function teamLabel(team: CasterContextTeam) {
-  const active = team.players.filter((player) => !player.isBench).length;
-  const bench = team.players.filter((player) => player.isBench).length;
-  return `${team.name} · ${active} aktiv${bench ? ` · ${bench} Bench` : ''}`;
 }
 
 export default function CasterOverlayPage() {
@@ -92,6 +81,7 @@ export default function CasterOverlayPage() {
   const [cameraOwner, setCameraOwner] = useState('');
   const [cameraLabel, setCameraLabel] = useState('Caster-Cam');
   const [createdCamera, setCreatedCamera] = useState<CreatedCasterCamera | null>(null);
+  const [previewPage, setPreviewPage] = useState<OverlayPageId>('caster');
   const iframe = useRef<HTMLIFrameElement>(null);
 
   const scene = document?.scene;
@@ -105,15 +95,7 @@ export default function CasterOverlayPage() {
 
   function preview(nextScene = scene) {
     if (!nextScene) return;
-    iframe.current?.contentWindow?.postMessage(
-      {
-        type: 'ddc-caster-preview',
-        layout: nextScene.layout,
-        slots: nextScene.slots.map((id) => nextScene.roster.find((person) => person.id === id) ?? null),
-        matchContext: nextScene.matchContext,
-      },
-      OBS_ORIGIN,
-    );
+    iframe.current?.contentWindow?.postMessage(previewPayload(nextScene), PUBLIC_ORIGIN);
   }
 
   useEffect(() => preview(), [scene]);
@@ -239,14 +221,6 @@ export default function CasterOverlayPage() {
     setNewHandle('');
   }
 
-  function setTeam(side: 'teamA' | 'teamB', teamId: string) {
-    const selected = teams.find((team) => team.id === teamId);
-    edit((value) => ({
-      ...value,
-      matchContext: { ...value.matchContext, [side]: toSceneTeam(selected) },
-    }));
-  }
-
   async function publish() {
     if (!document) return;
     setBusy(true);
@@ -304,8 +278,8 @@ export default function CasterOverlayPage() {
     }
   }
 
-  const teamAId = scene?.matchContext.teamA?.id ?? '';
-  const teamBId = scene?.matchContext.teamB?.id ?? '';
+  const notify = { status: setStatus, error: setError };
+  const previewUrl = overlayPages.find((page) => page.id === previewPage)?.url ?? overlayPages[0].url;
   const observerCandidates = [scene?.matchContext.teamA, scene?.matchContext.teamB]
     .flatMap((team) => team?.players ?? [])
     .filter((player) => typeof player.accountId === 'number');
@@ -350,7 +324,7 @@ export default function CasterOverlayPage() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold text-white">Layout & Live-Vorschau</h2>
-                <p className="mt-1 text-sm text-white/60">Die OBS-Adresse bleibt für alle Layouts identisch.</p>
+                <p className="mt-1 text-sm text-white/60">Die OBS-Adresse der Caster-Szene bleibt für alle Layouts identisch.</p>
               </div>
               <span className={`rounded-full px-3 py-1 text-sm ${dirty ? 'bg-primary/15 text-primary-hover' : 'bg-success/15 text-success'}`}>
                 {dirty ? 'Noch nicht live' : 'Gespeichert'}
@@ -375,11 +349,27 @@ export default function CasterOverlayPage() {
               })}
             </div>
 
+            {overlayPages.length > 1 && (
+              <div className="flex flex-wrap gap-2" role="tablist" aria-label="Vorschau-Seite">
+                {overlayPages.map((page) => (
+                  <button
+                    key={page.id}
+                    role="tab"
+                    aria-selected={previewPage === page.id}
+                    className={`${button} ${previewPage === page.id ? 'border-primary bg-primary/10 text-primary-hover' : ''}`}
+                    onClick={() => setPreviewPage(page.id)}
+                  >
+                    {page.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div className="relative aspect-video overflow-hidden rounded-xl border border-white/15 bg-black">
               <iframe
                 ref={iframe}
-                title="Vorschau der Caster-Szene"
-                src={`${OBS_URL}?preview=1`}
+                title="Vorschau der Overlay-Seite"
+                src={`${previewUrl}?preview=1`}
                 onLoad={() => preview()}
                 className="absolute inset-0 h-full w-full border-0"
               />
@@ -428,7 +418,7 @@ export default function CasterOverlayPage() {
             <div>
               <h2 className="text-lg font-semibold text-white">Teams & Player</h2>
               <p className="mt-1 text-sm text-white/60">
-                Teamnamen und aktive Spieler kommen aus der Turnierverwaltung; Steam-IDs werden über die vorhandenen verknüpften Steam-Konten ergänzt. Bench-Spieler werden im Admin angezeigt, aber nicht als aktives Line-up ins Overlay übernommen.
+                Teams frei benennen oder aus der Turnierverwaltung übernehmen; Steam-IDs kommen aus den verknüpften Steam-Konten. Bench-Spieler werden nicht als aktives Line-up übernommen.
               </p>
             </div>
             {contextReason && (
@@ -436,31 +426,7 @@ export default function CasterOverlayPage() {
                 Automatische Teamdaten gerade nicht verfügbar: {contextReason}
               </div>
             )}
-            <div className="grid gap-4 lg:grid-cols-2">
-              {(['teamA', 'teamB'] as const).map((side, index) => {
-                const selectedId = side === 'teamA' ? teamAId : teamBId;
-                const selected = teams.find((team) => team.id === selectedId);
-                return (
-                  <div key={side} className="rounded-xl border border-white/10 bg-black/25 p-4">
-                    <label className="text-sm text-white/65">Team {index + 1}</label>
-                    <select className={`${input} mt-1`} value={selectedId} onChange={(event) => setTeam(side, event.target.value)}>
-                      <option value="">Kein Team</option>
-                      {teams.map((team) => <option key={team.id} value={team.id}>{teamLabel(team)}</option>)}
-                    </select>
-                    {selected && (
-                      <div className="mt-3 space-y-1 text-sm">
-                        {selected.players.map((player) => (
-                          <div key={`${selected.id}-${player.discordId || player.displayName}`} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-2">
-                            <span className={player.isBench ? 'text-white/45' : 'text-white/85'}>{player.displayName}{player.isBench ? ' · Bench' : ''}</span>
-                            <span className="font-mono text-xs text-white/35">{player.accountId ? `AID ${player.accountId}` : 'Steam nicht verknüpft'}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <CasterTeamsEditor scene={scene} teams={teams} edit={edit} busy={busy} notify={notify} />
             <label className="block max-w-xl text-sm text-white/65">
               Observer-POV / Steam Account-ID
               <select
@@ -487,6 +453,14 @@ export default function CasterOverlayPage() {
                 Das ist dieselbe Steam-account_id, die der Observer bereits für current/recommended POV verwendet. Damit gibt es keine zweite Namenszuordnung.
               </span>
             </label>
+          </section>
+
+          <section className="panel-card space-y-4 rounded-2xl p-5">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Event, Marke & Countdown</h2>
+              <p className="mt-1 text-sm text-white/60">Gilt für alle Overlay-Seiten.</p>
+            </div>
+            <CasterEventEditor scene={scene} edit={edit} busy={busy} notify={notify} />
           </section>
 
           <section className="panel-card space-y-4 rounded-2xl p-5">
@@ -710,24 +684,29 @@ export default function CasterOverlayPage() {
           <section className="panel-card space-y-3 rounded-2xl p-5">
             <h2 className="text-lg font-semibold text-white">OBS</h2>
             <p className="text-sm text-white/65">
-              Eine Browser-Quelle mit 1920 × 1080 reicht. Layout, Kameras, Namensleisten und Teamkopf kommen gemeinsam aus derselben URL.
+              Jede Seite ist eine eigene Browser-Quelle mit 1920 × 1080. Alle Seiten lesen dieselbe Szene.
             </p>
-            <div className="flex flex-col gap-2 md:flex-row">
-              <input className={input} readOnly value={OBS_URL} onFocus={(event) => event.target.select()} />
-              <button
-                className={button}
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(OBS_URL);
-                    setStatus('OBS-Adresse kopiert.');
-                  } catch {
-                    setError('OBS-Adresse konnte nicht automatisch kopiert werden.');
-                  }
-                }}
-              >
-                Kopieren
-              </button>
-            </div>
+            {overlayPages.map((page) => (
+              <label key={page.id} className="block text-sm text-white/65">
+                {page.label}
+                <div className="mt-1 flex flex-col gap-2 md:flex-row">
+                  <input className={input} readOnly value={page.url} onFocus={(event) => event.target.select()} />
+                  <button
+                    className={button}
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(page.url);
+                        setStatus(`OBS-Adresse ${page.label} kopiert.`);
+                      } catch {
+                        setError('OBS-Adresse konnte nicht automatisch kopiert werden.');
+                      }
+                    }}
+                  >
+                    Kopieren
+                  </button>
+                </div>
+              </label>
+            ))}
             <p className="text-xs text-white/45">
               Unsere Kameras übertragen per WebRTC. Externe HTTPS-Browserquellen bleiben als Ersatz möglich. Bei strengen NAT-Einstellungen verbessert später ein eigenes TURN-Relay die Verbindung.
             </p>
