@@ -26,6 +26,13 @@ pub const SCHEDULES: &str = "social_media_platform_schedule";
 pub const CATEGORIES: &str = "social_media_category_settings";
 pub const SETTINGS: &str = "social_media_settings";
 
+const LEGACY_RUNNER_FAILURES: [&str; 4] = [
+    "static_production_failed",
+    "resource_unavailable",
+    "ai_editor_unavailable",
+    "ai_production_failed",
+];
+
 const FINAL_QUEUE: [&str; 5] = [
     "completed",
     "failed",
@@ -1926,6 +1933,16 @@ pub struct LegacyReviewClearReport {
     pub awaiting_returned: u64,
 }
 
+fn legacy_jam_reasons() -> Vec<String> {
+    let mut reasons = AiEditorError::failure_messages();
+    reasons.extend(
+        LEGACY_RUNNER_FAILURES
+            .iter()
+            .map(|reason| reason.to_string()),
+    );
+    reasons
+}
+
 pub async fn clear_legacy_review_jam(
     pool: &PgPool,
 ) -> Result<LegacyReviewClearReport, MigrationError> {
@@ -1953,7 +1970,7 @@ pub async fn clear_legacy_review_jam(
         FROM jammed WHERE j.id = jammed.id
         RETURNING j.twitch_user_id, j.clip_id",
     )
-    .bind(AiEditorError::failure_messages())
+    .bind(legacy_jam_reasons())
     .bind(UNSUITABLE_REASON)
     .fetch_all(&mut *tx)
     .await?;

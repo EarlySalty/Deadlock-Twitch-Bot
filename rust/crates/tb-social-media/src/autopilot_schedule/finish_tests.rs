@@ -926,6 +926,7 @@ async fn clear_legacy_review_jam_only_clears_legacy_reviews_without_video() {
         "consent-hold",
         "unsuitable-hold",
         "ready",
+        "legacy-code",
     ];
     let mut clips = Vec::with_capacity(names.len());
     for (index, name) in names.into_iter().enumerate() {
@@ -946,6 +947,14 @@ async fn clear_legacy_review_jam_only_clears_legacy_reviews_without_video() {
     )
     .await;
     let ready = parked(&pool, clips[6], "autopilot", "review", &source).await;
+    let legacy_code = parked(
+        &pool,
+        clips[7],
+        "autopilot",
+        "review",
+        "static_production_failed",
+    )
+    .await;
     sqlx::query(
         "INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at)
         VALUES ('owner', $1, $2, 'static', 'review', '/fixture/ready.mp4', 1000, clock_timestamp() + INTERVAL '7 days')",
@@ -985,8 +994,8 @@ async fn clear_legacy_review_jam_only_clears_legacy_reviews_without_video() {
         .await
         .expect("clear jam");
     assert_eq!(planner_pick(&pool).await, Some(clips[0]));
-    assert_eq!(report.jobs_cleared, 2);
-    assert_eq!(report.clips_unpinned, 2);
+    assert_eq!(report.jobs_cleared, 3);
+    assert_eq!(report.clips_unpinned, 3);
     assert_eq!(report.awaiting_returned, 1);
     assert_eq!(
         job_state(&pool, legacy_autopilot).await,
@@ -1000,6 +1009,14 @@ async fn clear_legacy_review_jam_only_clears_legacy_reviews_without_video() {
         job_state(&pool, legacy_test).await,
         ("failed".into(), "failed".into(), Some(attempts.clone()))
     );
+    assert_eq!(
+        job_state(&pool, legacy_code).await,
+        (
+            "cancelled".into(),
+            "cleared_no_video".into(),
+            Some("static_production_failed".into())
+        )
+    );
     for (id, state) in untouched.into_iter().zip(before) {
         assert_eq!(job_state(&pool, id).await, state);
     }
@@ -1007,7 +1024,8 @@ async fn clear_legacy_review_jam_only_clears_legacy_reviews_without_video() {
     assert_eq!(clip_status(&pool, clips[6]).await, "awaiting_approval");
     assert!(selected_at(&pool, clips[0]).await.is_none());
     assert!(selected_at(&pool, clips[1]).await.is_none());
-    for id in &clips[2..] {
+    assert!(selected_at(&pool, clips[7]).await.is_none());
+    for id in &clips[2..7] {
         assert!(selected_at(&pool, *id).await.is_some());
     }
 
