@@ -15,7 +15,7 @@ import {
 import { SOCIAL_MEDIA_TABS } from '../src/components/socialmedia/labels';
 import { studioNextStep } from '../src/components/socialmedia/studioNextStep';
 import type { StudioOverviewData } from '../src/components/socialmedia/StudioOverview';
-import type { TestRun } from '../src/components/socialmedia/autopilot/schedule-queue/api';
+import type { ProductionHold, ScheduleQueueSnapshot, TestRun } from '../src/components/socialmedia/autopilot/schedule-queue/api';
 import type { PipelineSource } from '../src/components/socialmedia/pipelineApi';
 import type { SocialClipMitPosting } from '../src/api/socialMedia';
 import { upcomingTerms, upcomingTermView } from '../src/components/socialmedia/upcomingTerms';
@@ -270,13 +270,15 @@ test('status bar names the current studio step', () => {
     withRun(testRun({ status: 'review', video_status: 'review' })),
     'Fertiges Video wartet auf Heute unter Prüfung & Freigabe.',
   );
-  const failed = createScheduleQueueFixture().snapshot();
-  failed.test_run = null;
-  failed.jobs = [{ ...failed.jobs[0], status: 'failed', source: 'autopilot' }];
-  assert.equal(
-    studioNextStep(overview(failed), nextT, time).text,
-    'Auto-Pilot aktiv, aber die letzte Vorbereitung ist fehlgeschlagen. Öffne Heute.',
-  );
+  const stale = createScheduleQueueFixture().snapshot();
+  stale.test_run = null;
+  stale.production_hold = null;
+  stale.jobs = [{ ...stale.jobs[0], status: 'failed', source: 'autopilot' }, { ...stale.jobs[0], id: 99, status: 'failed', source: 'manual' }];
+  assert.deepEqual(studioNextStep(overview(stale), nextT, time), {
+    text: 'Auto-Pilot aktiv. Nächster Termin 2026-10-12T16:00:00Z. Kein Eingriff nötig.',
+    view: 'planen',
+    tone: 'success',
+  });
   const idle = createScheduleQueueFixture().snapshot();
   idle.settings.enabled = false;
   idle.test_run = null;
@@ -288,6 +290,78 @@ test('status bar names the current studio step', () => {
     studioNextStep(overview(), nextT, time).text,
     'Auto-Pilot aktiv. Nächster Termin 2026-10-12T16:00:00Z. Kein Eingriff nötig.',
   );
+});
+
+test('status bar names every production hold truthfully', () => {
+  const time = (iso: string) => iso;
+  const held = (hold: Exclude<ProductionHold, null>, patch: (schedule: ScheduleQueueSnapshot) => void = () => {}) => {
+    const schedule = createScheduleQueueFixture().snapshot();
+    schedule.test_run = null;
+    schedule.production_hold = hold;
+    patch(schedule);
+    const { text, view, tone } = studioNextStep(overview(schedule), nextT, time);
+    return { text, view, tone };
+  };
+  assert.deepEqual(held('disabled', (schedule) => { schedule.settings.enabled = false; }), {
+    text: 'Der Auto-Pilot ist ausgeschaltet. Auf Planen kannst du ihn einschalten oder die Pipeline testen.',
+    view: 'planen',
+    tone: 'neutral',
+  });
+  assert.deepEqual(held('paused', (schedule) => { schedule.settings.paused = true; }), {
+    text: 'Der Auto-Pilot ist pausiert. Laufende Produktionen werden fertig, fortsetzen kannst du ihn auf Planen.',
+    view: 'planen',
+    tone: 'warning',
+  });
+  assert.deepEqual(held('review_backlog', (schedule) => { schedule.jobs = [{ ...schedule.jobs[0], status: 'review' }]; }), {
+    text: 'Auto-Pilot wartet, bis du die offenen Produktionen auf Planen prüfst.',
+    view: 'planen',
+    tone: 'warning',
+  });
+  assert.deepEqual(held('review_backlog', (schedule) => { schedule.jobs = []; }), {
+    text: 'Auto-Pilot wartet, bis du die fertigen Videos unter Clips freigibst.',
+    view: 'freigabe',
+    tone: 'warning',
+  });
+  assert.deepEqual(held('failure_backlog'), {
+    text: 'Auto-Pilot wartet, weil die letzten Produktionen fehlgeschlagen sind. Starte auf Planen einen Testlauf.',
+    view: 'planen',
+    tone: 'danger',
+  });
+  assert.deepEqual(held('empty_pool'), {
+    text: 'Auto-Pilot wartet: Keine passenden Clips verfügbar. Prüfe auf Planen deine Clips oder den Zeitraum.',
+    view: 'planen',
+    tone: 'warning',
+  });
+  assert.deepEqual(held('no_schedule'), {
+    text: 'Auto-Pilot wartet: Wöchentliche Termine fehlen. Füge auf Planen mindestens eine Zeit hinzu.',
+    view: 'planen',
+    tone: 'warning',
+  });
+  assert.deepEqual(held('outside_lead'), {
+    text: 'Auto-Pilot aktiv. Der nächste Termin 2026-10-12T16:00:00Z liegt noch außerhalb des Vorlaufs. Kein Eingriff nötig.',
+    view: 'planen',
+    tone: 'neutral',
+  });
+  assert.deepEqual(held('outside_lead', (schedule) => { schedule.next_slot = null; }), {
+    text: 'Auto-Pilot aktiv. Der nächste freie Termin liegt noch außerhalb des Vorlaufs. Kein Eingriff nötig.',
+    view: 'planen',
+    tone: 'neutral',
+  });
+});
+
+test('status bar warns instead of an all-clear when approvals are unavailable', () => {
+  const time = (iso: string) => iso;
+  const schedule = createScheduleQueueFixture().snapshot();
+  schedule.test_run = null;
+  schedule.production_hold = null;
+  const { text, view, tone } = studioNextStep({ ...overview(schedule), publishFailed: true }, nextT, time);
+  assert.deepEqual({ text, view, tone }, {
+    text: 'Ob fertige Videos auf Freigabe warten, ist gerade nicht abrufbar. Schau gleich noch einmal auf Heute.',
+    view: 'heute',
+    tone: 'warning',
+  });
+  schedule.production_hold = 'failure_backlog';
+  assert.equal(studioNextStep({ ...overview(schedule), publishFailed: true }, nextT, time).tone, 'danger');
 });
 
 test('five canonical views resolve every historical workspace without dropping OAuth', () => {
