@@ -1446,6 +1446,14 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             delete(crate::handlers::caster_overlay::revoke_camera_handler),
         )
         .route(
+            "/twitch/api/admin/caster-overlay/casters",
+            get(crate::handlers::caster_overlay::casters_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-overlay/casters/{discord_id}/camera",
+            post(crate::handlers::caster_overlay::caster_camera_handler),
+        )
+        .route(
             "/twitch/api/admin/roadmap",
             get(admin_roadmap::get_handler).post(admin_roadmap::save_handler),
         )

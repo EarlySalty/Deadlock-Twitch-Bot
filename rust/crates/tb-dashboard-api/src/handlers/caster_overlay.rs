@@ -56,6 +56,8 @@ pub struct Caster {
     pub handle: String,
     #[serde(default, rename = "accountLogin", skip_serializing_if = "Option::is_none")]
     pub account_login: Option<String>,
+    #[serde(default, rename = "discordId", skip_serializing_if = "Option::is_none")]
+    pub discord_id: Option<String>,
     #[serde(default, rename = "cameraUrl")]
     pub camera_url: String,
     #[serde(default, rename = "cameraId", skip_serializing_if = "Option::is_none")]
@@ -225,6 +227,7 @@ fn normalize_scene(scene: &mut Scene) {
             .take()
             .map(|login| login.trim().trim_start_matches('@').to_ascii_lowercase())
             .filter(|login| !login.is_empty());
+        caster.discord_id = trimmed_option(caster.discord_id.take());
         caster.camera_url = caster.camera_url.trim().to_owned();
         caster.camera_id = caster
             .camera_id
@@ -331,6 +334,7 @@ fn validate(scene: &mut Scene) -> Result<(), ApiError> {
                 .account_login
                 .as_ref()
                 .is_some_and(|login| login.len() > 60 || !login.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+            || caster.discord_id.as_deref().is_some_and(|id| !discord_id_valid(id))
             || caster.camera_url.len() > MAX_CAMERA_URL
             || !valid_camera_url
             || !valid_camera_id
@@ -656,6 +660,215 @@ pub async fn revoke_camera_handler(
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
     Ok(Json(json!({"ok":true,"cameraId":camera_id})).into_response())
+}
+
+const CASTER_GUILD_ID: &str = "1289721245281292288";
+const CASTER_ROLE_ID: &str = "1495154811799077067";
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct RoleMember {
+    id: String,
+    display_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RoleMembersResponse {
+    #[serde(default)]
+    ok: bool,
+    #[serde(default)]
+    members: Vec<RoleMember>,
+}
+
+fn discord_id_valid(id: &str) -> bool {
+    (5..=25).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn broker_base_url() -> String {
+    std::env::var("MASTER_BROKER_BASE_URL")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:8770".to_owned())
+}
+
+fn caster_camera_label(display_name: &str) -> String {
+    let label: String = display_name
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(80)
+        .collect::<String>()
+        .trim()
+        .to_owned();
+    if label.is_empty() {
+        "Caster-Cam".to_owned()
+    } else {
+        label
+    }
+}
+
+async fn caster_role_members() -> Result<Vec<RoleMember>, &'static str> {
+    let url = format!(
+        "{}/internal/master/v1/discord/role-members",
+        broker_base_url()
+    );
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+        .map_err(|_| "broker_client")?;
+    let mut request = client
+        .get(url)
+        .query(&[("guild_id", CASTER_GUILD_ID), ("role_id", CASTER_ROLE_ID)]);
+    if let Some(token) =
+        super::discord_link::broker_token_from(crate::uplink_config::platform_value)
+    {
+        request = request.header("X-Internal-Token", token);
+    }
+    let response = request.send().await.map_err(|error| {
+        tracing::warn!(%error, "Caster-Rolle: Broker nicht erreichbar");
+        "broker_unreachable"
+    })?;
+    if !response.status().is_success() {
+        tracing::warn!(status=%response.status(), "Caster-Rolle: Broker abgelehnt");
+        return Err("broker_rejected");
+    }
+    let body: RoleMembersResponse = response.json().await.map_err(|_| "broker_invalid")?;
+    if !body.ok {
+        return Err("broker_rejected");
+    }
+    let mut members = body
+        .members
+        .into_iter()
+        .filter(|member| discord_id_valid(&member.id))
+        .collect::<Vec<_>>();
+    members.sort_by_key(|member| member.display_name.to_lowercase());
+    Ok(members)
+}
+
+pub async fn casters_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(error) = crate::auth::require_admin(&auth) {
+        return Err(error);
+    }
+    let members = match caster_role_members().await {
+        Ok(members) => members,
+        Err(reason) => {
+            return Ok((
+                [(header::CACHE_CONTROL, "no-store")],
+                Json(json!({"available":false,"reason":reason,"items":[]})),
+            ))
+        }
+    };
+    let ids = members
+        .iter()
+        .map(|member| member.id.clone())
+        .collect::<Vec<_>>();
+    let rows = sqlx::query(
+        "SELECT discord_user_id, camera_id, consent_enabled, revoked_at IS NOT NULL AS revoked, last_connected_at FROM twitch_caster_cameras WHERE discord_user_id = ANY($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&pool)
+    .await
+    .map_err(db_error)?;
+    let mut cameras = HashMap::new();
+    for row in rows {
+        let discord_id: String = row.try_get("discord_user_id").map_err(db_error)?;
+        let camera_id: String = row.try_get("camera_id").map_err(db_error)?;
+        let online = camera_online(&camera_id).await;
+        cameras.insert(
+            discord_id,
+            json!({
+                "cameraId": camera_id,
+                "consentEnabled": row.try_get::<bool,_>("consent_enabled").map_err(db_error)?,
+                "revoked": row.try_get::<bool,_>("revoked").map_err(db_error)?,
+                "online": online,
+                "lastConnectedAt": row.try_get::<Option<DateTime<Utc>>,_>("last_connected_at").map_err(db_error)?,
+            }),
+        );
+    }
+    let items = members
+        .into_iter()
+        .map(|member| {
+            let camera = cameras.remove(&member.id).unwrap_or(Value::Null);
+            json!({
+                "discordId": member.id,
+                "displayName": member.display_name,
+                "avatarUrl": Value::Null,
+                "camera": camera,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({"available":true,"items":items})),
+    ))
+}
+
+pub async fn caster_camera_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(discord_id): Path<String>,
+) -> Result<Response, ApiError> {
+    if let Some(error) = crate::auth::require_admin(&auth) {
+        return Err(error);
+    }
+    if !discord_id_valid(&discord_id) {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    let members = match caster_role_members().await {
+        Ok(members) => members,
+        Err(_) => {
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"message":"Die Caster-Rolle konnte gerade nicht geprüft werden."})),
+            )
+                .into_response())
+        }
+    };
+    let Some(member) = members.into_iter().find(|member| member.id == discord_id) else {
+        return Ok((
+            StatusCode::FORBIDDEN,
+            Json(json!({"message":"Diese Person hat die Rolle Turnier Caster nicht."})),
+        )
+            .into_response());
+    };
+    let label = caster_camera_label(&member.display_name);
+    let publish_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let camera_id: String = sqlx::query_scalar(
+        "INSERT INTO twitch_caster_cameras(camera_id, owner_login, label, publish_token_hash, discord_user_id) \
+         VALUES($1,$2,$3,$4,$5) \
+         ON CONFLICT (discord_user_id) WHERE discord_user_id IS NOT NULL DO UPDATE SET \
+         label=EXCLUDED.label, publish_token_hash=EXCLUDED.publish_token_hash, consent_enabled=FALSE, revoked_at=NULL \
+         RETURNING camera_id",
+    )
+    .bind(format!("cam_{}", Uuid::new_v4().simple()))
+    .bind(format!("discord_{discord_id}"))
+    .bind(&label)
+    .bind(token_hash(&publish_token))
+    .bind(&discord_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(db_error)?;
+    disconnect_camera(&camera_id).await;
+    let invite_url = format!(
+        "https://deutsche-deadlock-community.de/twitch/caster-camera/{camera_id}#token={publish_token}"
+    );
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "discordId": member.id,
+            "displayName": member.display_name,
+            "cameraId": camera_id,
+            "label": label,
+            "inviteUrl": invite_url,
+            "consentEnabled": false,
+            "online": false,
+        })),
+    )
+        .into_response())
 }
 
 pub async fn camera_page_handler(
@@ -1160,6 +1373,7 @@ mod tests {
                 name: " ZeRo ".into(),
                 handle: "@zro_dl".into(),
                 account_login: Some("@ZRO_DL".into()),
+                discord_id: Some(" 426770757989957633 ".into()),
                 camera_url: " https://vdo.ninja/?view=test ".into(),
                 camera_id: Some("cam_test".into()),
                 steam_account_id: Some(42),
@@ -1292,6 +1506,31 @@ mod tests {
         assert_eq!(public_teams(&value)["left"]["name"], "Rechts");
         assert_eq!(public_teams(&value)["right"]["name"], "Links");
     }
+    #[test]
+    fn rollenmitglieder_und_discord_ids() {
+        let body: RoleMembersResponse = serde_json::from_value(json!({
+            "ok": true,
+            "complete": false,
+            "members": [{"id":"426770757989957633","display_name":"ZeRo"}]
+        }))
+        .expect("broker body");
+        assert!(body.ok);
+        assert_eq!(body.members[0].display_name, "ZeRo");
+        assert!(discord_id_valid("426770757989957633"));
+        assert!(!discord_id_valid("42a"));
+        assert!(!discord_id_valid("1234"));
+        assert_eq!(caster_camera_label(" \u{7}Nani "), "Nani");
+        assert_eq!(caster_camera_label(""), "Caster-Cam");
+        let mut value = scene();
+        assert!(validate(&mut value).is_ok());
+        assert_eq!(
+            value.roster[0].discord_id.as_deref(),
+            Some("426770757989957633")
+        );
+        value.roster[0].discord_id = Some("abc".into());
+        assert!(validate(&mut value).is_err());
+    }
+
     #[test]
     fn token_hash_ist_stabil_und_kamera_id_strikt() {
         assert_eq!(token_hash("abc"), token_hash("abc"));

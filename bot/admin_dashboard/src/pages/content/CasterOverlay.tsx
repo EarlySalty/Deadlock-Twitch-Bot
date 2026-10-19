@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBlocker } from 'react-router';
 import { PageHeader } from '@/components/layout/PageHeader';
 import {
-  createCasterCamera,
-  fetchAdminStreamers,
+  createCasterRoleCamera,
   fetchCasterCameras,
+  fetchCasterRoleMembers,
   fetchCasterOverlay,
   fetchCasterOverlayContext,
   revokeCasterCamera,
@@ -13,9 +13,8 @@ import {
   type CasterContextTeam,
   type CasterDocument,
   type CasterLayout,
-  type CasterPerson,
+  type CasterRoleMember,
   type CasterScene,
-  type CreatedCasterCamera,
 } from '@/api/client';
 import { CasterEventEditor, CasterTeamsEditor } from './CasterSceneSettings';
 import {
@@ -32,7 +31,23 @@ const button =
 const input =
   'min-h-11 w-full rounded-lg border border-white/15 bg-black/50 px-3 text-white focus-visible:outline-2 focus-visible:outline-primary';
 
-type AccountOption = { login: string; displayName: string };
+function initials(name: string) {
+  const parts = name.replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/).filter(Boolean);
+  return (parts.length > 1 ? parts[0][0] + parts[1][0] : (parts[0] ?? '?').slice(0, 2)).toUpperCase();
+}
+
+function cameraStatus(member: CasterRoleMember) {
+  const camera = member.camera;
+  if (!camera) return { text: 'Noch kein Kamera-Link', tone: 'text-white/45' };
+  if (camera.revoked) return { text: 'Link widerrufen', tone: 'text-danger' };
+  if (camera.online) return { text: 'Online · Live abrufbar', tone: 'text-success' };
+  if (camera.consentEnabled) return { text: 'Freigegeben · aktuell offline', tone: 'text-primary-hover' };
+  return { text: 'Link erstellt · noch nicht geöffnet', tone: 'text-white/60' };
+}
+
+function activeCameraId(member: CasterRoleMember | undefined) {
+  return member?.camera && !member.camera.revoked ? member.camera.cameraId : null;
+}
 const layoutMeta: Record<CasterLayout, { label: string; slots: number; description: string }> = {
   solo: { label: 'Solo-Cam', slots: 1, description: 'Eine große Kamera' },
   duo: { label: 'Duo-Cam', slots: 2, description: 'Zwei gleich große Kameras' },
@@ -58,6 +73,7 @@ function normalizedScene(scene: CasterScene): CasterScene {
       cameraUrl: person.cameraUrl ?? '',
       cameraId: person.cameraId ?? null,
       accountLogin: person.accountLogin ?? null,
+      discordId: person.discordId ?? null,
       steamAccountId: person.steamAccountId ?? null,
       teamId: person.teamId ?? null,
     })),
@@ -67,7 +83,9 @@ function normalizedScene(scene: CasterScene): CasterScene {
 export default function CasterOverlayPage() {
   const [document, setDocument] = useState<CasterDocument | null>(null);
   const [saved, setSaved] = useState('');
-  const [accounts, setAccounts] = useState<AccountOption[]>([]);
+  const [casters, setCasters] = useState<CasterRoleMember[]>([]);
+  const [castersReason, setCastersReason] = useState('');
+  const [invites, setInvites] = useState<Record<string, string>>({});
   const [cameras, setCameras] = useState<CasterCamera[]>([]);
   const [teams, setTeams] = useState<CasterContextTeam[]>([]);
   const [contextReason, setContextReason] = useState('');
@@ -75,12 +93,9 @@ export default function CasterOverlayPage() {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [dragged, setDragged] = useState<string | null>(null);
-  const [newAccountLogin, setNewAccountLogin] = useState('');
+  const [newDiscordId, setNewDiscordId] = useState('');
   const [newName, setNewName] = useState('');
   const [newHandle, setNewHandle] = useState('');
-  const [cameraOwner, setCameraOwner] = useState('');
-  const [cameraLabel, setCameraLabel] = useState('Caster-Cam');
-  const [createdCamera, setCreatedCamera] = useState<CreatedCasterCamera | null>(null);
   const [previewPage, setPreviewPage] = useState<OverlayPageId>('caster');
   const iframe = useRef<HTMLIFrameElement>(null);
 
@@ -103,9 +118,9 @@ export default function CasterOverlayPage() {
   async function load() {
     setBusy(true);
     setError('');
-    const [overlayResult, accountResult, cameraResult, contextResult] = await Promise.allSettled([
+    const [overlayResult, casterResult, cameraResult, contextResult] = await Promise.allSettled([
       fetchCasterOverlay(),
-      fetchAdminStreamers('all'),
+      fetchCasterRoleMembers(),
       fetchCasterCameras(),
       fetchCasterOverlayContext(),
     ]);
@@ -115,13 +130,11 @@ export default function CasterOverlayPage() {
       setDocument(normalized);
       setSaved(JSON.stringify(normalized.scene));
 
-      if (accountResult.status === 'fulfilled') {
-        const options = accountResult.value
-          .filter((row) => row.login)
-          .map((row) => ({ login: row.login.toLowerCase(), displayName: row.displayName || row.login }))
-          .sort((a, b) => a.displayName.localeCompare(b.displayName, 'de'));
-        setAccounts(options);
-        if (!cameraOwner && options[0]) setCameraOwner(options[0].login);
+      if (casterResult.status === 'fulfilled') {
+        setCasters(casterResult.value.items ?? []);
+        setCastersReason(casterResult.value.available ? '' : casterResult.value.reason || 'nicht verfügbar');
+      } else {
+        setCastersReason('Die Rolle Turnier Caster konnte nicht geladen werden.');
       }
       if (cameraResult.status === 'fulfilled') setCameras(cameraResult.value);
       if (contextResult.status === 'fulfilled') {
@@ -170,36 +183,30 @@ export default function CasterOverlayPage() {
     });
   }
 
-  function accountDefaults(login: string) {
-    const account = accounts.find((item) => item.login === login);
-    return account ? { name: account.displayName || account.login, handle: account.login } : null;
-  }
-
-  function linkAccount(person: CasterPerson, login: string) {
-    const defaults = accountDefaults(login);
+  function linkCaster(personId: string, discordId: string) {
+    const member = casters.find((item) => item.discordId === discordId);
     edit((value) => ({
       ...value,
       roster: value.roster.map((item) =>
-        item.id === person.id
-          ? { ...item, accountLogin: login || null, ...(defaults ? defaults : {}) }
+        item.id === personId
+          ? member
+            ? { ...item, discordId, name: member.displayName.slice(0, 60), cameraId: activeCameraId(member) ?? item.cameraId ?? null }
+            : { ...item, discordId: null }
           : item,
       ),
     }));
   }
 
-  function chooseNewAccount(login: string) {
-    setNewAccountLogin(login);
-    const defaults = accountDefaults(login);
-    if (defaults) {
-      setNewName(defaults.name);
-      setNewHandle(defaults.handle);
-      setCameraOwner(login);
-    }
+  function chooseNewCaster(discordId: string) {
+    setNewDiscordId(discordId);
+    const member = casters.find((item) => item.discordId === discordId);
+    if (member) setNewName(member.displayName.slice(0, 60));
   }
 
   function addPerson() {
     const name = newName.trim();
     if (!name) return;
+    const member = casters.find((item) => item.discordId === newDiscordId);
     edit((value) => ({
       ...value,
       roster: [
@@ -208,15 +215,16 @@ export default function CasterOverlayPage() {
           id: crypto.randomUUID(),
           name,
           handle: newHandle.trim().replace(/^@+/, ''),
-          accountLogin: newAccountLogin || null,
+          accountLogin: null,
+          discordId: member ? member.discordId : null,
           cameraUrl: '',
-          cameraId: null,
+          cameraId: activeCameraId(member),
           steamAccountId: null,
           teamId: null,
         },
       ],
     }));
-    setNewAccountLogin('');
+    setNewDiscordId('');
     setNewName('');
     setNewHandle('');
   }
@@ -238,15 +246,32 @@ export default function CasterOverlayPage() {
     }
   }
 
-  async function createCamera() {
-    if (!cameraOwner || !cameraLabel.trim()) return;
+  async function createRoleCamera(member: CasterRoleMember) {
+    if (member.camera && !member.camera.revoked) {
+      const ok = window.confirm(`Neuen Link für ${member.displayName} erstellen? Der bisherige Link funktioniert danach nicht mehr.`);
+      if (!ok) return;
+    }
     setBusy(true);
     setError('');
     try {
-      const camera = await createCasterCamera(cameraOwner, cameraLabel.trim());
-      setCreatedCamera(camera);
-      setCameras((items) => [...items, camera].sort((a, b) => a.ownerLogin.localeCompare(b.ownerLogin)));
-      setStatus('Kamera-Link erstellt. Das Publish-Geheimnis wird nur jetzt in diesem Link angezeigt.');
+      const invite = await createCasterRoleCamera(member.discordId);
+      setInvites((items) => ({ ...items, [member.discordId]: invite.inviteUrl }));
+      setCasters((items) =>
+        items.map((item) =>
+          item.discordId === member.discordId
+            ? { ...item, camera: { cameraId: invite.cameraId, consentEnabled: false, revoked: false, online: false, lastConnectedAt: item.camera?.lastConnectedAt ?? null } }
+            : item,
+        ),
+      );
+      if (scene?.roster.some((person) => person.discordId === member.discordId && person.cameraId !== invite.cameraId)) {
+        edit((value) => ({
+          ...value,
+          roster: value.roster.map((person) =>
+            person.discordId === member.discordId ? { ...person, cameraId: invite.cameraId } : person,
+          ),
+        }));
+      }
+      setStatus(`Kamera-Link für ${member.displayName} erstellt. Er wird nur jetzt angezeigt und gilt, bis du ihn widerrufst.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Kamera-Link konnte nicht erstellt werden.');
     } finally {
@@ -254,8 +279,17 @@ export default function CasterOverlayPage() {
     }
   }
 
-  async function revokeCamera(camera: CasterCamera) {
-    if (!window.confirm(`${camera.label} für @${camera.ownerLogin} wirklich widerrufen?`)) return;
+  async function copyInvite(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setStatus('Kamera-Einladungslink kopiert.');
+    } catch {
+      setError('Link konnte nicht automatisch kopiert werden.');
+    }
+  }
+
+  async function revokeCamera(camera: Pick<CasterCamera, 'cameraId' | 'label'>) {
+    if (!window.confirm(`Kamera-Link ${camera.label} wirklich widerrufen?`)) return;
     setBusy(true);
     try {
       await revokeCasterCamera(camera.cameraId);
@@ -264,6 +298,15 @@ export default function CasterOverlayPage() {
           item.cameraId === camera.cameraId ? { ...item, consentEnabled: false, online: false } : item,
         ),
       );
+      setCasters((items) =>
+        items.map((item) =>
+          item.camera?.cameraId === camera.cameraId
+            ? { ...item, camera: { ...item.camera, revoked: true, consentEnabled: false, online: false } }
+            : item,
+        ),
+      );
+      setInvites((items) => Object.fromEntries(Object.entries(items).filter(([discordId]) =>
+        casters.find((member) => member.discordId === discordId)?.camera?.cameraId !== camera.cameraId)));
       edit((value) => ({
         ...value,
         roster: value.roster.map((person) =>
@@ -279,6 +322,8 @@ export default function CasterOverlayPage() {
   }
 
   const notify = { status: setStatus, error: setError };
+  const legacyCameras = cameras.filter((camera) => !camera.ownerLogin.startsWith('discord_'));
+  const rosterDiscordIds = new Set(scene?.roster.map((person) => person.discordId).filter(Boolean));
   const previewUrl = overlayPages.find((page) => page.id === previewPage)?.url ?? overlayPages[0].url;
   const observerCandidates = [scene?.matchContext.teamA, scene?.matchContext.teamB]
     .flatMap((team) => team?.players ?? [])
@@ -467,9 +512,14 @@ export default function CasterOverlayPage() {
             <div>
               <h2 className="text-lg font-semibold text-white">Caster & Kamera-Zuordnung</h2>
               <p className="mt-1 text-sm text-white/60">
-                Ein verknüpftes Twitch-Konto setzt Anzeigename und Handle als Default. Die Werte bleiben danach überschreibbar.
+                Zur Auswahl stehen alle Mitglieder der Discord-Rolle Turnier Caster. Ihre feste Kamera wird automatisch verknüpft, Name und Handle bleiben überschreibbar.
               </p>
             </div>
+            {castersReason && (
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary-hover">
+                Caster-Liste gerade nicht verfügbar: {castersReason}
+              </div>
+            )}
             <div className="flex flex-wrap gap-2">
               {scene.roster.map((person) => (
                 <span
@@ -490,24 +540,26 @@ export default function CasterOverlayPage() {
 
             <div className="space-y-3">
               {scene.roster.map((person) => {
-                const ownerCameras = cameras.filter((camera) => !person.accountLogin || camera.ownerLogin === person.accountLogin);
+                const member = casters.find((item) => item.discordId === person.discordId);
+                const ownCamera = activeCameraId(member);
+                const legacyOptions = legacyCameras.filter((camera) => !person.accountLogin || camera.ownerLogin === person.accountLogin);
                 return (
                   <div key={person.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
                     <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-[1.3fr_1fr_1fr_1.5fr_auto]">
                       <label className="text-xs text-white/55">
-                        Twitch-Konto
+                        Caster aus Discord
                         <select
                           className={`${input} mt-1`}
-                          value={person.accountLogin ?? ''}
-                          onChange={(event) => linkAccount(person, event.target.value)}
+                          value={person.discordId ?? ''}
+                          onChange={(event) => linkCaster(person.id, event.target.value)}
                           disabled={busy}
                         >
                           <option value="">Manuell</option>
-                          {person.accountLogin && !accounts.some((account) => account.login === person.accountLogin) && (
-                            <option value={person.accountLogin}>@{person.accountLogin}</option>
+                          {person.discordId && !member && (
+                            <option value={person.discordId}>Nicht mehr in der Caster-Rolle</option>
                           )}
-                          {accounts.map((account) => (
-                            <option key={account.login} value={account.login}>{account.displayName} (@{account.login})</option>
+                          {casters.map((item) => (
+                            <option key={item.discordId} value={item.discordId}>{item.displayName}</option>
                           ))}
                         </select>
                       </label>
@@ -546,7 +598,13 @@ export default function CasterOverlayPage() {
                           }))}
                         >
                           <option value="">Keine eigene Cam</option>
-                          {ownerCameras.map((camera) => (
+                          {ownCamera && member && (
+                            <option value={ownCamera}>Feste Kamera von {member.displayName} · {cameraStatus(member).text}</option>
+                          )}
+                          {person.cameraId && person.cameraId !== ownCamera && !legacyOptions.some((camera) => camera.cameraId === person.cameraId) && (
+                            <option value={person.cameraId}>Bisherige Kamera</option>
+                          )}
+                          {legacyOptions.map((camera) => (
                             <option key={camera.cameraId} value={camera.cameraId}>
                               {camera.label} · {camera.online ? 'online' : camera.consentEnabled ? 'freigegeben/offline' : 'noch nicht freigegeben'}
                             </option>
@@ -588,10 +646,12 @@ export default function CasterOverlayPage() {
               onSubmit={(event) => { event.preventDefault(); addPerson(); }}
             >
               <label className="text-sm text-white/65">
-                Twitch-Konto
-                <select className={`${input} mt-1`} value={newAccountLogin} onChange={(event) => chooseNewAccount(event.target.value)}>
+                Caster aus Discord
+                <select className={`${input} mt-1`} value={newDiscordId} onChange={(event) => chooseNewCaster(event.target.value)}>
                   <option value="">Manuell</option>
-                  {accounts.map((account) => <option key={account.login} value={account.login}>{account.displayName} (@{account.login})</option>)}
+                  {casters.filter((item) => !rosterDiscordIds.has(item.discordId)).map((item) => (
+                    <option key={item.discordId} value={item.discordId}>{item.displayName}</option>
+                  ))}
                 </select>
               </label>
               <label className="text-sm text-white/65">
@@ -610,64 +670,77 @@ export default function CasterOverlayPage() {
             <div>
               <h2 className="text-lg font-semibold text-white">Community-Kamera-Portal</h2>
               <p className="mt-1 text-sm text-white/60">
-                Wir speichern Kamera-ID, Zuordnung und Freigabestatus – keine Videodatei. Die eingeladene Person öffnet den Link, gibt die Kamera ausdrücklich frei und lässt die Seite während der Live-Übertragung geöffnet.
+                Jede Person mit der Rolle Turnier Caster hat genau eine feste Kamera. Der Link gilt dauerhaft, bis du ihn widerrufst oder neu erstellst. Wir speichern nur Kamera-ID, Zuordnung und Freigabestatus, keine Videodatei.
               </p>
             </div>
-            <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-              <label className="text-sm text-white/65">
-                Konto
-                <select className={`${input} mt-1`} value={cameraOwner} onChange={(event) => setCameraOwner(event.target.value)}>
-                  <option value="">Konto wählen</option>
-                  {accounts.map((account) => <option key={account.login} value={account.login}>{account.displayName} (@{account.login})</option>)}
-                </select>
-              </label>
-              <label className="text-sm text-white/65">
-                Kamera-Name
-                <input className={`${input} mt-1`} value={cameraLabel} maxLength={80} onChange={(event) => setCameraLabel(event.target.value)} />
-              </label>
-              <button className={`${button} self-end`} disabled={busy || !cameraOwner || !cameraLabel.trim()} onClick={() => void createCamera()}>
-                Einladungs-Link erstellen
-              </button>
-            </div>
-
-            {createdCamera && (
-              <div className="rounded-xl border border-primary/35 bg-primary/5 p-4">
-                <strong className="text-primary-hover">Link jetzt an @{createdCamera.ownerLogin} schicken</strong>
-                <p className="mt-1 text-xs text-white/50">Das Publish-Geheimnis steckt nur im Fragment dieses Links und wird nicht erneut aus der Datenbank gelesen.</p>
-                <div className="mt-3 flex flex-col gap-2 md:flex-row">
-                  <input className={input} readOnly value={createdCamera.inviteUrl} onFocus={(event) => event.target.select()} />
-                  <button
-                    className={button}
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(createdCamera.inviteUrl);
-                        setStatus('Kamera-Einladungslink kopiert.');
-                      } catch {
-                        setError('Link konnte nicht automatisch kopiert werden.');
-                      }
-                    }}
-                  >
-                    Kopieren
-                  </button>
-                </div>
-              </div>
-            )}
 
             <div className="grid gap-3 lg:grid-cols-2">
-              {cameras.map((camera) => (
-                <div key={camera.cameraId} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/25 p-4">
-                  <div>
-                    <div className="font-semibold text-white">{camera.label} · @{camera.ownerLogin}</div>
-                    <div className="mt-1 text-xs text-white/45">{camera.cameraId}</div>
-                    <div className={`mt-2 text-sm ${camera.online ? 'text-success' : camera.consentEnabled ? 'text-primary-hover' : 'text-white/45'}`}>
-                      {camera.online ? 'Online · Live abrufbar' : camera.consentEnabled ? 'Freigegeben · aktuell offline' : 'Noch nicht freigegeben'}
+              {casters.map((member) => {
+                const state = cameraStatus(member);
+                const invite = invites[member.discordId];
+                const active = !!member.camera && !member.camera.revoked;
+                return (
+                  <div key={member.discordId} className="space-y-3 rounded-xl border border-white/10 bg-black/25 p-4">
+                    <div className="flex flex-wrap items-center gap-3">
+                      {member.avatarUrl ? (
+                        <img src={member.avatarUrl} alt="" className="h-11 w-11 rounded-full object-cover" />
+                      ) : (
+                        <span aria-hidden="true" className="grid h-11 w-11 place-items-center rounded-full bg-primary/20 text-sm font-semibold text-primary-hover">
+                          {initials(member.displayName)}
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-semibold text-white">{member.displayName}</div>
+                        <div className={`mt-1 text-sm ${state.tone}`}>{state.text}</div>
+                      </div>
                     </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button className={button} disabled={busy} onClick={() => void createRoleCamera(member)}>
+                        {active ? 'Link neu erstellen' : 'Link erstellen'}
+                      </button>
+                      {active && member.camera && (
+                        <button
+                          className={button}
+                          disabled={busy}
+                          onClick={() => member.camera && void revokeCamera({ cameraId: member.camera.cameraId, label: member.displayName })}
+                        >
+                          Widerrufen
+                        </button>
+                      )}
+                    </div>
+                    {invite && (
+                      <div className="rounded-lg border border-primary/35 bg-primary/5 p-3">
+                        <p className="text-xs text-white/55">Nur jetzt sichtbar. Schick den Link direkt an {member.displayName}.</p>
+                        <div className="mt-2 flex flex-col gap-2 md:flex-row">
+                          <input className={input} readOnly aria-label={`Kamera-Link für ${member.displayName}`} value={invite} onFocus={(event) => event.target.select()} />
+                          <button className={button} onClick={() => void copyInvite(invite)}>Kopieren</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <button className={button} disabled={busy} onClick={() => void revokeCamera(camera)}>Widerrufen</button>
-                </div>
-              ))}
-              {cameras.length === 0 && <p className="text-sm text-white/50">Noch keine Community-Kamera angelegt.</p>}
+                );
+              })}
+              {casters.length === 0 && !castersReason && <p className="text-sm text-white/50">Niemand hat gerade die Rolle Turnier Caster.</p>}
             </div>
+
+            {legacyCameras.length > 0 && (
+              <details className="rounded-xl border border-white/10 bg-black/20 p-4">
+                <summary className="cursor-pointer text-sm text-white/70">Ältere Kamera-Links ({legacyCameras.length})</summary>
+                <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                  {legacyCameras.map((camera) => (
+                    <div key={camera.cameraId} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/25 p-4">
+                      <div>
+                        <div className="font-semibold text-white">{camera.label} · @{camera.ownerLogin}</div>
+                        <div className={`mt-2 text-sm ${camera.online ? 'text-success' : camera.consentEnabled ? 'text-primary-hover' : 'text-white/45'}`}>
+                          {camera.online ? 'Online · Live abrufbar' : camera.consentEnabled ? 'Freigegeben · aktuell offline' : 'Nicht freigegeben'}
+                        </div>
+                      </div>
+                      <button className={button} disabled={busy} onClick={() => void revokeCamera(camera)}>Widerrufen</button>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
           </section>
 
           <div className="sticky bottom-3 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/40 bg-bg p-4 shadow-xl">

@@ -1428,6 +1428,7 @@ export interface CasterPerson {
   name: string;
   handle: string;
   accountLogin?: string | null;
+  discordId?: string | null;
   cameraUrl?: string;
   cameraId?: string | null;
   steamAccountId?: number | null;
@@ -1520,6 +1521,34 @@ export const fetchCasterCameras = async () => {
 };
 export const createCasterCamera = (ownerLogin: string, label: string) =>
   postAdminJson<CreatedCasterCamera, { ownerLogin: string; label: string }>('/caster-cameras', { ownerLogin, label });
+export interface CasterRoleCamera {
+  cameraId: string;
+  consentEnabled: boolean;
+  revoked: boolean;
+  online: boolean;
+  lastConnectedAt?: string | null;
+}
+export interface CasterRoleMember {
+  discordId: string;
+  displayName: string;
+  avatarUrl?: string | null;
+  camera: CasterRoleCamera | null;
+}
+export interface CasterRoleMembers {
+  available: boolean;
+  reason?: string;
+  items: CasterRoleMember[];
+}
+export interface CasterRoleInvite {
+  discordId: string;
+  displayName: string;
+  cameraId: string;
+  label: string;
+  inviteUrl: string;
+}
+export const fetchCasterRoleMembers = () => admin<CasterRoleMembers>('/caster-overlay/casters');
+export const createCasterRoleCamera = (discordId: string) =>
+  postAdminJson<CasterRoleInvite, Record<string, never>>(`/caster-overlay/casters/${encodeURIComponent(discordId)}/camera`, {});
 export const fetchCasterAssets = async (kind: CasterAssetKind) => {
   const result = await admin<{ assets: CasterAsset[] }>(`/caster-overlay/assets?kind=${encodeURIComponent(kind)}`);
   return result.assets ?? [];
