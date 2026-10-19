@@ -143,6 +143,7 @@ async fn harness_database() -> postgres::TestPostgres {
         include_str!("../../../../migrations/20261018120000_social_production_test_run.sql"),
         include_str!("../../../../migrations/20261018130000_social_test_run_discard_release.sql"),
         include_str!("../../../../migrations/20261018140000_social_test_run_revision_release.sql"),
+        include_str!("../../../../migrations/20261019120000_social_failure_backlog_hold.sql"),
         include_str!("../../../../migrations/20261019130000_social_cleared_job_releases_clip.sql"),
     ] {
         sqlx::raw_sql(sql)

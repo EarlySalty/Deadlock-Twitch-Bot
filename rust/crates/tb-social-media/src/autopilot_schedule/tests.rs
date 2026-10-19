@@ -68,6 +68,12 @@ async fn apply_slot_guards(pool: &PgPool) {
     .await
     .expect("actual test run revision migration");
     sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261019120000_social_failure_backlog_hold.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("failure backlog hold migration");
+    sqlx::raw_sql(include_str!(
         "../../../../migrations/20261019130000_social_cleared_job_releases_clip.sql"
     ))
     .execute(pool)

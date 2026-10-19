@@ -90,6 +90,19 @@ impl AiEditorError {
         )
     }
 
+    pub(crate) fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::SourceDownload
+                | Self::Provider
+                | Self::Transcription
+                | Self::Render
+                | Self::Validation
+                | Self::Storage
+                | Self::Deadline
+        )
+    }
+
     pub fn is_human_review_hold(&self) -> bool {
         matches!(self, Self::Consent)
     }

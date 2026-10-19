@@ -1847,18 +1847,6 @@ async fn produce_inner(
 const PRODUCTION_STAGES: u32 = 6;
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 
-fn transient(error: &AiEditorError) -> bool {
-    matches!(
-        error,
-        AiEditorError::Provider
-            | AiEditorError::Transcription
-            | AiEditorError::Render
-            | AiEditorError::Validation
-            | AiEditorError::Storage
-            | AiEditorError::Deadline
-    )
-}
-
 pub async fn produce(
     mut ctx: ProductionContext<'_>,
     mut job: ProductionJob,
@@ -1887,13 +1875,16 @@ pub async fn produce(
         * PRODUCTION_STAGES;
     let mut retries = 0_u32;
     while let Err(error) = &result {
-        if !transient(error) || retries >= max_retries {
+        if !error.is_transient() || retries >= max_retries {
             break;
         }
         retries += 1;
         tracing::info!(job_id = job.id, retry = retries, error = %error, "AI Auto-Pilot production retries a transient failure");
         tokio::time::sleep(RETRY_DELAY).await;
-        result = produce_inner(&mut ctx, &mut job).await;
+        match produce_inner(&mut ctx, &mut job).await {
+            Err(AiEditorError::Attempts) => break,
+            next => result = next,
+        }
     }
     if let Err(error) = &result {
         ctx.lease

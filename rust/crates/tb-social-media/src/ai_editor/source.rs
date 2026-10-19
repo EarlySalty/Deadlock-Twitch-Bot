@@ -393,26 +393,24 @@ mod classify_download_tests {
     use super::{classify_download, AiEditorError};
 
     #[test]
-    fn only_gone_clips_count_as_missing() {
+    fn only_gone_clips_are_permanent_and_other_download_errors_retry() {
         for missing in [
             "ERROR: [twitch:clips] abc: HTTP Error 404: Not Found",
             "ERROR: [twitch:clips] abc: HTTP Error 410: Gone",
             "ERROR: [twitch:clips] abc: This clip is no longer available",
         ] {
-            assert!(matches!(
-                classify_download(missing),
-                AiEditorError::SourceMissing
-            ));
+            let error = classify_download(missing);
+            assert!(matches!(error, AiEditorError::SourceMissing));
+            assert!(!error.is_transient(), "{missing}");
         }
-        for transient in [
+        for retried in [
             "ERROR: [twitch:clips] abc: HTTP Error 503: Service Unavailable",
             "ERROR: Requested format is not available",
             "ERROR: ffmpeg not found",
         ] {
-            assert!(matches!(
-                classify_download(transient),
-                AiEditorError::SourceDownload
-            ));
+            let error = classify_download(retried);
+            assert!(matches!(error, AiEditorError::SourceDownload));
+            assert!(error.is_transient(), "{retried}");
         }
     }
 }

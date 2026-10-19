@@ -207,8 +207,25 @@ pub async fn retry_test_run(
     .bind(owner)
     .fetch_one(&mut *tx)
     .await?;
+    let newer_active: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM social_production_jobs WHERE twitch_user_id = $2
+        AND source = 'test' AND id > $1 AND status IN ('queued', 'running'))",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .fetch_one(&mut *tx)
+    .await?;
+    if newer_active {
+        return Err(ScheduleError::Invalid(
+            "Ein neuerer Testlauf ist schon geplant oder läuft. Warte ihn ab, statt diesen alten erneut zu starten.".into(),
+        ));
+    }
     match status.as_str() {
-        "queued" => {}
+        "queued" => {
+            return Err(ScheduleError::Invalid(
+                "Dieser Testlauf wartet schon auf seinen Start und kann nicht erneut gestartet werden.".into(),
+            ));
+        }
         "running" => return Err(ScheduleError::Started),
         "failed" => {}
         "review" if !produced => {}

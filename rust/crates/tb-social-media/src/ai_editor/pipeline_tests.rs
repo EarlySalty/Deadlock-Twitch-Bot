@@ -2896,6 +2896,123 @@ async fn produce_download_failure_fails_job_and_unpins_clip() {
     lease.release().await.expect("release");
 }
 
+struct CountingTwitchDownloader {
+    error: &'static str,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl crate::clip_prep_worker::ClipDownloader for CountingTwitchDownloader {
+    async fn download(&self, _url: &str, _dest: &Path) -> Result<(), String> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(self.error.into())
+    }
+}
+
+async fn produce_with_download_error(
+    pool: &PgPool,
+    runtime: &EditorRuntime,
+    twitch_clip_id: &str,
+    error: &'static str,
+) -> (AiEditorError, String, usize) {
+    let clip = clip_without_file(pool, twitch_clip_id).await;
+    production_jobs::insert(
+        pool,
+        &production_jobs::NewProductionJob {
+            twitch_user_id: "101".into(),
+            clip_id: clip,
+            source: production_jobs::JobSource::Manual,
+            requested_mode: Some(ProductionMode::Ai),
+            scheduled_at: None,
+            max_attempts: 2,
+        },
+    )
+    .await
+    .expect("production job");
+    let mut lease = super::super::store::acquire_production_lease(pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    let job = production_jobs::claim_next(pool)
+        .await
+        .expect("claim")
+        .expect("running job");
+    let downloader = CountingTwitchDownloader {
+        error,
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let error = match produce(
+        ProductionContext {
+            pool,
+            runtime,
+            lease: &mut lease,
+            brain_token: None,
+            downloader: Some(&downloader),
+        },
+        job.clone(),
+    )
+    .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("download failure must stop produce"),
+    };
+    let status = production_jobs::get(pool, "101", job.id)
+        .await
+        .expect("finished job")
+        .expect("owned job")
+        .status;
+    lease.release().await.expect("release");
+    (
+        error,
+        status,
+        downloader.calls.load(std::sync::atomic::Ordering::SeqCst),
+    )
+}
+
+#[tokio::test]
+async fn twitch_503_retries_within_stage_attempts_while_gone_clips_fail_at_once() {
+    let db = database().await;
+    sqlx::raw_sql(
+        "CREATE TABLE IF NOT EXISTS social_clip_pool (
+            twitch_user_id TEXT NOT NULL,
+            clip_id TEXT NOT NULL,
+            clip_db_id BIGINT,
+            selected_at TIMESTAMPTZ,
+            PRIMARY KEY (twitch_user_id, clip_id)
+        );
+        CREATE OR REPLACE FUNCTION social_clip_video_holds(clip BIGINT) RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT FALSE $$;",
+    )
+    .execute(&db.pool)
+    .await
+    .expect("pool unpin schema");
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let (error, status, calls) = produce_with_download_error(
+        &db.pool,
+        &runtime,
+        "fixture-twitch-503",
+        "ERROR: [twitch:clips] abc: HTTP Error 503: Service Unavailable",
+    )
+    .await;
+    assert!(matches!(error, AiEditorError::SourceDownload), "{error}");
+    assert_eq!(
+        calls,
+        usize::try_from(runtime.limits.stage_attempts).expect("attempts")
+    );
+    assert!(calls > 1);
+    assert_eq!(status, "failed");
+    let (error, status, calls) = produce_with_download_error(
+        &db.pool,
+        &runtime,
+        "fixture-twitch-410",
+        "ERROR: [twitch:clips] abc: HTTP Error 410: Gone",
+    )
+    .await;
+    assert!(matches!(error, AiEditorError::SourceMissing), "{error}");
+    assert_eq!(calls, 1);
+    assert_eq!(status, "failed");
+}
+
 async fn unified_ai_channel(
     pool: &PgPool,
     review_policy: autopilot_settings::ReviewPolicy,

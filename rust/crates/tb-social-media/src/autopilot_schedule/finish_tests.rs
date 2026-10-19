@@ -805,6 +805,53 @@ async fn retrying_a_test_with_a_review_video_is_rejected() {
     cleanup(pool).await;
 }
 
+#[tokio::test]
+async fn retrying_a_queued_or_superseded_test_run_is_rejected() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    clip(&pool, "owner", "retry-old", utc("2025-01-01T00:00:00Z")).await;
+    let newer_clip = clip(&pool, "owner", "retry-new", utc("2025-01-02T00:00:00Z")).await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    let error = retry_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect_err("queued run keeps its attempts");
+    assert!(matches!(&error, ScheduleError::Invalid(text) if text.contains("wartet schon")));
+    sqlx::query(
+        "UPDATE social_production_jobs SET status = 'failed', stage = 'failed', attempts = 2,
+        finished_at = NOW() WHERE id = $1",
+    )
+    .bind(run.job_id)
+    .execute(&pool)
+    .await
+    .expect("failed test");
+    let newer = job(&pool, "owner", newer_clip, None).await;
+    for status in ["queued", "running"] {
+        sqlx::query(
+            "UPDATE social_production_jobs SET source = 'test', status = $2, mode = 'static',
+            started_at = NOW() WHERE id = $1",
+        )
+        .bind(newer.id)
+        .bind(status)
+        .execute(&pool)
+        .await
+        .expect("newer test run");
+        let error = retry_test_run(&pool, "owner", run.job_id)
+            .await
+            .expect_err("newer run wins");
+        assert!(
+            matches!(&error, ScheduleError::Invalid(text) if text.contains("neuerer Testlauf"))
+        );
+    }
+    let (status, attempts): (String, i32) =
+        sqlx::query_as("SELECT status, attempts FROM social_production_jobs WHERE id = $1")
+            .bind(run.job_id)
+            .fetch_one(&pool)
+            .await
+            .expect("old run");
+    assert_eq!((status.as_str(), attempts), ("failed", 2));
+    cleanup(pool).await;
+}
+
 async fn parked(pool: &PgPool, clip_id: i64, source: &str, status: &str, reason: &str) -> i64 {
     let created = job(pool, "owner", clip_id, None).await;
     sqlx::query(
