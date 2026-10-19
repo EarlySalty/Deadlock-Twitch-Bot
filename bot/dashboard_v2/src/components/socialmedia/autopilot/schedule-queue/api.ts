@@ -42,7 +42,7 @@ export interface Reservation {
   platform: string;
   scheduled_at: string;
 }
-export type ProductionHold = 'disabled' | 'paused' | 'review_backlog' | 'empty_pool' | 'no_schedule' | 'outside_lead' | null;
+export type ProductionHold = 'disabled' | 'paused' | 'review_backlog' | 'failure_backlog' | 'empty_pool' | 'no_schedule' | 'outside_lead' | null;
 
 export interface QueueJob {
   id: number;

@@ -65,6 +65,13 @@ export function studioNextStep(
       tone: 'warning',
     };
   }
+  if (schedule.production_hold === 'failure_backlog') {
+    return {
+      text: t('Auto-Pilot wartet, weil die letzten Produktionen fehlgeschlagen sind. Starte auf Planen einen Testlauf.'),
+      view: 'planen',
+      tone: 'danger',
+    };
+  }
   const failedPrep = schedule.jobs.some((job) => job.status === 'failed' && job.source !== 'test');
   if (schedule.settings.enabled && failedPrep) {
     return {

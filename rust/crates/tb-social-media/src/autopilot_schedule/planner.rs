@@ -3,8 +3,8 @@ use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
 
 use super::{
-    hold, production_horizon, reservations_on, reserve_on, review_count_on, review_required_on,
-    Allocation, Allocator, ProductionHold, ScheduleError, Subject,
+    failure_count_on, hold, production_horizon, reservations_on, reserve_on, review_count_on,
+    review_required_on, Allocation, Allocator, ProductionHold, ScheduleError, Subject,
 };
 use crate::autopilot_settings::{self, AutopilotSettings, ClipSort};
 
@@ -100,6 +100,7 @@ async fn save_report(
         ProductionHold::Disabled => "disabled",
         ProductionHold::Paused => "paused",
         ProductionHold::ReviewBacklog => "review_backlog",
+        ProductionHold::FailureBacklog => "failure_backlog",
         ProductionHold::EmptyPool => "empty_pool",
         ProductionHold::NoSchedule => "no_schedule",
         ProductionHold::OutsideLead => "outside_lead",
@@ -120,6 +121,7 @@ pub async fn plan_owner(
     autopilot_settings::lock_owner(&mut tx, owner).await?;
     let settings = autopilot_settings::load_on(&mut tx, owner).await?;
     let reviews = review_count_on(&mut tx, owner).await?;
+    let failures = failure_count_on(&mut tx, owner).await?;
     let allocator = Allocator::load_on(&mut tx, owner, &settings).await?;
     let mut report = PlanReport {
         next_slot: allocator.plan(now)?.map(|plan| plan.reference),
@@ -131,6 +133,7 @@ pub async fn plan_owner(
         review_required,
         allocator.has_schedule(),
         reviews,
+        failures,
         report.next_slot,
         now,
     );
@@ -140,6 +143,7 @@ pub async fn plan_owner(
             ProductionHold::Disabled
                 | ProductionHold::Paused
                 | ProductionHold::ReviewBacklog
+                | ProductionHold::FailureBacklog
                 | ProductionHold::NoSchedule
         )
     ) {

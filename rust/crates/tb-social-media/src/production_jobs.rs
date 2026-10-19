@@ -209,6 +209,7 @@ async fn eligible_head_on(
     connection: &mut PgConnection,
 ) -> Result<Option<(i64, String)>, JobError> {
     let backlog = autopilot_schedule::review_backlog_sql("j.twitch_user_id");
+    let failures = autopilot_schedule::failure_backlog_sql("j.twitch_user_id");
     let limit = autopilot_schedule::REVIEW_LIMIT;
     let scheduled = autopilot_schedule::has_schedule_sql("s");
     let review = crate::autopilot_publish::EFFECTIVE_REVIEW;
@@ -222,7 +223,7 @@ async fn eligible_head_on(
              AND (j.scheduled_at IS NULL OR (j.scheduled_at > clock_timestamp()
                  AND j.scheduled_at <= clock_timestamp() + make_interval(hours => s.lead_time_hours)
                      + CASE WHEN s.lead_time_hours = 0 THEN INTERVAL '1 minute' ELSE INTERVAL '0' END))
-             AND ({review} <> 'required' OR {backlog} < {limit})))
+             AND ({review} <> 'required' OR {backlog} < {limit}) AND {failures} < {limit}))
          ORDER BY j.queue_order, j.id LIMIT 1"
     )))
     .fetch_optional(connection)
@@ -272,10 +273,12 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
         .await?;
     if job.started_at.is_none() && job.source == JobSource::Autopilot {
         let reviews: i64 = autopilot_schedule::review_count_on(&mut tx, &owner).await?;
+        let failures: i64 = autopilot_schedule::failure_count_on(&mut tx, &owner).await?;
         let scheduled = autopilot_schedule::has_schedule_on(&mut tx, &owner, &settings).await?;
         if !settings.enabled
             || settings.paused
             || !scheduled
+            || failures >= autopilot_schedule::REVIEW_LIMIT
             || (reviews >= autopilot_schedule::REVIEW_LIMIT
                 && crate::autopilot_publish::review_mode_on(&mut tx, &owner).await?
                     == crate::autopilot_publish::ReviewMode::Review)

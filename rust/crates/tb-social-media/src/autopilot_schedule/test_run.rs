@@ -229,7 +229,8 @@ pub async fn retry_test_run(
     sqlx::query(
         "UPDATE social_production_jobs SET status = 'queued', stage = 'queued', attempts = 0,
         mode = NULL, started_at = NULL, finished_at = NULL, last_error = NULL,
-        review_reasons = '[]'::jsonb
+        review_reasons = '[]'::jsonb,
+        metadata = metadata || jsonb_build_object('retried_at', clock_timestamp())
         WHERE id = $1 AND twitch_user_id = $2",
     )
     .bind(job_id)

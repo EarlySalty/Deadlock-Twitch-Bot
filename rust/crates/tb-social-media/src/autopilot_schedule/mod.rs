@@ -57,6 +57,7 @@ pub enum ProductionHold {
     Disabled,
     Paused,
     ReviewBacklog,
+    FailureBacklog,
     EmptyPool,
     NoSchedule,
     OutsideLead,
@@ -158,6 +159,34 @@ pub(crate) fn review_backlog_sql(owner: &str) -> String {
                 WHERE v.job_id = rj.id AND v.status = 'review'
                 AND (v.expires_at IS NULL OR v.expires_at > clock_timestamp()))))"
     )
+}
+
+pub(crate) fn failure_backlog_sql(owner: &str) -> String {
+    format!(
+        "(SELECT COUNT(*) FROM social_production_jobs fj WHERE fj.twitch_user_id = {owner}
+            AND fj.source = 'autopilot' AND fj.status = 'failed'
+            AND fj.finished_at > clock_timestamp() - INTERVAL '24 hours'
+            AND fj.finished_at > COALESCE((SELECT GREATEST(
+                    MAX(sj.finished_at) FILTER (WHERE sj.status = 'completed'),
+                    MAX(sj.finished_at) FILTER (WHERE sj.source = 'test' AND sj.stage = 'test_discarded'),
+                    MAX(sj.created_at) FILTER (WHERE sj.source = 'test'),
+                    MAX((sj.metadata->>'retried_at')::timestamptz) FILTER (WHERE sj.source = 'test'))
+                FROM social_production_jobs sj
+                WHERE sj.twitch_user_id = {owner} AND sj.source IN ('autopilot', 'test')), '-infinity'::timestamptz))"
+    )
+}
+
+pub(crate) async fn failure_count_on(
+    connection: &mut PgConnection,
+    owner: &str,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT {}",
+        failure_backlog_sql("$1")
+    )))
+    .bind(owner)
+    .fetch_one(connection)
+    .await
 }
 
 pub(crate) async fn review_count_on(
@@ -799,6 +828,7 @@ pub(crate) fn hold(
     review_required: bool,
     has_schedule: bool,
     reviews: i64,
+    failures: i64,
     next: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> Option<ProductionHold> {
@@ -810,6 +840,9 @@ pub(crate) fn hold(
     }
     if review_required && reviews >= REVIEW_LIMIT {
         return Some(ProductionHold::ReviewBacklog);
+    }
+    if failures >= REVIEW_LIMIT {
+        return Some(ProductionHold::FailureBacklog);
     }
     if !has_schedule {
         return Some(ProductionHold::NoSchedule);
@@ -875,6 +908,7 @@ struct PreviewContext<'a> {
     settings: &'a AutopilotSettings,
     review_required: bool,
     reviews: i64,
+    failures: i64,
     empty_pool: bool,
     now: DateTime<Utc>,
 }
@@ -890,6 +924,7 @@ fn preview(
         context.review_required,
         allocator.has_schedule(),
         context.reviews,
+        context.failures,
         next_slot,
         context.now,
     );
@@ -918,6 +953,7 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
         .await?;
     let allocator = Allocator::load_on(&mut tx, owner, &settings).await?;
     let review_count = review_count_on(&mut tx, owner).await?;
+    let failures = failure_count_on(&mut tx, owner).await?;
     let review_required = review_required_on(&mut tx, owner).await?;
     let jobs = queue_jobs_on(&mut tx, owner).await?;
     let empty_pool: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_autopilot_schedule_state
@@ -927,6 +963,7 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
         settings: &settings,
         review_required,
         reviews: review_count,
+        failures,
         empty_pool,
         now,
     };

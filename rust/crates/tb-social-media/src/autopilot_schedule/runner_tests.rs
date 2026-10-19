@@ -85,7 +85,7 @@ async fn autopilot_runner_lease_precedes_claim_and_unavailable_ai_has_no_static_
         .expect("held job")
         .expect("owned job");
     assert_eq!(current.mode, Some(ProductionMode::Ai));
-    assert_eq!(current.status, "review");
+    assert_eq!(current.status, "failed");
     assert_eq!(current.review_reasons, json!(["ai_editor_unavailable"]));
     assert!(produced_video::list(&pool, "owner", 50)
         .await
@@ -461,7 +461,7 @@ async fn autopilot_runner_cleared_schedule_preserves_queued_work_and_manual_inde
             assert_eq!(result.attempts, 1);
             assert_eq!(result.mode, Some(mode));
             if mode == ProductionMode::Ai {
-                assert_eq!(result.status, "review");
+                assert_eq!(result.status, "failed");
                 assert_eq!(result.review_reasons, json!(["ai_editor_unavailable"]));
             } else {
                 assert_eq!(result.status, "completed");
@@ -534,12 +534,12 @@ async fn autopilot_runner_repeated_resource_holds_do_not_drain_the_pool() {
                 clips.push(id);
             }
             let runner = worker(&pool, root.path(), VideoProcessor::default());
-            let expected_reviews = if full_auto { clips.len() } else { 2 };
-            for _ in 0..expected_reviews {
+            let expected_failures = super::REVIEW_LIMIT as usize;
+            for _ in 0..expected_failures {
                 assert!(runner
                     .run_once()
                     .await
-                    .expect("one review job does not block the next clip"));
+                    .expect("one failed job does not block the next clip"));
             }
             for _ in 0..8 {
                 assert!(!runner
@@ -550,17 +550,13 @@ async fn autopilot_runner_repeated_resource_holds_do_not_drain_the_pool() {
             let state = super::snapshot(&pool, "42")
                 .await
                 .expect("actual queue snapshot");
-            assert_eq!(state.jobs.len(), expected_reviews);
-            assert!(state.jobs.iter().all(|job| job.status == "review"));
+            assert_eq!(state.jobs.len(), expected_failures);
+            assert!(state.jobs.iter().all(|job| job.status == "failed"));
             assert_eq!(state.jobs[0].attempts, 1);
-            assert_eq!(state.review_count, expected_reviews as i64);
+            assert_eq!(state.review_count, 0);
             assert_eq!(
                 state.production_hold,
-                Some(if full_auto {
-                    super::ProductionHold::EmptyPool
-                } else {
-                    super::ProductionHold::ReviewBacklog
-                })
+                Some(super::ProductionHold::FailureBacklog)
             );
             assert_eq!(
                 state.jobs[0].review_reasons,
@@ -570,13 +566,50 @@ async fn autopilot_runner_repeated_resource_holds_do_not_drain_the_pool() {
                     "static_production_failed"
                 }]
             );
-            let selected: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM social_clip_pool WHERE selected_at IS NOT NULL",
+            let consumed: i64 = sqlx::query_scalar(
+                "SELECT COUNT(DISTINCT clip_id) FROM social_production_jobs WHERE twitch_user_id = '42'",
             )
             .fetch_one(&pool)
             .await
             .expect("bounded pool consumption");
-            assert_eq!(selected, expected_reviews as i64);
+            assert_eq!(consumed, expected_failures as i64);
+            sqlx::query(
+                "INSERT INTO social_production_jobs (twitch_user_id, clip_id, source, queue_order, status, stage, finished_at)
+                VALUES ('42', $1, 'test', 1000, 'cancelled', 'cancelled', clock_timestamp() - INTERVAL '1 hour')",
+            )
+            .bind(clips[7])
+            .execute(&pool)
+            .await
+            .expect("started test run");
+            assert!(!failure_held(&pool).await);
+            for (update, held) in [
+                ("created_at = clock_timestamp() - INTERVAL '1 hour'", true),
+                (
+                    "stage = 'test_discarded', finished_at = clock_timestamp()",
+                    false,
+                ),
+                (
+                    "stage = 'cancelled', finished_at = clock_timestamp() - INTERVAL '1 hour'",
+                    true,
+                ),
+                (
+                    "metadata = jsonb_build_object('retried_at', clock_timestamp())",
+                    false,
+                ),
+                ("metadata = '{}'::jsonb", true),
+                (
+                    "status = 'completed', stage = 'completed', finished_at = clock_timestamp()",
+                    false,
+                ),
+            ] {
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "UPDATE social_production_jobs SET {update} WHERE source = 'test' AND twitch_user_id = '42'"
+                )))
+                .execute(&pool)
+                .await
+                .expect("test run transition");
+                assert_eq!(failure_held(&pool).await, held, "{update}");
+            }
             assert!(produced_video::list(&pool, "42", 50)
                 .await
                 .expect("no fallback versions")
@@ -611,6 +644,14 @@ async fn autopilot_runner_repeated_resource_holds_do_not_drain_the_pool() {
             cleanup(pool).await;
         }
     }
+}
+
+async fn failure_held(pool: &PgPool) -> bool {
+    super::snapshot(pool, "42")
+        .await
+        .expect("actual queue snapshot")
+        .production_hold
+        == Some(super::ProductionHold::FailureBacklog)
 }
 
 #[tokio::test]

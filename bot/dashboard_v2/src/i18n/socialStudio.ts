@@ -245,4 +245,6 @@ export const SOCIAL_STUDIO_EN: Record<string, string> = {
   'Auf Heute ansehen': 'View on Today',
   'Das sind deine Twitch-Clips. Auto-Pilot lädt die Datei erst, wenn ein Clip an der Reihe ist.': 'These are your Twitch clips. Auto-Pilot loads the file only when a clip is next.',
   'Prüfung': 'Review',
+  'Mehrere Produktionen sind fehlgeschlagen': 'Several productions failed',
+  'Auto-Pilot wartet, weil die letzten Produktionen fehlgeschlagen sind. Starte auf Planen einen Testlauf.': 'Auto-Pilot is waiting because the last productions failed. Start a test run on Plan.',
 };

@@ -35,6 +35,7 @@ const HOLDS = {
   empty_pool: 'Keine passenden Clips verfügbar',
   no_schedule: 'Wöchentliche Termine fehlen',
   review_backlog: 'Eine Prüfung ist offen',
+  failure_backlog: 'Mehrere Produktionen sind fehlgeschlagen',
   outside_lead: 'Nächster Termin außerhalb des Vorlaufs',
   paused: 'Neue Produktionen pausiert',
   disabled: 'Keine automatische Produktion',
