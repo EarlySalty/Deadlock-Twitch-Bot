@@ -52,7 +52,9 @@ test('veröffentlichte und archivierte Clips bleiben trotz altem Freigabestand t
   const approval = { state: 'awaiting_approval' } as SocialClipMitPosting['approval'];
   assert.equal(queueStage(clip(1, { status: 'published_all', approval })), 'posted');
   assert.equal(queueStage(clip(2, { status: 'discarded', approval })), 'archive');
-  assert.equal(queueStage(clip(3, { status: 'awaiting_approval' })), 'new');
+  assert.equal(queueStage(clip(3, { status: 'awaiting_approval', pipeline_unified: true })), 'new');
+  assert.equal(queueStage(clip(5, { status: 'awaiting_approval' })), 'review');
+  assert.equal(queueStage(clip(6, { status: 'awaiting_approval', pipeline_unified: false })), 'review');
   assert.equal(queueStage(clip(4, { status: 'approved' })), 'new');
 });
 
@@ -73,6 +75,7 @@ test('Suche, Plattform und Status kombinieren sich über den gesamten Bestand', 
     clip(1, {
       title: 'Bebop ÜBERLEBT',
       status: 'awaiting_approval',
+      pipeline_unified: true,
       approval: { approved_platforms: ['youtube'] } as SocialClipMitPosting['approval'],
     }),
     clip(2),
@@ -351,7 +354,7 @@ test('approved clips awaiting TikTok remain planned rather than needing clip app
   assert.equal(queueStage(approved), 'planned');
   assert.equal(filterQueue([approved], 'review', '', 'all').length, 0);
   assert.equal(queueStage(clip(2, { status: 'awaiting_approval', upload_states: { tiktok: 'waiting_tiktok_approval' } })), 'review');
-  assert.equal(queueStage(clip(3, { status: 'awaiting_approval' })), 'new');
+  assert.equal(queueStage(clip(3, { status: 'awaiting_approval', pipeline_unified: true })), 'new');
 });
 
 test('generated titles win while duplicate Twitch titles gain date and time', () => {
@@ -363,9 +366,11 @@ test('generated titles win while duplicate Twitch titles gain date and time', ()
 });
 
 test('Today prioritizes the same action as its overview and ignores failed sources', () => {
-  const data = { clips: [clip(1, { status: 'awaiting_approval' })], clipsFailed: false, platforms: [], platformsFailed: false, scheduleFailed: false, publishFailed: false, timezone: 'Europe/Berlin' };
+  const data = { clips: [clip(1, { status: 'awaiting_approval', pipeline_unified: true })], clipsFailed: false, platforms: [], platformsFailed: false, scheduleFailed: false, publishFailed: false, timezone: 'Europe/Berlin' };
   const t = (key: string) => key;
   assert.deepEqual(studioActions(data, 0, t).map(action => [action.key, action.view, action.stage]), []);
+  const legacy = { ...data, clips: [clip(1, { status: 'awaiting_approval' })] };
+  assert.deepEqual(studioActions(legacy, 0, t).map(action => [action.key, action.view, action.stage]), [['clips', 'freigabe', 'review']]);
   assert.deepEqual(studioActions({ ...data, clipsFailed: true }, 0, t), []);
 });
 

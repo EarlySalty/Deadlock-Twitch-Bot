@@ -30,7 +30,7 @@ pub(super) async fn select_on(
         AND p.source_created_at >= $2 AND p.source_created_at < $3
         AND p.processed_at IS NULL AND p.published_at IS NULL AND NOT p.legacy_reserved
         AND NOT EXISTS(SELECT 1 FROM social_production_jobs j WHERE j.clip_id = p.clip_db_id
-            AND NOT social_video_discarded(j.id))
+            AND NOT social_job_releases_clip(j.id))
         AND NOT social_clip_video_holds(p.clip_db_id)
         AND NOT EXISTS(SELECT 1 FROM twitch_clips_upload_queue q WHERE q.clip_id = p.clip_db_id)
         ORDER BY p.selected_at IS NULL, CASE WHEN $4 THEN p.source_created_at END DESC,

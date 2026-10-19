@@ -1988,9 +1988,10 @@ pub async fn platforms_status_handler(
 const CLIP_COLUMNS: &str = "id, clip_id, clip_url, clip_title, clip_thumbnail_url, streamer_login, \
     created_at::text AS created_at, duration_seconds, view_count, game_name, status, source_kind, upload_local_path, \
     retention_until::text AS retention_until, discarded_at::text AS discarded_at, \
-    layout_override_json::text AS layout_override_json, uploaded_tiktok, uploaded_youtube, uploaded_instagram";
+    layout_override_json::text AS layout_override_json, uploaded_tiktok, uploaded_youtube, uploaded_instagram, \
+    EXISTS(SELECT 1 FROM social_pipeline_cutover o WHERE o.twitch_user_id = twitch_clips_social_media.twitch_user_id \
+    AND o.state = 'unified') AS pipeline_unified";
 
-/// Geladene Clip-Zeile (für `_serialize_clip_record`).
 struct ClipRow {
     id: i64,
     clip_id: Option<String>,
@@ -2011,6 +2012,7 @@ struct ClipRow {
     uploaded_tiktok: Option<bool>,
     uploaded_youtube: Option<bool>,
     uploaded_instagram: Option<bool>,
+    pipeline_unified: bool,
 }
 
 fn row_to_clip(r: &PgRow) -> Result<ClipRow, sqlx::Error> {
@@ -2034,6 +2036,7 @@ fn row_to_clip(r: &PgRow) -> Result<ClipRow, sqlx::Error> {
         uploaded_tiktok: r.try_get("uploaded_tiktok")?,
         uploaded_youtube: r.try_get("uploaded_youtube")?,
         uploaded_instagram: r.try_get("uploaded_instagram")?,
+        pipeline_unified: r.try_get("pipeline_unified")?,
     })
 }
 
@@ -2234,6 +2237,7 @@ async fn serialize_clip_record_with(
         "upload_local_path": row.upload_local_path,
         "retention_until": row.retention_until,
         "discarded_at": row.discarded_at,
+        "pipeline_unified": row.pipeline_unified,
         "platform_status": {
             "tiktok": row.uploaded_tiktok.unwrap_or(false),
             "youtube": row.uploaded_youtube.unwrap_or(false),
@@ -4533,6 +4537,7 @@ mod tests {
             "CREATE TABLE clip_last_hashtags (streamer_login TEXT, twitch_user_id TEXT DEFAULT '42', hashtags TEXT NOT NULL, last_used_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE clip_templates_global (id BIGSERIAL PRIMARY KEY, template_name TEXT UNIQUE, description_template TEXT NOT NULL, hashtags TEXT NOT NULL DEFAULT '[]', category TEXT, usage_count INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
+            "CREATE TABLE social_pipeline_cutover (twitch_user_id TEXT PRIMARY KEY, state TEXT NOT NULL)",
             "CREATE TABLE social_media_streamer_layout (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
             "CREATE TABLE deadlock_vocab (term TEXT PRIMARY KEY, canonical TEXT NOT NULL, category TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual', aliases JSONB NOT NULL DEFAULT '[]'::jsonb, weight INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",

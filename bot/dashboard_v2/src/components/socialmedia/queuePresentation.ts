@@ -48,6 +48,7 @@ export function queueStage(clip: SocialClipMitPosting): Exclude<QueueStage, 'all
   if (['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? ''))
     return clip.status === 'approved' || clip.status === 'publishing' ? 'planned' : 'review';
   if (clip.status === 'publishing' || queuedSlots(clip) > 0) return 'planned';
+  if (clip.status === 'awaiting_approval' && !clip.pipeline_unified) return 'review';
   return 'new';
 }
 

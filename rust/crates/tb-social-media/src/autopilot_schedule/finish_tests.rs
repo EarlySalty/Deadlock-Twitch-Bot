@@ -846,6 +846,16 @@ async fn selected_at(pool: &PgPool, id: i64) -> Option<DateTime<Utc>> {
         .expect("pool entry")
 }
 
+async fn planner_pick(pool: &PgPool) -> Option<i64> {
+    let mut tx = pool.begin().await.expect("planner transaction");
+    let bounds = (utc("2025-01-01T00:00:00Z"), utc("2026-01-01T00:00:00Z"));
+    let pick = planner::select_on(&mut tx, "owner", bounds, ClipSort::OldestFirst)
+        .await
+        .expect("planner selection");
+    tx.rollback().await.expect("planner rollback");
+    pick
+}
+
 #[tokio::test]
 async fn clear_legacy_review_jam_only_clears_legacy_reviews_without_video() {
     let pool = pool().await;
@@ -922,9 +932,12 @@ async fn clear_legacy_review_jam_only_clears_legacy_reviews_without_video() {
         before.insert(index, job_state(&pool, id).await);
     }
 
+    assert_eq!(planner_pick(&pool).await, None);
+
     let report = crate::pipeline_migration::clear_legacy_review_jam(&pool)
         .await
         .expect("clear jam");
+    assert_eq!(planner_pick(&pool).await, Some(clips[0]));
     assert_eq!(report.jobs_cleared, 2);
     assert_eq!(report.clips_unpinned, 2);
     assert_eq!(report.awaiting_returned, 1);
