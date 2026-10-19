@@ -274,7 +274,7 @@ export function PipelineOverview({ data, now, onNavigate, activity, twitchUserId
   const holdRow = actions.find(row => row.key === 'hold');
   const hold = schedule?.production_hold === 'empty_pool' || schedule?.production_hold === 'no_schedule' ? schedule.production_hold : null;
   const legacyReviews = actions.some(row => row.key === 'clips') ? countStage(clips, 'review') : 0;
-  const reviewsInPlan = schedule?.jobs.some(job => job.status === 'review') ?? false;
+  const reviewsInPlan = schedule?.jobs.some(job => job.status === 'review' && job.source !== 'test') ?? false;
   const chips = issueChips(actions, reviewsInPlan, t);
   const approvals = approvalVideos(publish);
 
@@ -322,7 +322,7 @@ export function PipelineOverview({ data, now, onNavigate, activity, twitchUserId
       <OverviewColumn variant="actions" icon={AlertTriangle} title={t('Prüfung & Freigabe')} count={chips.length + approvals.length + (legacyReviews > 0 ? 1 : 0)} rows={[]} lead={lead}
         empty={unavailable ?? t('Nichts offen. Du bist auf dem aktuellen Stand.')} />
       <div className="studio-overview-side">
-        <OverviewColumn variant="now" icon={CircleDot} title={t('Läuft gerade')} count={null} rows={nowRows} empty={activity ? '' : unavailable ?? t('Gerade läuft nichts.')} footer={activity}
+        <OverviewColumn variant="now" icon={CircleDot} title={t('Läuft gerade')} count={null} rows={nowRows} empty={activity || schedule?.test_run ? '' : unavailable ?? t('Gerade läuft nichts.')} footer={activity}
           action={testRunApi && <TestRunButton testRun={schedule?.test_run} available={Boolean(schedule)} api={testRunApi} owner={owner} onChanged={onTestRunChanged} />}
           lead={testRunApi && schedule?.test_run ? <TestRunStatus testRun={schedule.test_run} api={testRunApi} owner={owner} onChanged={onTestRunChanged} /> : undefined} />
         <OverviewColumn variant="next" icon={Clock3} title={t('Als Nächstes')} count={null} rows={nextRows} empty={unavailable ?? t('Noch nichts eingeplant.')}

@@ -12,7 +12,7 @@ pub use queue::{cancel, mark_next, reorder, resolve_review, ReviewDecision};
 pub use recovery::{recover_after_lease, retry_or_review, Recovery};
 pub(crate) use settings::retime_on;
 pub use settings::{save_schedule, SchedulePatch, ScheduleSettings};
-pub use test_run::{discard_test_run, start_test_run, TestRun};
+pub use test_run::{discard_test_run, retry_test_run, start_test_run, TestRun};
 
 use std::collections::BTreeMap;
 

@@ -572,6 +572,8 @@ export const SOCIAL_EN: Record<string, string> = {
   'Neu importieren statt fortsetzen': 'Start a new import instead',
   'TikTok braucht eigene Angaben und wird beim Prüfen freigegeben.': 'TikTok needs its own details and is approved during review.',
   'Prüfung & Freigabe': 'Review & approval',
+  'Test verwerfen': 'Discard test',
+  'Wird erneut versucht …': 'Retrying …',
   'Zu den Clips': 'Go to clips',
   '{count} Clip aus der bisherigen Pipeline wartet auf Freigabe': '{count} clip from the previous pipeline is waiting for approval',
   '{count} Clips aus der bisherigen Pipeline warten auf Freigabe': '{count} clips from the previous pipeline are waiting for approval',

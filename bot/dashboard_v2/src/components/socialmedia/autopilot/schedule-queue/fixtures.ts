@@ -86,6 +86,15 @@ export function createScheduleQueueFixture(): ScheduleQueueFixture {
       state.test_run = null;
       return copy();
     },
+    async retryTestRun(id, owner) {
+      requests.push({ method: 'POST', path: `/autopilot/test-run/${id}/retry`, body: { twitch_user_id: owner } });
+      if (state.test_run?.job_id !== id) throw new Error('Dieser Testlauf ist nicht mehr aktiv.');
+      if (state.test_run.video_status === 'review') throw new Error('Dieser Testlauf kann nicht erneut gestartet werden.');
+      const job = state.jobs.find(value => value.id === id);
+      if (job) Object.assign(job, { status: 'queued' as const, stage: 'queued', last_error: null, attempts: 0 });
+      state.test_run = { ...state.test_run, status: 'queued', stage: 'queued', last_error: null, video_id: null, video_status: null };
+      return copy();
+    },
     async cancel(id, owner) { requests.push({ method: 'POST', path: `/autopilot/queue/${id}/cancel`, body: { twitch_user_id: owner } }); const job = state.jobs.find(value => value.id === id && value.status === 'queued' && !value.started_at); if (!job) throw new Error('Der Auftrag kann nicht mehr entfernt werden.'); job.status = 'cancelled'; return copy(); },
   };
   return { api, requests, snapshot: copy, policy: () => structuredClone(policy) };

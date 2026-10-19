@@ -272,6 +272,25 @@ pub async fn test_run_discard_handler(
     response(&pool, &owner).await
 }
 
+pub async fn test_run_retry_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(id): Path<i64>,
+    body: Result<Json<QueueActionWrite>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = body else {
+        return invalid_body();
+    };
+    let owner = match owner_scope(&auth, &pool, body.twitch_user_id.as_deref()).await {
+        Ok(owner) => owner,
+        Err(error) => return *error,
+    };
+    if let Err(error) = autopilot_schedule::retry_test_run(&pool, &owner, id).await {
+        return failure(error);
+    }
+    response(&pool, &owner).await
+}
+
 #[cfg(test)]
 #[path = "social_media_autopilot_schedule_tests.rs"]
 mod tests;

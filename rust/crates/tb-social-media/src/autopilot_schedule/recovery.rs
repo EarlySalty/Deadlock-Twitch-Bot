@@ -74,7 +74,7 @@ pub async fn retry_or_review(
             pool,
             &job.twitch_user_id,
             job.id,
-            JobCompletion::Review,
+            JobCompletion::Failed,
             &[reason.into()],
             Some("Die Produktion konnte nicht abgeschlossen werden. Bitte prüfe den Auftrag."),
         )

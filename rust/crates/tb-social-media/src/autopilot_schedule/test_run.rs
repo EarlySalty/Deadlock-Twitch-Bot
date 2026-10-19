@@ -181,6 +181,81 @@ pub async fn discard_test_run(
     Ok(())
 }
 
+pub async fn retry_test_run(
+    pool: &PgPool,
+    owner: &str,
+    job_id: i64,
+) -> Result<TestRun, ScheduleError> {
+    let mut tx = pool.begin().await?;
+    autopilot_settings::lock_owner(&mut tx, owner).await?;
+    let row = sqlx::query(
+        "SELECT status FROM social_production_jobs
+        WHERE id = $1 AND twitch_user_id = $2 AND source = 'test' FOR UPDATE",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ScheduleError::NotFound)?;
+    let status: String = row.try_get("status")?;
+    let produced: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM social_produced_videos WHERE twitch_user_id = $2
+        AND social_video_job(job_id, metadata) = $1
+        AND status IN ('review', 'approved', 'scheduled', 'published'))",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .fetch_one(&mut *tx)
+    .await?;
+    match status.as_str() {
+        "queued" => {}
+        "running" => return Err(ScheduleError::Started),
+        "failed" => {}
+        "review" if !produced => {}
+        _ => {
+            return Err(ScheduleError::Invalid(
+                "Dieser Testlauf kann nicht erneut gestartet werden.".into(),
+            ));
+        }
+    }
+    if produced {
+        return Err(ScheduleError::Invalid(
+            "Dieser Testlauf kann nicht erneut gestartet werden.".into(),
+        ));
+    }
+    let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE social_production_jobs SET status = 'queued', stage = 'queued', attempts = 0,
+        mode = NULL, started_at = NULL, finished_at = NULL, last_error = NULL,
+        review_reasons = '[]'::jsonb
+        WHERE id = $1 AND twitch_user_id = $2",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE social_clip_pool SET selected_at = COALESCE(selected_at, $3),
+            first_selected_at = COALESCE(first_selected_at, $3)
+        FROM social_production_jobs j
+        WHERE j.id = $2 AND j.twitch_user_id = $1
+        AND social_clip_pool.twitch_user_id = j.twitch_user_id
+        AND social_clip_pool.clip_db_id = j.clip_id",
+    )
+    .bind(owner)
+    .bind(job_id)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    let run = active_on(&mut tx, owner)
+        .await?
+        .ok_or(ScheduleError::NotFound)?;
+    tx.commit().await?;
+    Ok(run)
+}
+
 async fn stop_revision_on(
     connection: &mut PgConnection,
     owner: &str,

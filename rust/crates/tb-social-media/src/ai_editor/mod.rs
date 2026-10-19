@@ -89,6 +89,40 @@ impl AiEditorError {
             Self::SourceDownload | Self::SourceMissing | Self::SourceUnreadable
         )
     }
+
+    pub fn is_human_review_hold(&self) -> bool {
+        matches!(self, Self::Consent)
+    }
+}
+
+#[cfg(test)]
+mod completion_mapping_tests {
+    use super::AiEditorError;
+
+    #[test]
+    fn consent_is_the_only_produce_error_that_holds_for_review() {
+        assert!(AiEditorError::Consent.is_human_review_hold());
+        for error in [
+            AiEditorError::Source,
+            AiEditorError::SourceDownload,
+            AiEditorError::SourceMissing,
+            AiEditorError::SourceUnreadable,
+            AiEditorError::Attempts,
+            AiEditorError::Render,
+            AiEditorError::Validation,
+            AiEditorError::Deadline,
+            AiEditorError::Provider,
+            AiEditorError::Transcription,
+            AiEditorError::Plan,
+            AiEditorError::Budget,
+            AiEditorError::Configuration,
+        ] {
+            assert!(
+                !error.is_human_review_hold(),
+                "{error} must finish as failed"
+            );
+        }
+    }
 }
 
 impl From<store::AiStoreError> for AiEditorError {

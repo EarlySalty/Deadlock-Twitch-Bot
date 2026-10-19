@@ -433,6 +433,10 @@ fn build_authed_router_with_analysis_store(
             post(social_media::autopilot_test_run_discard_handler),
         )
         .route(
+            "/social-media/api/autopilot/test-run/{job_id}/retry",
+            post(social_media::autopilot_test_run_retry_handler),
+        )
+        .route(
             "/social-media/api/autopilot/pool",
             get(social_media::autopilot::pool_handler),
         )

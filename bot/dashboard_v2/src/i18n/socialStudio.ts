@@ -223,6 +223,8 @@ export const SOCIAL_STUDIO_EN: Record<string, string> = {
   'Fertig → Bereit zur Vorschau & Freigabe unter „Prüfung & Freigabe“': 'Done → ready for preview & approval under “Review & approval”',
   'Der Testlauf ist fehlgeschlagen: {error}': 'The test run failed: {error}',
   'Der Testlauf wartet auf deine Entscheidung.': 'The test run is waiting for your decision.',
+  'Test verwerfen': 'Discard test',
+  'Wird erneut versucht …': 'Retrying …',
   'Test verwerfen (Clip zurück in den Vorrat)': 'Discard test (return clip to the pool)',
   'Für nächsten Termin einplanen': 'Schedule for next slot',
   'Wird eingeplant …': 'Scheduling …',

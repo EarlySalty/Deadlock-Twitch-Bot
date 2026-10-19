@@ -232,7 +232,7 @@ impl AutopilotWorker {
                 &self.pool,
                 &job.twitch_user_id,
                 job.id,
-                JobCompletion::Review,
+                JobCompletion::Failed,
                 &["ai_editor_unavailable".into()],
                 Some("Der KI-Editor ist noch nicht verfügbar. Bitte prüfe den Auftrag."),
             )
@@ -272,7 +272,7 @@ impl AutopilotWorker {
                 .await?;
             }
             Err(error) => {
-                tracing::warn!(error = %error, job_id = job.id, "AI Auto-Pilot production held for review");
+                tracing::warn!(error = %error, job_id = job.id, "AI Auto-Pilot production finished with an error");
                 let current = production_jobs::get(&self.pool, &job.twitch_user_id, job.id)
                     .await?
                     .ok_or(RunnerError::Source)?;
@@ -284,7 +284,7 @@ impl AutopilotWorker {
                     } else if error.is_source_fetch_failure() {
                         (JobCompletion::Failed, "ai_source_download_failed")
                     } else {
-                        (JobCompletion::Review, "ai_production_failed")
+                        (JobCompletion::Failed, "ai_production_failed")
                     };
                     production_jobs::finish(
                         &self.pool,

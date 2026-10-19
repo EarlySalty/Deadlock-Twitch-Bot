@@ -15,10 +15,11 @@ export function StudioActivity({ twitchUserId, data, onNavigate }: {
   const running = jobs.isError ? 0 : (jobs.data ?? []).filter(job => !['review', 'failed', 'rejected', 'awaiting_confirmation'].includes(job.status)).length;
   const activeImport = !imports.isError && imports.data?.import && ['queued', 'running', 'retry'].includes(imports.data.import.status);
   const productionRunning = (!data.scheduleFailed && data.schedule?.jobs.some(job => job.status === 'running')) || (!data.clipsFailed && data.clips?.some(clip => clip.status === 'publishing')) || (!data.publishFailed && data.publish?.videos.some(video => video.event?.destinations.some(destination => ['preparing', 'effect_started', 'processing'].includes(destination.state))));
+  const testActive = Boolean(!data.scheduleFailed && data.schedule?.test_run);
   return <section className="studio-activity">
     {(jobs.isError || imports.isError) && <p role="alert">{t('Aktivität nicht abrufbar')}</p>}
     {running > 0 && <button type="button" className="studio-button" onClick={() => onNavigate('clips')}>{t('Laufende KI-Aufträge: {count}', { count: running })}</button>}
     {activeImport && <button type="button" className="studio-button" onClick={() => onNavigate('clips')}>{t('Import läuft')}</button>}
-    {!productionRunning && jobs.isSuccess && imports.isSuccess && running === 0 && !activeImport && <p>{t('Gerade läuft nichts.')}</p>}
+    {!productionRunning && !testActive && jobs.isSuccess && imports.isSuccess && running === 0 && !activeImport && <p>{t('Gerade läuft nichts.')}</p>}
   </section>;
 }

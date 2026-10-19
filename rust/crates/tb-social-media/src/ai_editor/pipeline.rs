@@ -1904,10 +1904,10 @@ pub async fn produce(
             ctx.pool,
             &job.twitch_user_id,
             job.id,
-            if error.is_source_fetch_failure() {
-                production_jobs::JobCompletion::Failed
-            } else {
+            if error.is_human_review_hold() {
                 production_jobs::JobCompletion::Review
+            } else {
+                production_jobs::JobCompletion::Failed
             },
             &[error.to_string()],
             Some(&error.to_string()),

@@ -289,12 +289,7 @@ async fn one_failed_or_review_job_does_not_block_the_next_clip_in_both_publish_m
                 .await
                 .expect("job")
                 .expect("kept history");
-            let expected = if failure == "resource" {
-                "review"
-            } else {
-                "failed"
-            };
-            assert_eq!(ended.status, expected);
+            assert_eq!(ended.status, "failed");
             let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
                 .fetch_one(&pool)
                 .await
@@ -321,9 +316,16 @@ async fn park_in_review(pool: &sqlx::PgPool, clip_id: i64) -> i64 {
         .expect("claim")
         .expect("automatic job");
     assert_eq!(running.id, queued.id);
-    retry_or_review(pool, &running, "resource_unavailable", false)
-        .await
-        .expect("review outcome");
+    production_jobs::finish(
+        pool,
+        "owner",
+        running.id,
+        JobCompletion::Review,
+        &[production_jobs::UNSUITABLE_REASON.into()],
+        None,
+    )
+    .await
+    .expect("human review hold");
     queued.id
 }
 

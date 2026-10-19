@@ -715,3 +715,92 @@ async fn discarding_a_revised_test_run_rejects_every_version_and_frees_the_clip(
     assert_eq!(again.clip_id, id);
     cleanup(pool).await;
 }
+
+#[tokio::test]
+async fn retrying_a_failed_test_run_requeues_the_same_clip() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let id = clip(&pool, "owner", "retry-failed", utc("2025-01-01T00:00:00Z")).await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    sqlx::query(
+        "UPDATE social_production_jobs SET status = 'failed', stage = 'failed',
+        last_error = 'Der Clip konnte nicht von Twitch geladen werden.', finished_at = NOW()
+        WHERE id = $1",
+    )
+    .bind(run.job_id)
+    .execute(&pool)
+    .await
+    .expect("failed test");
+    sqlx::query("UPDATE social_clip_pool SET selected_at = NULL WHERE clip_db_id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("unpin");
+    let again = retry_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect("retry");
+    assert_eq!(again.job_id, run.job_id);
+    assert_eq!(again.clip_id, id);
+    assert_eq!(again.status, "queued");
+    assert_eq!(again.stage, "queued");
+    assert_eq!(again.last_error, None);
+    let selected: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT selected_at FROM social_clip_pool WHERE clip_db_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("pin");
+    assert!(selected.is_some());
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn retrying_a_review_without_video_requeues_the_clip() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let id = clip(&pool, "owner", "retry-review", utc("2025-01-01T00:00:00Z")).await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    sqlx::query(
+        "UPDATE social_production_jobs SET status = 'review', stage = 'review',
+        last_error = 'Die erlaubten Versuche sind aufgebraucht.', finished_at = NOW()
+        WHERE id = $1",
+    )
+    .bind(run.job_id)
+    .execute(&pool)
+    .await
+    .expect("review without video");
+    let again = retry_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect("retry empty review");
+    assert_eq!(again.job_id, run.job_id);
+    assert_eq!(again.clip_id, id);
+    assert_eq!(again.status, "queued");
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn retrying_a_test_with_a_review_video_is_rejected() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let id = clip(&pool, "owner", "retry-ready", utc("2025-01-01T00:00:00Z")).await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    sqlx::query("UPDATE social_production_jobs SET status = 'completed' WHERE id = $1")
+        .bind(run.job_id)
+        .execute(&pool)
+        .await
+        .expect("complete");
+    sqlx::query(
+        "INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at)
+        VALUES ('owner', $1, $2, 'static', 'review', '/fixture/ready.mp4', 1000, clock_timestamp() + INTERVAL '7 days')",
+    )
+    .bind(id)
+    .bind(run.job_id)
+    .execute(&pool)
+    .await
+    .expect("review video");
+    let error = retry_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect_err("video stays in review");
+    assert!(matches!(error, ScheduleError::Invalid(_)));
+    cleanup(pool).await;
+}

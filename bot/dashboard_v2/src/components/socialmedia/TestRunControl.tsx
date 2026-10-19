@@ -1,9 +1,9 @@
 import { useMutation } from '@tanstack/react-query';
-import { FlaskConical, Trash2, Zap } from 'lucide-react';
+import { FlaskConical, RotateCcw, Trash2, Zap } from 'lucide-react';
 import { useLanguage, type LanguageContextValue } from '@/context/LanguageContext';
 import type { ScheduleQueueApi, TestRun } from './autopilot/schedule-queue/api';
 
-export type TestRunApi = Pick<ScheduleQueueApi, 'startTestRun' | 'discardTestRun'>;
+export type TestRunApi = Pick<ScheduleQueueApi, 'startTestRun' | 'discardTestRun' | 'retryTestRun'>;
 type Translate = LanguageContextValue['t'];
 
 const DONE_STEP = 4;
@@ -26,6 +26,10 @@ function stepLabels(run: TestRun, t: Translate): string[] {
 
 function errorText(error: unknown, t: Translate): string {
   return error instanceof Error && error.message ? error.message : t('Die Aktion ist fehlgeschlagen.');
+}
+
+function canRetry(run: TestRun): boolean {
+  return run.status === 'failed' || (run.status === 'review' && run.video_status !== 'review');
 }
 
 export function TestRunButton({ testRun, available, api, owner, onChanged }: {
@@ -55,10 +59,12 @@ export function TestRunStatus({ testRun, api, owner, onChanged }: {
 }) {
   const { t } = useLanguage();
   const discard = useMutation({ mutationFn: () => api.discardTestRun(testRun.job_id, owner), onSuccess: () => onChanged?.() });
+  const retry = useMutation({ mutationFn: () => api.retryTestRun(testRun.job_id, owner), onSuccess: () => onChanged?.() });
   const step = currentStep(testRun);
-  const failed = testRun.status === 'failed';
-  const waiting = testRun.status === 'review' && testRun.video_status !== 'review';
+  const failed = canRetry(testRun);
+  const waiting = testRun.video_status === 'review';
   const title = testRun.clip_title || t('Clip {id}', { id: testRun.clip_id });
+  const busy = discard.isPending || retry.isPending;
   return <div className="studio-testrun" data-state={failed ? 'failed' : waiting ? 'waiting' : step === DONE_STEP ? 'done' : 'running'} role="status">
     <div className="studio-testrun-head">
       <span className="studio-mode-badge" data-mode="test"><FlaskConical className="h-3 w-3" aria-hidden />{t('Testlauf')}</span>
@@ -71,9 +77,14 @@ export function TestRunStatus({ testRun, api, owner, onChanged }: {
           const state = number < step || step === DONE_STEP ? 'done' : number === step ? 'current' : 'pending';
           return <li key={number} data-state={state} aria-current={state === 'current' ? 'step' : undefined}>{label}</li>;
         })}</ol>}
-    {testRun.status !== 'running' && <button type="button" className="studio-button studio-testrun-discard" disabled={discard.isPending} onClick={() => discard.mutate()}>
-      <Trash2 className="h-4 w-4" aria-hidden />{t('Test verwerfen (Clip zurück in den Vorrat)')}
-    </button>}
-    {discard.error && <p className="studio-testrun-error" role="alert">{errorText(discard.error, t)}</p>}
+    {testRun.status !== 'running' && <div className="studio-testrun-actions">
+      {failed && <button type="button" className="studio-button studio-testrun-discard" disabled={busy} onClick={() => retry.mutate()}>
+        <RotateCcw className="h-4 w-4" aria-hidden />{t(retry.isPending ? 'Wird erneut versucht …' : 'Erneut versuchen')}
+      </button>}
+      <button type="button" className="studio-button studio-testrun-discard" disabled={busy} onClick={() => discard.mutate()}>
+        <Trash2 className="h-4 w-4" aria-hidden />{t(discard.isPending ? 'Wird verworfen …' : 'Test verwerfen')}
+      </button>
+    </div>}
+    {(retry.error || discard.error) && <p className="studio-testrun-error" role="alert">{errorText(retry.error ?? discard.error, t)}</p>}
   </div>;
 }

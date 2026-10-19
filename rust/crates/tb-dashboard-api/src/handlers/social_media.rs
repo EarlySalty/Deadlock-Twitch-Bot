@@ -119,6 +119,7 @@ pub use autopilot_schedule::{
     resolve_handler as autopilot_queue_resolve_handler,
     test_run_discard_handler as autopilot_test_run_discard_handler,
     test_run_handler as autopilot_test_run_handler,
+    test_run_retry_handler as autopilot_test_run_retry_handler,
 };
 
 const MAX_PARAMETER_LAENGE: usize = 64;

@@ -2088,6 +2088,7 @@ select.studio-select {
 .studio-testrun-steps li[data-state='done']::before { border-color: var(--color-success); background: var(--color-success); }
 .studio-testrun-steps li[data-state='current'] { color: var(--color-text-primary); font-weight: 600; }
 .studio-testrun-steps li[data-state='current']::before { border-color: var(--color-primary); background: var(--color-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 25%, transparent); }
+.studio-testrun-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .studio-testrun-discard { justify-self: start; min-height: 32px; font-size: 12px; }
 .studio-mode-badge[data-mode='test'] { border-color: color-mix(in srgb, var(--color-primary) 55%, transparent); background: color-mix(in srgb, var(--color-primary) 12%, transparent); color: var(--color-primary); }
 .pp-testrun { display: grid; gap: 8px; margin-bottom: 16px; }

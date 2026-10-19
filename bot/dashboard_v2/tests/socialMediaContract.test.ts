@@ -443,6 +443,7 @@ test('route discovery observes schedule and queue callers with optional query st
     `${prefix}/schedule`,
     `${prefix}/test-run`,
     `${prefix}/test-run/:p/discard`,
+    `${prefix}/test-run/:p/retry`,
   ]);
   const routes = new Set(registrierteRouten());
   for (const [original, replacement, missing] of [

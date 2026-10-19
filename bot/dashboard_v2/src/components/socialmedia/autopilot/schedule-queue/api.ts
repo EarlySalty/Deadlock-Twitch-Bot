@@ -109,6 +109,7 @@ export interface ScheduleQueueApi {
   savePolicy(policy: PipelinePolicy, twitchUserId?: string): Promise<PipelinePolicy>;
   startTestRun(twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
   discardTestRun(jobId: number, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
+  retryTestRun(jobId: number, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
 }
 
 const PREFIX = '/twitch/social-media/api/autopilot';
@@ -167,6 +168,9 @@ export const scheduleQueueApi: ScheduleQueueApi = {
   },
   discardTestRun(jobId, twitchUserId) {
     return postAction(`${PREFIX}/test-run/${jobId}/discard`, twitchUserId);
+  },
+  retryTestRun(jobId, twitchUserId) {
+    return postAction(`${PREFIX}/test-run/${jobId}/retry`, twitchUserId);
   },
 };
 
