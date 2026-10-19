@@ -1190,7 +1190,7 @@ async fn reject_demo_writes(req: axum::extract::Request, next: Next) -> Response
     if method == Method::GET || method == Method::HEAD || method == Method::OPTIONS {
         return next.run(req).await;
     }
-    if path == "/twitch/demo/api/v2/ai/analysis" {
+    if method == Method::POST && path == "/twitch/demo/api/v2/ai/analysis" {
         return next.run(req).await;
     }
     if path.starts_with("/twitch/demo/api/v2/") {
@@ -2147,5 +2147,19 @@ mod tests {
         let (status, json) = json_body(resp).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert_eq!(json["error"], "demo_readonly");
+
+        let put_ai = build_demo_router()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/twitch/demo/api/v2/ai/analysis")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (put_status, put_json) = json_body(put_ai).await;
+        assert_eq!(put_status, StatusCode::FORBIDDEN);
+        assert_eq!(put_json["error"], "demo_readonly");
     }
 }
