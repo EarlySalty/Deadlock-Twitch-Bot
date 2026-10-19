@@ -39,10 +39,17 @@ function initials(name: string) {
 function cameraStatus(member: CasterRoleMember) {
   const camera = member.camera;
   if (!camera) return { text: 'Noch kein Kamera-Link', tone: 'text-white/45' };
-  if (camera.revoked) return { text: 'Link widerrufen', tone: 'text-danger' };
+  if (camera.revoked) return { text: 'Link widerrufen, von dir oder vom Caster', tone: 'text-danger' };
   if (camera.online) return { text: 'Online · Live abrufbar', tone: 'text-success' };
   if (camera.consentEnabled) return { text: 'Freigegeben · aktuell offline', tone: 'text-primary-hover' };
   return { text: 'Link erstellt · noch nicht geöffnet', tone: 'text-white/60' };
+}
+
+function otherCameraTitle(camera: CasterCamera, roleListReliable: boolean) {
+  if (!camera.ownerLogin.startsWith('discord_')) return `${camera.label} · @${camera.ownerLogin}`;
+  return roleListReliable
+    ? `Ehemalige Caster-Kamera · ${camera.label}`
+    : `Caster-Kamera · ${camera.label} · Rolle gerade nicht prüfbar`;
 }
 
 function activeCameraId(member: CasterRoleMember | undefined) {
@@ -85,6 +92,7 @@ export default function CasterOverlayPage() {
   const [saved, setSaved] = useState('');
   const [casters, setCasters] = useState<CasterRoleMember[]>([]);
   const [castersReason, setCastersReason] = useState('');
+  const [castersIncomplete, setCastersIncomplete] = useState(false);
   const [invites, setInvites] = useState<Record<string, string>>({});
   const [cameras, setCameras] = useState<CasterCamera[]>([]);
   const [teams, setTeams] = useState<CasterContextTeam[]>([]);
@@ -133,8 +141,10 @@ export default function CasterOverlayPage() {
       if (casterResult.status === 'fulfilled') {
         setCasters(casterResult.value.items ?? []);
         setCastersReason(casterResult.value.available ? '' : casterResult.value.reason || 'nicht verfügbar');
+        setCastersIncomplete(casterResult.value.available && casterResult.value.complete === false);
       } else {
         setCastersReason('Die Rolle Turnier Caster konnte nicht geladen werden.');
+        setCastersIncomplete(false);
       }
       if (cameraResult.status === 'fulfilled') setCameras(cameraResult.value);
       if (contextResult.status === 'fulfilled') {
@@ -190,7 +200,7 @@ export default function CasterOverlayPage() {
       roster: value.roster.map((item) =>
         item.id === personId
           ? member
-            ? { ...item, discordId, name: member.displayName.slice(0, 60), cameraId: activeCameraId(member) ?? item.cameraId ?? null }
+            ? { ...item, discordId, name: member.displayName.slice(0, 60), cameraId: activeCameraId(member) }
             : { ...item, discordId: null }
           : item,
       ),
@@ -271,7 +281,7 @@ export default function CasterOverlayPage() {
           ),
         }));
       }
-      setStatus(`Kamera-Link für ${member.displayName} erstellt. Er wird nur jetzt angezeigt und gilt, bis du ihn widerrufst.`);
+      setStatus(`Kamera-Link für ${member.displayName} erstellt. Er wird nur jetzt angezeigt und gilt, bis du oder ${member.displayName} ihn widerruft.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Kamera-Link konnte nicht erstellt werden.');
     } finally {
@@ -295,7 +305,7 @@ export default function CasterOverlayPage() {
       await revokeCasterCamera(camera.cameraId);
       setCameras((items) =>
         items.map((item) =>
-          item.cameraId === camera.cameraId ? { ...item, consentEnabled: false, online: false } : item,
+          item.cameraId === camera.cameraId ? { ...item, consentEnabled: false, online: false, revoked: true } : item,
         ),
       );
       setCasters((items) =>
@@ -322,7 +332,9 @@ export default function CasterOverlayPage() {
   }
 
   const notify = { status: setStatus, error: setError };
+  const listedCasterCameraIds = new Set(casters.map((member) => member.camera?.cameraId).filter(Boolean));
   const legacyCameras = cameras.filter((camera) => !camera.ownerLogin.startsWith('discord_'));
+  const otherCameras = cameras.filter((camera) => !camera.revoked && !listedCasterCameraIds.has(camera.cameraId));
   const rosterDiscordIds = new Set(scene?.roster.map((person) => person.discordId).filter(Boolean));
   const previewUrl = overlayPages.find((page) => page.id === previewPage)?.url ?? overlayPages[0].url;
   const observerCandidates = [scene?.matchContext.teamA, scene?.matchContext.teamB]
@@ -520,6 +532,11 @@ export default function CasterOverlayPage() {
                 Caster-Liste gerade nicht verfügbar: {castersReason}
               </div>
             )}
+            {castersIncomplete && (
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary-hover">
+                Die Caster-Liste ist eventuell unvollständig. Discord hat gerade nicht alle Mitglieder der Rolle geliefert.
+              </div>
+            )}
             <div className="flex flex-wrap gap-2">
               {scene.roster.map((person) => (
                 <span
@@ -558,9 +575,11 @@ export default function CasterOverlayPage() {
                           {person.discordId && !member && (
                             <option value={person.discordId}>Nicht mehr in der Caster-Rolle</option>
                           )}
-                          {casters.map((item) => (
-                            <option key={item.discordId} value={item.discordId}>{item.displayName}</option>
-                          ))}
+                          {casters
+                            .filter((item) => item.discordId === person.discordId || !rosterDiscordIds.has(item.discordId))
+                            .map((item) => (
+                              <option key={item.discordId} value={item.discordId}>{item.displayName}</option>
+                            ))}
                         </select>
                       </label>
                       <label className="text-xs text-white/55">
@@ -670,7 +689,7 @@ export default function CasterOverlayPage() {
             <div>
               <h2 className="text-lg font-semibold text-white">Community-Kamera-Portal</h2>
               <p className="mt-1 text-sm text-white/60">
-                Jede Person mit der Rolle Turnier Caster hat genau eine feste Kamera. Der Link gilt dauerhaft, bis du ihn widerrufst oder neu erstellst. Wir speichern nur Kamera-ID, Zuordnung und Freigabestatus, keine Videodatei.
+                Jede Person mit der Rolle Turnier Caster hat genau eine feste Kamera. Der Link gilt dauerhaft, bis du ihn widerrufst oder neu erstellst. Der Caster kann ihn auch selbst auf der Kamera-Seite widerrufen. Wir speichern nur Kamera-ID, Zuordnung und Freigabestatus, keine Videodatei.
               </p>
             </div>
 
@@ -723,14 +742,16 @@ export default function CasterOverlayPage() {
               {casters.length === 0 && !castersReason && <p className="text-sm text-white/50">Niemand hat gerade die Rolle Turnier Caster.</p>}
             </div>
 
-            {legacyCameras.length > 0 && (
-              <details className="rounded-xl border border-white/10 bg-black/20 p-4">
-                <summary className="cursor-pointer text-sm text-white/70">Ältere Kamera-Links ({legacyCameras.length})</summary>
+            {otherCameras.length > 0 && (
+              <details className="rounded-xl border border-white/10 bg-black/20 p-4" open={otherCameras.some((camera) => camera.ownerLogin.startsWith('discord_'))}>
+                <summary className="cursor-pointer text-sm text-white/70">Weitere aktive Kamera-Links ({otherCameras.length})</summary>
                 <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
-                  {legacyCameras.map((camera) => (
+                  {otherCameras.map((camera) => (
                     <div key={camera.cameraId} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/25 p-4">
-                      <div>
-                        <div className="font-semibold text-white">{camera.label} · @{camera.ownerLogin}</div>
+                      <div className="min-w-0">
+                        <div className="font-semibold text-white">
+                          {otherCameraTitle(camera, !castersReason && !castersIncomplete)}
+                        </div>
                         <div className={`mt-2 text-sm ${camera.online ? 'text-success' : camera.consentEnabled ? 'text-primary-hover' : 'text-white/45'}`}>
                           {camera.online ? 'Online · Live abrufbar' : camera.consentEnabled ? 'Freigegeben · aktuell offline' : 'Nicht freigegeben'}
                         </div>

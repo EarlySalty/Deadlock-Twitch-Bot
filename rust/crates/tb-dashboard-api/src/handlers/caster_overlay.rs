@@ -570,7 +570,7 @@ pub async fn list_cameras_handler(
         return Err(error);
     }
     let rows = sqlx::query(
-        "SELECT camera_id, owner_login, label, consent_enabled, created_at, last_connected_at FROM twitch_caster_cameras ORDER BY owner_login, label, camera_id",
+        "SELECT camera_id, owner_login, label, consent_enabled, revoked_at IS NOT NULL AS revoked, created_at, last_connected_at FROM twitch_caster_cameras ORDER BY owner_login, label, camera_id",
     )
     .fetch_all(&pool)
     .await
@@ -583,6 +583,7 @@ pub async fn list_cameras_handler(
             "ownerLogin": row.try_get::<String,_>("owner_login").map_err(db_error)?,
             "label": row.try_get::<String,_>("label").map_err(db_error)?,
             "consentEnabled": row.try_get::<bool,_>("consent_enabled").map_err(db_error)?,
+            "revoked": row.try_get::<bool,_>("revoked").map_err(db_error)?,
             "online": camera_online(&camera_id).await,
             "createdAt": row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map_err(db_error)?,
             "lastConnectedAt": row.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("last_connected_at").map_err(db_error)?,
@@ -676,6 +677,13 @@ struct RoleMembersResponse {
     #[serde(default)]
     ok: bool,
     #[serde(default)]
+    complete: bool,
+    #[serde(default)]
+    members: Vec<RoleMember>,
+}
+
+struct RoleMembers {
+    complete: bool,
     members: Vec<RoleMember>,
 }
 
@@ -684,9 +692,16 @@ fn discord_id_valid(id: &str) -> bool {
 }
 
 fn broker_base_url() -> String {
-    std::env::var("MASTER_BROKER_BASE_URL")
+    tb_config::runtime::settings()
         .ok()
-        .map(|value| value.trim().trim_end_matches('/').to_owned())
+        .map(|config| {
+            config
+                .broker
+                .base_url
+                .trim()
+                .trim_end_matches('/')
+                .to_owned()
+        })
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "http://127.0.0.1:8770".to_owned())
 }
@@ -706,7 +721,7 @@ fn caster_camera_label(display_name: &str) -> String {
     }
 }
 
-async fn caster_role_members() -> Result<Vec<RoleMember>, &'static str> {
+async fn caster_role_members() -> Result<RoleMembers, &'static str> {
     let url = format!(
         "{}/internal/master/v1/discord/role-members",
         broker_base_url()
@@ -717,9 +732,11 @@ async fn caster_role_members() -> Result<Vec<RoleMember>, &'static str> {
         .timeout(std::time::Duration::from_secs(6))
         .build()
         .map_err(|_| "broker_client")?;
-    let mut request = client
-        .get(url)
-        .query(&[("guild_id", CASTER_GUILD_ID), ("role_id", CASTER_ROLE_ID)]);
+    let mut request = client.get(url).query(&[
+        ("guild_id", CASTER_GUILD_ID),
+        ("role_id", CASTER_ROLE_ID),
+        ("live", "true"),
+    ]);
     if let Some(token) =
         super::discord_link::broker_token_from(crate::uplink_config::platform_value)
     {
@@ -743,7 +760,10 @@ async fn caster_role_members() -> Result<Vec<RoleMember>, &'static str> {
         .filter(|member| discord_id_valid(&member.id))
         .collect::<Vec<_>>();
     members.sort_by_key(|member| member.display_name.to_lowercase());
-    Ok(members)
+    Ok(RoleMembers {
+        complete: body.complete,
+        members,
+    })
 }
 
 pub async fn casters_handler(
@@ -753,8 +773,8 @@ pub async fn casters_handler(
     if let Some(error) = crate::auth::require_admin(&auth) {
         return Err(error);
     }
-    let members = match caster_role_members().await {
-        Ok(members) => members,
+    let RoleMembers { complete, members } = match caster_role_members().await {
+        Ok(result) => result,
         Err(reason) => {
             return Ok((
                 [(header::CACHE_CONTROL, "no-store")],
@@ -803,7 +823,7 @@ pub async fn casters_handler(
         .collect::<Vec<_>>();
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(json!({"available":true,"items":items})),
+        Json(json!({"available":true,"complete":complete,"items":items})),
     ))
 }
 
@@ -818,8 +838,8 @@ pub async fn caster_camera_handler(
     if !discord_id_valid(&discord_id) {
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
-    let members = match caster_role_members().await {
-        Ok(members) => members,
+    let RoleMembers { complete, members } = match caster_role_members().await {
+        Ok(result) => result,
         Err(_) => {
             return Ok((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -829,6 +849,13 @@ pub async fn caster_camera_handler(
         }
     };
     let Some(member) = members.into_iter().find(|member| member.id == discord_id) else {
+        if !complete {
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"message":"Die Caster-Rolle ist gerade nur unvollständig abrufbar. Bitte versuch es gleich noch einmal."})),
+            )
+                .into_response());
+        }
         return Ok((
             StatusCode::FORBIDDEN,
             Json(json!({"message":"Diese Person hat die Rolle Turnier Caster nicht."})),
@@ -1515,6 +1542,7 @@ mod tests {
         }))
         .expect("broker body");
         assert!(body.ok);
+        assert!(!body.complete);
         assert_eq!(body.members[0].display_name, "ZeRo");
         assert!(discord_id_valid("426770757989957633"));
         assert!(!discord_id_valid("42a"));

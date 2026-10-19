@@ -1489,6 +1489,7 @@ export interface CasterCamera {
   ownerLogin: string;
   label: string;
   consentEnabled: boolean;
+  revoked?: boolean;
   online: boolean;
   createdAt?: string;
   lastConnectedAt?: string | null;
@@ -1536,6 +1537,7 @@ export interface CasterRoleMember {
 }
 export interface CasterRoleMembers {
   available: boolean;
+  complete?: boolean;
   reason?: string;
   items: CasterRoleMember[];
 }
