@@ -11,11 +11,12 @@ export interface ScheduleQueuePanelProps {
   reloadKey?: number;
   layoutSlot?: ReactNode;
   aiOptionsSlot?: ReactNode;
+  onOpenHeute?: () => void;
 }
 
-export function ScheduleQueuePanel({ twitchUserId, api = scheduleQueueApi, onChanged, reloadKey = 0, layoutSlot, aiOptionsSlot }: ScheduleQueuePanelProps) {
+export function ScheduleQueuePanel({ twitchUserId, api = scheduleQueueApi, onChanged, reloadKey = 0, layoutSlot, aiOptionsSlot, onOpenHeute }: ScheduleQueuePanelProps) {
   return <div className="pp-stack">
     <PipelinePlanControls key={twitchUserId ?? 'self'} twitchUserId={twitchUserId} api={api} onChanged={onChanged} reloadKey={reloadKey}
-      layoutSlot={layoutSlot} aiOptionsSlot={aiOptionsSlot} />
+      layoutSlot={layoutSlot} aiOptionsSlot={aiOptionsSlot} onOpenHeute={onOpenHeute} />
   </div>;
 }

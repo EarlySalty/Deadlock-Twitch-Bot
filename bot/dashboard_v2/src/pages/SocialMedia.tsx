@@ -416,7 +416,8 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
             ) : (
               <ScheduleQueuePanel twitchUserId={twitchUserId} api={scheduleApi} onChanged={refreshSchedule} reloadKey={reloadKey}
                 layoutSlot={layoutCards}
-                aiOptionsSlot={AiEditor && twitchUserId ? <AiPlanOptions channel={twitchUserId} onOpenSettings={() => openView('einstellungen')} /> : undefined} />
+                aiOptionsSlot={AiEditor && twitchUserId ? <AiPlanOptions channel={twitchUserId} onOpenSettings={() => openView('einstellungen')} /> : undefined}
+                onOpenHeute={() => openView('heute')} />
             )}
           </div>
         ) : activeView === 'vod' ? (

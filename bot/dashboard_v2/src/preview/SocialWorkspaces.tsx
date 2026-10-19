@@ -85,7 +85,11 @@ function PreviewImport({
 export default function SocialWorkspaces(props: SocialMediaProps) {
   const t = useT();
   const [scheduleApi] = useState(createPreviewScheduleApi);
-  const [publishFixture] = useState(() => createPublishReviewFixture(studioPreviewPublish(createPublishReviewFixture().snapshot())));
+  const [publishFixture] = useState(() => {
+    const snapshot = studioPreviewPublish(createPublishReviewFixture().snapshot());
+    const fixture = new URLSearchParams(window.location.search).get('fixture');
+    return createPublishReviewFixture(fixture === 'idle' ? { ...snapshot, videos: [] } : snapshot);
+  });
   const workspaceSlots = {
     ...props.workspaceSlots,
     libraryImport: props.workspaceSlots?.libraryImport ?? (

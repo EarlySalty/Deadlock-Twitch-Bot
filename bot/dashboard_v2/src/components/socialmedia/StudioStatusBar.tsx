@@ -4,7 +4,8 @@ import type { ClipPoolForecast } from '@/types/socialMedia';
 import type { StudioOverviewData } from './StudioOverview';
 import type { SocialMediaViewTarget } from './labels';
 import { connectionFact } from './platformPresentation';
-import type { QueueStage } from './queuePresentation';
+import { formatTerminInZone, type QueueStage } from './queuePresentation';
+import { studioNextStep } from './studioNextStep';
 
 export function StudioStatusBar({ data, pool, poolFailed, onNavigate }: {
   data: StudioOverviewData;
@@ -12,11 +13,17 @@ export function StudioStatusBar({ data, pool, poolFailed, onNavigate }: {
   poolFailed?: boolean;
   onNavigate: (view: SocialMediaViewTarget, stage?: QueueStage) => void;
 }) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
+  const timezone = data.schedule?.settings.timezone ?? data.timezone;
+  const next = studioNextStep(data, t, (iso) => formatTerminInZone(iso, locale, timezone));
   const connected = data.platformsFailed || !data.platforms ? null : data.platforms.filter(status =>
     ['youtube', 'tiktok', 'instagram'].includes(status.platform) && connectionFact(status).state === 'connected',
   ).length;
   return <section className="studio-status-bar" aria-label={t('Stand auf einen Blick')}>
+    <button type="button" className="studio-next-step" data-tone={next.tone} onClick={() => onNavigate(next.view, next.stage)}>
+      <strong>{t('Nächster Schritt')}</strong>
+      <span>{next.text}</span>
+    </button>
     <button type="button" data-tone={connected === 3 ? 'success' : 'warning'} onClick={() => onNavigate('einstellungen')}>
       {connected === null ? `${t('Konten')} · ${t(data.platformsFailed ? 'Nicht abrufbar' : 'Wird geladen')}` : t('Konten verbunden {count}/3', { count: connected })}
     </button>

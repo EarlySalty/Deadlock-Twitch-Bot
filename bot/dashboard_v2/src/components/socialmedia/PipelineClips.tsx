@@ -118,6 +118,7 @@ export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, b
 
   return (
     <div className="pipeline-clips">
+      <p className="pipeline-clips-help">{t('Das sind deine Twitch-Clips. Auto-Pilot lädt die Datei erst, wenn ein Clip an der Reihe ist.')}</p>
       <div className="pipeline-clips-filters" role="group" aria-label={t('Clips filtern')}>
         <div className="studio-filters">
           {QUEUE_FILTERS.map((item) => (

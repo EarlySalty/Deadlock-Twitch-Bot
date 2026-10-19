@@ -103,8 +103,8 @@ export type SocialMediaViewTarget = SocialMediaView | 'freigabe' | 'veroeffentli
 
 export const SOCIAL_MEDIA_TABS: Array<{ id: SocialMediaView; label: string }> = [
   { id: 'heute', label: 'Heute' },
-  { id: 'clips', label: 'Clips' },
   { id: 'planen', label: 'Planen' },
+  { id: 'clips', label: 'Clips' },
   { id: 'vod', label: 'VOD-Archiv' },
   { id: 'einstellungen', label: 'Einstellungen' },
 ];

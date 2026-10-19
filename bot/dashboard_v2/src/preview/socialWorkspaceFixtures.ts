@@ -1,4 +1,4 @@
-import type { QueueJob, ScheduleQueueApi, ScheduleQueueSnapshot } from '../components/socialmedia/autopilot/schedule-queue/api';
+import type { QueueJob, ScheduleQueueApi, ScheduleQueueSnapshot, TestRun } from '../components/socialmedia/autopilot/schedule-queue/api';
 import type { PublishSnapshot } from '../components/socialmedia/autopilot/publish-review/api';
 
 export type PreviewWorkspaceState = 'ready' | 'loading' | 'error' | 'empty';
@@ -36,12 +36,42 @@ function studioPreviewJobs(snapshot: ScheduleQueueSnapshot): QueueJob[] {
   ];
 }
 
+function previewTestRun(kind: 'running' | 'failed' | 'ready'): TestRun {
+  const base = {
+    job_id: 900,
+    clip_id: 45,
+    clip_title: 'Testclip aus dem Vorrat',
+    mode: 'static' as const,
+    last_error: null as string | null,
+    video_id: null as number | null,
+    video_status: null as string | null,
+  };
+  if (kind === 'running') return { ...base, status: 'running', stage: 'downloading' };
+  if (kind === 'failed') {
+    return { ...base, status: 'failed', stage: 'failed', last_error: 'Clip fehlt auf Twitch.' };
+  }
+  return { ...base, status: 'review', stage: 'review', video_id: 1, video_status: 'review' };
+}
+
 export function withStudioPreviewJobs(api: ScheduleQueueApi): ScheduleQueueApi {
+  const fixture = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('fixture');
   return {
     ...api,
     load: async (owner, signal) => {
       const snapshot = await api.load(owner, signal);
-      return { ...snapshot, jobs: studioPreviewJobs(snapshot) };
+      const jobs = studioPreviewJobs(snapshot);
+      if (fixture === 'idle') {
+        return {
+          ...snapshot,
+          jobs,
+          test_run: null,
+          settings: { ...snapshot.settings, enabled: false, paused: false },
+        };
+      }
+      if (fixture === 'test-running') return { ...snapshot, jobs, test_run: previewTestRun('running') };
+      if (fixture === 'test-failed') return { ...snapshot, jobs, test_run: previewTestRun('failed') };
+      if (fixture === 'test-ready') return { ...snapshot, jobs, test_run: previewTestRun('ready') };
+      return { ...snapshot, jobs };
     },
   };
 }

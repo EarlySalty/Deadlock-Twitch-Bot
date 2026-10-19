@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 
 import { CalendarClock, Plus, X } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { platformIconUrl } from './platformIcon';
-import { TestRunButton, TestRunStatus } from './TestRunControl';
+import { TestRunButton, TestRunGlance } from './TestRunControl';
 import type { PolicyPreview, PolicyScope, ScheduleQueueApi, WeeklySlot } from './autopilot/schedule-queue/api';
 import {
   AI_MODES, DISTRIBUTION_NOTES, HOLDS, PATHS, REVIEWS, SCOPES, SHARED_TEXT, TAB_ORDER, TEXT_SCOPES, WEEKDAYS, addTime, failureText, invalidPlatforms, isDirty, loadPlan, normalizeTime, planDraft, planPreview,
@@ -28,9 +28,10 @@ export interface PipelinePlanControlsProps {
   reloadKey?: number;
   layoutSlot?: ReactNode;
   aiOptionsSlot?: ReactNode;
+  onOpenHeute?: () => void;
 }
 
-export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey = 0, layoutSlot, aiOptionsSlot }: PipelinePlanControlsProps) {
+export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey = 0, layoutSlot, aiOptionsSlot, onOpenHeute }: PipelinePlanControlsProps) {
   const { language, locale } = useLanguage();
   const text = planText(language);
   const id = useId();
@@ -141,7 +142,7 @@ export function PipelinePlanControls({ twitchUserId, api, onChanged, reloadKey =
     <div className="pp-testrun">
       <TestRunButton testRun={base.snapshot.test_run} available={!dirty && !saving} api={api} owner={twitchUserId} onChanged={testRunChanged} />
       {dirty && !base.snapshot.test_run && <p className="sq-help">{text('Speichere zuerst deine Änderungen, damit der Testlauf sie verwendet.')}</p>}
-      {base.snapshot.test_run && <TestRunStatus testRun={base.snapshot.test_run} api={api} owner={twitchUserId} onChanged={testRunChanged} />}
+      {base.snapshot.test_run && <TestRunGlance testRun={base.snapshot.test_run} onOpenHeute={onOpenHeute} />}
     </div>
     <form className="pp-form" onSubmit={event => { event.preventDefault(); void submit(); }}>
       <fieldset className="pp-steps" disabled={saving}>

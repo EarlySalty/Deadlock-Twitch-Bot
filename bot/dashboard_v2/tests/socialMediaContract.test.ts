@@ -55,6 +55,7 @@ import {
   STATUS_META,
   ZUGRIFF_LABELS,
 } from '../src/components/socialmedia/labels';
+import { QUEUE_FILTERS } from '../src/components/socialmedia/queuePresentation';
 
 const HIER = path.dirname(fileURLToPath(import.meta.url));
 const WURZEL = path.resolve(HIER, '..');
@@ -113,6 +114,7 @@ const TABELLEN: Record<string, string[]> = {
   ]),
   STATUS_META: Object.values(STATUS_META).map((eintrag) => eintrag.label),
   SOCIAL_MEDIA_TABS: SOCIAL_MEDIA_TABS.map((eintrag) => eintrag.label),
+  QUEUE_FILTERS: QUEUE_FILTERS.map((eintrag) => eintrag.label),
   STATUS_FILTER: [ALLE_LABEL],
   ZUGRIFF_LABELS: Object.values(ZUGRIFF_LABELS),
   KATEGORIE_LABELS: Object.values(KATEGORIE_LABELS),
@@ -200,6 +202,7 @@ test('der Regex findet ueberhaupt Schluessel', () => {
  */
 const BEWUSST_GETEILT: Record<string, string> = {
   Fehler: 'Clip-Status und Enrichment-Status meinen beide "fehlgeschlagen".',
+  Alle: 'Filter und Status meinen dieselbe Gesamtmenge.',
   'Clip freigegeben': 'Clip-Status und Approval-Zustand meinen dieselbe Entscheidung.',
   Übersprungen: 'Clip-Status und Approval-Zustand meinen dasselbe Ueberspringen.',
 };

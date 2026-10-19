@@ -10,7 +10,12 @@ import {
   loadQueueSnapshot,
   sourceStage,
   sourceMatchesStage,
+  QUEUE_FILTERS,
 } from '../src/components/socialmedia/queuePresentation';
+import { SOCIAL_MEDIA_TABS } from '../src/components/socialmedia/labels';
+import { studioNextStep } from '../src/components/socialmedia/studioNextStep';
+import type { StudioOverviewData } from '../src/components/socialmedia/StudioOverview';
+import type { TestRun } from '../src/components/socialmedia/autopilot/schedule-queue/api';
 import type { PipelineSource } from '../src/components/socialmedia/pipelineApi';
 import type { SocialClipMitPosting } from '../src/api/socialMedia';
 import { upcomingTerms, upcomingTermView } from '../src/components/socialmedia/upcomingTerms';
@@ -202,6 +207,84 @@ test('upcoming terms exclude past and invalid dates while preserving legacy time
     { key: '2-youtube', at: '2026-10-15T10:00:00Z', timezone: 'Europe/Berlin' },
   ]);
   assert.deepEqual(upcomingTerms({ ...data, clipsFailed: true }, Date.parse('2026-10-14T12:00:00Z')), []);
+});
+
+test('studio tabs start with Heute then Planen then Clips', () => {
+  assert.deepEqual(SOCIAL_MEDIA_TABS.map((tab) => tab.id), ['heute', 'planen', 'clips', 'vod', 'einstellungen']);
+  assert.deepEqual(QUEUE_FILTERS.map((item) => item.label), ['Alle', 'Neu', 'In Vorbereitung', 'Prüfung', 'Geplant', 'Gepostet', 'Fehler', 'Archiv']);
+});
+
+const nextT = (key: string, params?: Record<string, string | number>) =>
+  key.replace(/\{(\w+)\}/g, (_, name) => String(params?.[name] ?? `{${name}}`));
+
+function overview(schedule = createScheduleQueueFixture().snapshot()): StudioOverviewData {
+  return {
+    schedule,
+    scheduleFailed: false,
+    publish: undefined,
+    publishFailed: false,
+    clips: undefined,
+    clipsFailed: false,
+    platforms: undefined,
+    platformsFailed: false,
+    timezone: 'Europe/Berlin',
+  };
+}
+
+function testRun(patch: Partial<TestRun>): TestRun {
+  return {
+    job_id: 1,
+    clip_id: 9,
+    clip_title: 'Clip',
+    status: 'running',
+    stage: 'starting',
+    mode: 'static',
+    last_error: null,
+    video_id: null,
+    video_status: null,
+    ...patch,
+  };
+}
+
+test('status bar names the current studio step', () => {
+  const time = (iso: string) => iso;
+  const withRun = (run: TestRun) => {
+    const schedule = createScheduleQueueFixture().snapshot();
+    schedule.test_run = run;
+    return studioNextStep(overview(schedule), nextT, time).text;
+  };
+  assert.equal(withRun(testRun({ stage: 'starting' })), 'Testlauf: Datei wird von Twitch geladen.');
+  assert.equal(withRun(testRun({ stage: 'analyzing' })), 'Testlauf: Clip wird vorbereitet.');
+  assert.equal(
+    withRun(testRun({ status: 'failed', last_error: 'Clip fehlt auf Twitch.' })),
+    'Testlauf fehlgeschlagen: Clip fehlt auf Twitch. Auf Heute erneut versuchen oder verwerfen.',
+  );
+  assert.equal(
+    withRun(testRun({ status: 'failed', last_error: 'Download fehlgeschlagen' })),
+    'Testlauf fehlgeschlagen: Download fehlgeschlagen. Auf Heute erneut versuchen oder verwerfen.',
+  );
+  assert.equal(
+    withRun(testRun({ status: 'review', video_status: 'review' })),
+    'Fertiges Video wartet auf Heute unter Prüfung & Freigabe.',
+  );
+  const failed = createScheduleQueueFixture().snapshot();
+  failed.test_run = null;
+  failed.jobs = [{ ...failed.jobs[0], status: 'failed', source: 'autopilot' }];
+  assert.equal(
+    studioNextStep(overview(failed), nextT, time).text,
+    'Auto-Pilot aktiv, aber die letzte Vorbereitung ist fehlgeschlagen. Öffne Heute.',
+  );
+  const idle = createScheduleQueueFixture().snapshot();
+  idle.settings.enabled = false;
+  idle.test_run = null;
+  assert.equal(
+    studioNextStep(overview(idle), nextT, time).text,
+    'Nichts läuft gerade. Auf Planen kannst du die Pipeline testen.',
+  );
+  assert.equal(
+    studioNextStep(overview(), nextT, time).text,
+    'Auto-Pilot aktiv. Nächster Termin 2026-10-12T16:00:00Z. Kein Eingriff nötig.',
+  );
 });
 
 test('five canonical views resolve every historical workspace without dropping OAuth', () => {

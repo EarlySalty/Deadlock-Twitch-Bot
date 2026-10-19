@@ -2,6 +2,7 @@ import { useMutation } from '@tanstack/react-query';
 import { FlaskConical, RotateCcw, Trash2, Zap } from 'lucide-react';
 import { useLanguage, type LanguageContextValue } from '@/context/LanguageContext';
 import type { ScheduleQueueApi, TestRun } from './autopilot/schedule-queue/api';
+import { sentenceFragment } from './studioNextStep';
 
 export type TestRunApi = Pick<ScheduleQueueApi, 'startTestRun' | 'discardTestRun' | 'retryTestRun'>;
 type Translate = LanguageContextValue['t'];
@@ -30,6 +31,28 @@ function errorText(error: unknown, t: Translate): string {
 
 function canRetry(run: TestRun): boolean {
   return run.status === 'failed' || (run.status === 'review' && run.video_status !== 'review');
+}
+
+export function TestRunGlance({ testRun, onOpenHeute }: {
+  testRun: TestRun;
+  onOpenHeute?: () => void;
+}) {
+  const { t } = useLanguage();
+  const failed = canRetry(testRun);
+  const waiting = testRun.video_status === 'review';
+  const line = failed
+    ? t('Testlauf fehlgeschlagen: {error}. Auf Heute erneut versuchen oder verwerfen.', {
+      error: sentenceFragment(testRun.last_error || t('Unbekannter Fehler')),
+    })
+    : waiting
+      ? t('Fertiges Video wartet auf Heute unter Prüfung & Freigabe.')
+      : t(['queued', 'starting', 'preparing', 'source', 'downloading'].includes(testRun.stage)
+        ? 'Testlauf: Datei wird von Twitch geladen.'
+        : 'Testlauf: Clip wird vorbereitet.');
+  return <div className="studio-testrun-glance" role="status">
+    <p>{line}</p>
+    {onOpenHeute && <button type="button" className="studio-overview-link" onClick={onOpenHeute}>{t('Auf Heute ansehen')}</button>}
+  </div>;
 }
 
 export function TestRunButton({ testRun, available, api, owner, onChanged }: {

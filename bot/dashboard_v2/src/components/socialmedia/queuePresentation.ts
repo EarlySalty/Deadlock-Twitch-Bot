@@ -7,10 +7,10 @@ export const QUEUE_FILTERS: Array<{ id: QueueStage; label: string }> = [
   { id: 'all', label: 'Alle' },
   { id: 'new', label: 'Neu' },
   { id: 'preparing', label: 'In Vorbereitung' },
-  { id: 'review', label: 'Wartet auf Freigabe' },
+  { id: 'review', label: 'Prüfung' },
   { id: 'planned', label: 'Geplant' },
   { id: 'posted', label: 'Gepostet' },
-  { id: 'failed', label: 'Aussortiert / Fehler' },
+  { id: 'failed', label: 'Fehler' },
   { id: 'archive', label: 'Archiv' },
 ];
 
