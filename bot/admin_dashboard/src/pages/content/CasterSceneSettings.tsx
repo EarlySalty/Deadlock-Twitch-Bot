@@ -17,7 +17,7 @@ import {
   type CasterSceneCoach,
   type CasterSceneTeam,
 } from '@/api/client';
-import { builtinEventLogos, eventLogoUrl, fromLocalInput, publicUrl, toLocalInput } from './casterScene';
+import { assetUrl, builtinEventLogos, eventLogoUrl, fromLocalInput, publicUrl, toLocalInput } from './casterScene';
 
 type Side = 'teamA' | 'teamB';
 type Edit = (change: (value: CasterScene) => CasterScene) => void;
@@ -338,7 +338,10 @@ function TeamCard({ side, index, scene, teams, edit, busy, logos, library }: Tea
   return (
     <div className="space-y-3 rounded-xl border border-white/10 bg-black/25 p-4">
       <div className="flex items-center gap-3">
-        <LogoPreview url={publicUrl(selectedLogo?.url ?? null)} alt={`Logo ${team?.name || `Team ${index + 1}`}`} />
+        <LogoPreview
+          url={publicUrl(selectedLogo?.url ?? (team?.logoAssetId ? assetUrl(team.logoAssetId) : null))}
+          alt={`Logo ${team?.name || `Team ${index + 1}`}`}
+        />
         <strong className="text-white">{index === 0 ? 'Team links' : 'Team rechts'} (vor dem Tausch)</strong>
       </div>
       <label className="block text-sm text-white/65">
@@ -375,7 +378,12 @@ function TeamCard({ side, index, scene, teams, edit, busy, logos, library }: Tea
             value={team?.short ?? ''}
             maxLength={8}
             disabled={busy}
-            onChange={(event) => update((value) => ({ ...value, short: event.target.value.toUpperCase() }))}
+            onChange={(event) =>
+              update((value) => ({
+                ...value,
+                short: event.target.value.trim() ? event.target.value.toUpperCase() : null,
+              }))
+            }
           />
         </label>
       </div>

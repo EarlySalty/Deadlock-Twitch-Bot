@@ -54,7 +54,11 @@ pub struct Caster {
     pub id: String,
     pub name: String,
     pub handle: String,
-    #[serde(default, rename = "accountLogin", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "accountLogin",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub account_login: Option<String>,
     #[serde(default, rename = "discordId", skip_serializing_if = "Option::is_none")]
     pub discord_id: Option<String>,
@@ -62,7 +66,11 @@ pub struct Caster {
     pub camera_url: String,
     #[serde(default, rename = "cameraId", skip_serializing_if = "Option::is_none")]
     pub camera_id: Option<String>,
-    #[serde(default, rename = "steamAccountId", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "steamAccountId",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub steam_account_id: Option<i64>,
     #[serde(default, rename = "teamId", skip_serializing_if = "Option::is_none")]
     pub team_id: Option<String>,
@@ -79,9 +87,18 @@ pub struct ScenePlayer {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct SceneCoach {
+    pub name: String,
+    #[serde(default, rename = "discordId", skip_serializing_if = "Option::is_none")]
+    pub discord_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct SceneTeam {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    #[serde(default, rename = "libraryId", skip_serializing_if = "Option::is_none")]
+    pub library_id: Option<String>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short: Option<String>,
@@ -93,6 +110,8 @@ pub struct SceneTeam {
     pub logo_asset_id: Option<String>,
     #[serde(default)]
     pub players: Vec<ScenePlayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coach: Option<SceneCoach>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -101,7 +120,11 @@ pub struct MatchContext {
     pub team_a: Option<SceneTeam>,
     #[serde(default, rename = "teamB", skip_serializing_if = "Option::is_none")]
     pub team_b: Option<SceneTeam>,
-    #[serde(default, rename = "observerAccountId", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "observerAccountId",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub observer_account_id: Option<i64>,
 }
 
@@ -240,24 +263,53 @@ fn normalize_scene(scene: &mut Scene) {
             .map(|id| id.trim().to_owned())
             .filter(|id| !id.is_empty());
     }
-    for team in [&mut scene.match_context.team_a, &mut scene.match_context.team_b]
-        .into_iter()
-        .flatten()
-    {
-        team.name = team.name.trim().to_owned();
-        team.id = team
-            .id
-            .take()
-            .map(|id| id.trim().to_owned())
-            .filter(|id| !id.is_empty());
-        team.short = trimmed_option(team.short.take());
-        team.logo_asset_id = trimmed_option(team.logo_asset_id.take());
-        team.players.truncate(MAX_TEAM_PLAYERS);
-        for player in &mut team.players {
-            player.display_name = player.display_name.trim().to_owned();
+    take_normalized_team(&mut scene.match_context.team_a);
+    take_normalized_team(&mut scene.match_context.team_b);
+    normalize_event_and_countdown(scene);
+}
+
+fn take_normalized_team(team: &mut Option<SceneTeam>) {
+    if let Some(value) = team.as_mut() {
+        normalize_team(value);
+        if team_is_blank(value) {
+            *team = None;
         }
     }
-    normalize_event_and_countdown(scene);
+}
+
+pub fn normalize_team(team: &mut SceneTeam) {
+    team.name = team.name.trim().to_owned();
+    team.id = trimmed_option(team.id.take());
+    team.library_id = trimmed_option(team.library_id.take());
+    team.short = trimmed_option(team.short.take());
+    team.logo_asset_id = trimmed_option(team.logo_asset_id.take());
+    team.players.truncate(MAX_TEAM_PLAYERS);
+    for player in &mut team.players {
+        player.display_name = player.display_name.trim().to_owned();
+    }
+    team.players
+        .retain(|player| !player.display_name.is_empty());
+    if let Some(coach) = team.coach.as_mut() {
+        coach.name = coach.name.trim().to_owned();
+        coach.discord_id = trimmed_option(coach.discord_id.take());
+    }
+    if team
+        .coach
+        .as_ref()
+        .is_none_or(|coach| coach.name.is_empty())
+    {
+        team.coach = None;
+    }
+}
+
+fn team_is_blank(team: &SceneTeam) -> bool {
+    team.name.is_empty()
+        && team.id.is_none()
+        && team.library_id.is_none()
+        && team.short.is_none()
+        && team.logo_asset_id.is_none()
+        && team.players.is_empty()
+        && team.coach.is_none()
 }
 
 fn trimmed_option(value: Option<String>) -> Option<String> {
@@ -288,6 +340,25 @@ fn team_extras_valid(team: &SceneTeam) -> bool {
             .logo_asset_id
             .as_deref()
             .is_none_or(caster_overlay_assets::is_asset_id)
+        && team
+            .library_id
+            .as_deref()
+            .is_none_or(caster_overlay_assets::is_asset_id)
+}
+
+pub fn team_valid(team: &SceneTeam) -> bool {
+    valid_text(&team.name, 80)
+        && team_extras_valid(team)
+        && team.players.len() <= MAX_TEAM_PLAYERS
+        && team
+            .players
+            .iter()
+            .all(|player| !player.display_name.is_empty() && valid_text(&player.display_name, 80))
+        && team.coach.as_ref().is_none_or(|coach| {
+            !coach.name.is_empty()
+                && valid_text(&coach.name, 80)
+                && coach.discord_id.as_deref().is_none_or(discord_id_valid)
+        })
 }
 
 fn event_and_countdown_valid(scene: &Scene) -> bool {
@@ -330,11 +401,16 @@ fn validate(scene: &mut Scene) -> Result<(), ApiError> {
             || caster.name.is_empty()
             || caster.name.chars().count() > 60
             || caster.handle.chars().count() > 60
+            || caster.account_login.as_ref().is_some_and(|login| {
+                login.len() > 60
+                    || !login
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            })
             || caster
-                .account_login
-                .as_ref()
-                .is_some_and(|login| login.len() > 60 || !login.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
-            || caster.discord_id.as_deref().is_some_and(|id| !discord_id_valid(id))
+                .discord_id
+                .as_deref()
+                .is_some_and(|id| !discord_id_valid(id))
             || caster.camera_url.len() > MAX_CAMERA_URL
             || !valid_camera_url
             || !valid_camera_id
@@ -352,15 +428,7 @@ fn validate(scene: &mut Scene) -> Result<(), ApiError> {
         .into_iter()
         .flatten()
     {
-        if !valid_text(&team.name, 80)
-            || !team_extras_valid(team)
-            || team.players.len() > MAX_TEAM_PLAYERS
-            || team.players.iter().any(|player| {
-                player.display_name.is_empty()
-                    || player.display_name.chars().count() > 80
-                    || player.display_name.chars().any(char::is_control)
-            })
-        {
+        if !team_valid(team) {
             return Err(invalid());
         }
     }
@@ -481,6 +549,7 @@ fn public_team(team: Option<&SceneTeam>) -> Value {
             "short":team.short,
             "logoUrl":team.logo_asset_id.as_deref().map(caster_overlay_assets::asset_url),
             "players":team.players,
+            "coach": team.coach.as_ref().map(|coach| coach.name.clone()),
         })
     })
 }
@@ -558,7 +627,9 @@ fn normalize_owner_login(raw: &str) -> Option<String> {
     let value = raw.trim().trim_start_matches('@').to_ascii_lowercase();
     (!value.is_empty()
         && value.len() <= 60
-        && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_'))
     .then_some(value)
 }
 
@@ -589,7 +660,10 @@ pub async fn list_cameras_handler(
             "lastConnectedAt": row.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("last_connected_at").map_err(db_error)?,
         }));
     }
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(json!({"items":items}))))
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({"items":items})),
+    ))
 }
 
 pub async fn create_camera_handler(
@@ -601,11 +675,19 @@ pub async fn create_camera_handler(
         return Err(error);
     }
     let Some(owner_login) = normalize_owner_login(&request.owner_login) else {
-        return Ok((StatusCode::BAD_REQUEST, Json(json!({"message":"Ungültiger Twitch-Login."}))).into_response());
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"message":"Ungültiger Twitch-Login."})),
+        )
+            .into_response());
     };
     let label = request.label.trim();
     if label.is_empty() || label.chars().count() > 80 || label.chars().any(char::is_control) {
-        return Ok((StatusCode::BAD_REQUEST, Json(json!({"message":"Kamera-Name muss 1 bis 80 Zeichen lang sein."}))).into_response());
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"message":"Kamera-Name muss 1 bis 80 Zeichen lang sein."})),
+        )
+            .into_response());
     }
     let camera_id = format!("cam_{}", Uuid::new_v4().simple());
     let publish_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
@@ -687,8 +769,36 @@ struct RoleMembers {
     members: Vec<RoleMember>,
 }
 
-fn discord_id_valid(id: &str) -> bool {
+pub fn discord_id_valid(id: &str) -> bool {
     (5..=25).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit())
+}
+
+pub async fn broker_get(
+    path: &str,
+    query: &[(&str, &str)],
+) -> Result<reqwest::Response, &'static str> {
+    let url = format!("{}{path}", broker_base_url());
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+        .map_err(|_| "broker_client")?;
+    let mut request = client.get(url).query(query);
+    if let Some(token) =
+        super::discord_link::broker_token_from(crate::uplink_config::platform_value)
+    {
+        request = request.header("X-Internal-Token", token);
+    }
+    let response = request.send().await.map_err(|error| {
+        tracing::warn!(%error, path, "Caster: Broker nicht erreichbar");
+        "broker_unreachable"
+    })?;
+    if !response.status().is_success() {
+        tracing::warn!(status=%response.status(), path, "Caster: Broker abgelehnt");
+        return Err("broker_rejected");
+    }
+    Ok(response)
 }
 
 fn broker_base_url() -> String {
@@ -722,34 +832,15 @@ fn caster_camera_label(display_name: &str) -> String {
 }
 
 async fn caster_role_members() -> Result<RoleMembers, &'static str> {
-    let url = format!(
-        "{}/internal/master/v1/discord/role-members",
-        broker_base_url()
-    );
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(6))
-        .build()
-        .map_err(|_| "broker_client")?;
-    let mut request = client.get(url).query(&[
-        ("guild_id", CASTER_GUILD_ID),
-        ("role_id", CASTER_ROLE_ID),
-        ("live", "true"),
-    ]);
-    if let Some(token) =
-        super::discord_link::broker_token_from(crate::uplink_config::platform_value)
-    {
-        request = request.header("X-Internal-Token", token);
-    }
-    let response = request.send().await.map_err(|error| {
-        tracing::warn!(%error, "Caster-Rolle: Broker nicht erreichbar");
-        "broker_unreachable"
-    })?;
-    if !response.status().is_success() {
-        tracing::warn!(status=%response.status(), "Caster-Rolle: Broker abgelehnt");
-        return Err("broker_rejected");
-    }
+    let response = broker_get(
+        "/internal/master/v1/discord/role-members",
+        &[
+            ("guild_id", CASTER_GUILD_ID),
+            ("role_id", CASTER_ROLE_ID),
+            ("live", "true"),
+        ],
+    )
+    .await?;
     let body: RoleMembersResponse = response.json().await.map_err(|_| "broker_invalid")?;
     if !body.ok {
         return Err("broker_rejected");
@@ -967,9 +1058,9 @@ async fn disconnect_camera(camera_id: &str) {
     let room = camera_hub().lock().await.remove(camera_id);
     if let Some(room) = room {
         for peer in room.peers.into_values() {
-            let _ = peer.sender.send(Message::Text(
-                json!({"type":"revoked"}).to_string().into(),
-            ));
+            let _ = peer
+                .sender
+                .send(Message::Text(json!({"type":"revoked"}).to_string().into()));
         }
     }
 }
@@ -982,7 +1073,10 @@ pub struct CameraWsQuery {
 }
 
 fn allowed_camera_origin(headers: &HeaderMap) -> bool {
-    let Some(origin) = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) else {
+    let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    else {
         return false;
     };
     matches!(
@@ -1035,12 +1129,7 @@ async fn subscriber_authorized(pool: &PgPool, camera_id: &str) -> bool {
     .unwrap_or(false)
 }
 
-async fn camera_socket(
-    mut socket: WebSocket,
-    pool: PgPool,
-    camera_id: String,
-    role: CameraRole,
-) {
+async fn camera_socket(mut socket: WebSocket, pool: PgPool, camera_id: String, role: CameraRole) {
     if role == CameraRole::Publisher {
         let auth = tokio::time::timeout(std::time::Duration::from_secs(10), socket.next()).await;
         let token = match auth {
@@ -1048,15 +1137,28 @@ async fn camera_socket(
                 .ok()
                 .filter(|value| value.get("type").and_then(Value::as_str) == Some("auth"))
                 .filter(|value| value.get("consent").and_then(Value::as_bool) == Some(true))
-                .and_then(|value| value.get("token").and_then(Value::as_str).map(str::to_owned)),
+                .and_then(|value| {
+                    value
+                        .get("token")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                }),
             _ => None,
         };
         let Some(token) = token else {
-            let _ = socket.send(Message::Text(json!({"type":"auth-error"}).to_string().into())).await;
+            let _ = socket
+                .send(Message::Text(
+                    json!({"type":"auth-error"}).to_string().into(),
+                ))
+                .await;
             return;
         };
         if !publisher_authorized(&pool, &camera_id, &token).await {
-            let _ = socket.send(Message::Text(json!({"type":"auth-error"}).to_string().into())).await;
+            let _ = socket
+                .send(Message::Text(
+                    json!({"type":"auth-error"}).to_string().into(),
+                ))
+                .await;
             return;
         }
         let _ = sqlx::query(
@@ -1067,7 +1169,9 @@ async fn camera_socket(
         .await;
     } else if !subscriber_authorized(&pool, &camera_id).await {
         let _ = socket
-            .send(Message::Text(json!({"type":"not-available"}).to_string().into()))
+            .send(Message::Text(
+                json!({"type":"not-available"}).to_string().into(),
+            ))
             .await;
         return;
     }
@@ -1085,9 +1189,9 @@ async fn camera_socket(
         if role == CameraRole::Publisher {
             if let Some(previous) = room.publisher.take() {
                 if let Some(peer) = room.peers.remove(&previous) {
-                    let _ = peer.sender.send(Message::Text(
-                        json!({"type":"replaced"}).to_string().into(),
-                    ));
+                    let _ = peer
+                        .sender
+                        .send(Message::Text(json!({"type":"replaced"}).to_string().into()));
                 }
             }
             room.publisher = Some(peer_id.clone());
@@ -1262,7 +1366,10 @@ fn value_id(value: &Value) -> String {
     }
 }
 
-async fn steam_links_for_discord(pool: &PgPool, discord_ids: &[String]) -> HashMap<String, (String, i64)> {
+async fn steam_links_for_discord(
+    pool: &PgPool,
+    discord_ids: &[String],
+) -> HashMap<String, (String, i64)> {
     if discord_ids.is_empty() {
         return HashMap::new();
     }
@@ -1532,6 +1639,68 @@ mod tests {
         value.sides_swapped = true;
         assert_eq!(public_teams(&value)["left"]["name"], "Rechts");
         assert_eq!(public_teams(&value)["right"]["name"], "Links");
+    }
+    #[test]
+    fn coach_und_leere_spieler_werden_normalisiert() {
+        let mut value = scene();
+        value.match_context.team_a = Some(SceneTeam {
+            name: " Team A ".into(),
+            library_id: Some("6f1c2a52-6a8e-4c43-9f43-1d5d0c6b8a11".into()),
+            players: vec![
+                ScenePlayer {
+                    display_name: "  ".into(),
+                    ..ScenePlayer::default()
+                },
+                ScenePlayer {
+                    display_name: " Nani ".into(),
+                    ..ScenePlayer::default()
+                },
+            ],
+            coach: Some(SceneCoach {
+                name: "  Coach Max  ".into(),
+                discord_id: Some(" 426770757989957633 ".into()),
+            }),
+            ..SceneTeam::default()
+        });
+        validate(&mut value).unwrap();
+        let team = value.match_context.team_a.as_ref().unwrap();
+        assert_eq!(team.name, "Team A");
+        assert_eq!(team.players.len(), 1);
+        assert_eq!(team.players[0].display_name, "Nani");
+        assert_eq!(
+            team.coach.as_ref().map(|coach| coach.name.as_str()),
+            Some("Coach Max")
+        );
+        assert_eq!(
+            team.coach
+                .as_ref()
+                .and_then(|coach| coach.discord_id.as_deref()),
+            Some("426770757989957633")
+        );
+        assert_eq!(public_team(Some(team))["coach"], "Coach Max");
+        let mut blank = scene();
+        blank.match_context.team_b = Some(SceneTeam {
+            name: "  ".into(),
+            players: vec![ScenePlayer {
+                display_name: " ".into(),
+                ..ScenePlayer::default()
+            }],
+            coach: Some(SceneCoach {
+                name: " ".into(),
+                discord_id: None,
+            }),
+            ..SceneTeam::default()
+        });
+        validate(&mut blank).unwrap();
+        assert!(blank.match_context.team_b.is_none());
+        let mut broken = value;
+        if let Some(team) = broken.match_context.team_a.as_mut() {
+            team.coach = Some(SceneCoach {
+                name: "Coach".into(),
+                discord_id: Some("abc".into()),
+            });
+        }
+        assert!(validate(&mut broken).is_err());
     }
     #[test]
     fn rollenmitglieder_und_discord_ids() {

@@ -475,7 +475,7 @@ export default function CasterOverlayPage() {
             <div>
               <h2 className="text-lg font-semibold text-white">Teams & Player</h2>
               <p className="mt-1 text-sm text-white/60">
-                Teams frei benennen oder aus der Turnierverwaltung übernehmen; Steam-IDs kommen aus den verknüpften Steam-Konten. Bench-Spieler werden nicht als aktives Line-up übernommen.
+                Teams frei benennen, in der Bibliothek speichern oder aus der Turnierverwaltung übernehmen. Der Coach erscheint im Scoreboard, Versus-Bild und in der Caster-Szene. Bench-Spieler werden nicht als aktives Line-up übernommen.
               </p>
             </div>
             {contextReason && (

@@ -1454,6 +1454,20 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             post(crate::handlers::caster_overlay::caster_camera_handler),
         )
         .route(
+            "/twitch/api/admin/caster-overlay/teams",
+            get(crate::handlers::caster_teams::list_handler)
+                .post(crate::handlers::caster_teams::create_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-overlay/teams/{id}",
+            put(crate::handlers::caster_teams::update_handler)
+                .delete(crate::handlers::caster_teams::delete_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-overlay/coach-members",
+            get(crate::handlers::caster_teams::member_search_handler),
+        )
+        .route(
             "/twitch/api/admin/roadmap",
             get(admin_roadmap::get_handler).post(admin_roadmap::save_handler),
         )

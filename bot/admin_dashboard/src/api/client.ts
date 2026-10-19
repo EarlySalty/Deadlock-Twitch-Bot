@@ -1439,12 +1439,23 @@ export interface CasterScenePlayer {
   steamId64?: string | null;
   accountId?: number | null;
 }
+export interface CasterSceneCoach {
+  name: string;
+  discordId?: string | null;
+}
+export interface CasterCoachMember {
+  discordId: string;
+  displayName: string;
+  username?: string | null;
+}
 export interface CasterSceneTeam {
   id?: string | null;
+  libraryId?: string | null;
   name: string;
   short?: string | null;
   logoAssetId?: string | null;
   players: CasterScenePlayer[];
+  coach?: CasterSceneCoach | null;
 }
 export interface CasterMatchContext {
   teamA?: CasterSceneTeam | null;
@@ -1571,6 +1582,33 @@ export async function deleteCasterAsset(assetId: string): Promise<{ deleted: str
     headers: { 'X-CSRF-Token': csrfToken },
   });
 }
+export const fetchCasterTeamLibrary = async () => {
+  const result = await admin<{ items: CasterSceneTeam[] }>('/caster-overlay/teams');
+  return result.items ?? [];
+};
+export const createCasterLibraryTeam = async (team: CasterSceneTeam) => {
+  const result = await postAdminJson<{ team: CasterSceneTeam }, CasterSceneTeam>('/caster-overlay/teams', team);
+  return result.team;
+};
+export const updateCasterLibraryTeam = async (id: string, team: CasterSceneTeam) => {
+  const result = await postAdminJson<{ team: CasterSceneTeam }, CasterSceneTeam>(
+    `/caster-overlay/teams/${encodeURIComponent(id)}`,
+    team,
+    'PUT',
+  );
+  return result.team;
+};
+export async function deleteCasterLibraryTeam(id: string): Promise<{ deleted: string }> {
+  const csrfToken = await resolveJsonCsrfToken({});
+  return admin<{ deleted: string }>(`/caster-overlay/teams/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { 'X-CSRF-Token': csrfToken },
+  });
+}
+export const searchCasterCoachMembers = (q: string) =>
+  admin<{ available: boolean; reason?: string; items: CasterCoachMember[] }>(
+    `/caster-overlay/coach-members?q=${encodeURIComponent(q)}`,
+  );
 export async function revokeCasterCamera(cameraId: string): Promise<{ ok: boolean; cameraId: string }> {
   const csrfToken = await resolveJsonCsrfToken({});
   return admin<{ ok: boolean; cameraId: string }>(`/caster-cameras/${encodeURIComponent(cameraId)}`, {
