@@ -189,7 +189,7 @@ pub async fn retry_test_run(
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, owner).await?;
     let row = sqlx::query(
-        "SELECT status, metadata FROM social_production_jobs
+        "SELECT status, metadata::text AS metadata FROM social_production_jobs
         WHERE id = $1 AND twitch_user_id = $2 AND source = 'test' FOR UPDATE",
     )
     .bind(job_id)
@@ -198,7 +198,8 @@ pub async fn retry_test_run(
     .await?
     .ok_or(ScheduleError::NotFound)?;
     let status: String = row.try_get("status")?;
-    let metadata = super::queue::retry_metadata(row.try_get("metadata")?);
+    let metadata: String = row.try_get("metadata")?;
+    let metadata = super::queue::retry_metadata(serde_json::from_str(&metadata)?);
     let produced: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM social_produced_videos WHERE twitch_user_id = $2
         AND social_video_job(job_id, metadata) = $1
@@ -248,12 +249,12 @@ pub async fn retry_test_run(
         "UPDATE social_production_jobs SET status = 'queued', stage = 'queued', attempts = 0,
         mode = NULL, started_at = NULL, finished_at = NULL, last_error = NULL,
         review_reasons = '[]'::jsonb,
-        metadata = $3 || jsonb_build_object('retried_at', clock_timestamp())
+        metadata = $3::text::jsonb || jsonb_build_object('retried_at', clock_timestamp())
         WHERE id = $1 AND twitch_user_id = $2",
     )
     .bind(job_id)
     .bind(owner)
-    .bind(metadata)
+    .bind(serde_json::to_string(&metadata)?)
     .execute(&mut *tx)
     .await?;
     sqlx::query(

@@ -793,7 +793,7 @@ async fn retrying_a_failed_test_resets_stage_attempts_and_keeps_checkpoints() {
     sqlx::query(
         "UPDATE social_production_jobs SET status = 'failed', stage = 'failed',
         last_error = 'Der KI-Dienst ist derzeit nicht verfügbar.', finished_at = NOW(),
-        metadata = metadata || '{\"ai_editor\":{\"checkpoints\":{\"preparing\":{\"kept\":true}},\"attempts\":{\"preparing\":1,\"analyzing\":2}}}'::jsonb
+        metadata = metadata || '{\"retry_after\":\"2035-01-01T00:00:00Z\",\"static\":{\"stale\":true},\"ai_editor\":{\"checkpoints\":{\"preparing\":{\"kept\":true}},\"attempts\":{\"preparing\":1,\"analyzing\":2}}}'::jsonb
         WHERE id = $1",
     )
     .bind(run.job_id)
@@ -803,13 +803,16 @@ async fn retrying_a_failed_test_resets_stage_attempts_and_keeps_checkpoints() {
     retry_test_run(&pool, "owner", run.job_id)
         .await
         .expect("retry exhausted stage");
-    let state: serde_json::Value = sqlx::query_scalar(
-        "SELECT metadata -> 'ai_editor' FROM social_production_jobs WHERE id = $1",
-    )
-    .bind(run.job_id)
-    .fetch_one(&pool)
-    .await
-    .expect("state");
+    let metadata: String =
+        sqlx::query_scalar("SELECT metadata::text FROM social_production_jobs WHERE id = $1")
+            .bind(run.job_id)
+            .fetch_one(&pool)
+            .await
+            .expect("state");
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).expect("json");
+    let state = &metadata["ai_editor"];
+    assert!(metadata.get("static").is_none());
+    assert!(metadata.get("retry_after").is_none());
     assert_eq!(state["attempts"], serde_json::json!({"preparing": 1}));
     assert_eq!(
         state["checkpoints"]["preparing"]["kept"],
