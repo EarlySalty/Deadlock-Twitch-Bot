@@ -779,6 +779,46 @@ async fn retrying_a_review_without_video_requeues_the_clip() {
 }
 
 #[tokio::test]
+async fn retrying_a_failed_test_resets_stage_attempts_and_keeps_checkpoints() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    clip(
+        &pool,
+        "owner",
+        "retry-attempts",
+        utc("2025-01-01T00:00:00Z"),
+    )
+    .await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    sqlx::query(
+        "UPDATE social_production_jobs SET status = 'failed', stage = 'failed',
+        last_error = 'Der KI-Dienst ist derzeit nicht verfügbar.', finished_at = NOW(),
+        metadata = metadata || '{\"ai_editor\":{\"checkpoints\":{\"preparing\":{\"kept\":true}},\"attempts\":{\"preparing\":1,\"analyzing\":2}}}'::jsonb
+        WHERE id = $1",
+    )
+    .bind(run.job_id)
+    .execute(&pool)
+    .await
+    .expect("exhausted analyzing");
+    retry_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect("retry exhausted stage");
+    let state: serde_json::Value = sqlx::query_scalar(
+        "SELECT metadata -> 'ai_editor' FROM social_production_jobs WHERE id = $1",
+    )
+    .bind(run.job_id)
+    .fetch_one(&pool)
+    .await
+    .expect("state");
+    assert_eq!(state["attempts"], serde_json::json!({"preparing": 1}));
+    assert_eq!(
+        state["checkpoints"]["preparing"]["kept"],
+        serde_json::json!(true)
+    );
+    cleanup(pool).await;
+}
+
+#[tokio::test]
 async fn retrying_a_test_with_a_review_video_is_rejected() {
     let pool = pool().await;
     choose_year(&pool, 2025, ClipSort::OldestFirst).await;

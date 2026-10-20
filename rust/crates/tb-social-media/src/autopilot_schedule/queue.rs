@@ -207,7 +207,7 @@ async fn discard_review_outputs_on(
     Ok(())
 }
 
-fn retry_metadata(mut metadata: serde_json::Value) -> serde_json::Value {
+pub(super) fn retry_metadata(mut metadata: serde_json::Value) -> serde_json::Value {
     if let Some(object) = metadata.as_object_mut() {
         object.remove("retry_after");
         object.remove("static");
