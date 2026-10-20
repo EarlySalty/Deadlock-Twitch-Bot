@@ -1581,7 +1581,7 @@ fn social_ai_provider(b: &mut Builder) {
             "Kostendeckel",
             "Gesamtbudget in Mikro-US-Dollar.",
             1,
-            2_000_000,
+            20_000_000,
         )
         .int(
             "social_ai.provider.pricing_version",

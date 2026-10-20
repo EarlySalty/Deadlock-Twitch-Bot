@@ -104,7 +104,6 @@ pub async fn finish(completion: Completion) {
         tracing::error!(recovery = %recovery, "LLM_USAGE_RECOVERY: Abschluss aus dem Journal nachliefern");
     }
 }
-/// Idempotente Wiederaufnahme eines Abschlusses aus LLM_USAGE_RECOVERY.
 pub async fn recover(c: &Completion) -> Result<(), RecoveryError> {
     let pool = POOL.get().ok_or(RecoveryError)?;
     let (project, service) = IDENTITY.get().ok_or(RecoveryError)?;
@@ -126,6 +125,41 @@ pub struct Recovery {
     pub service: String,
     pub completion: Completion,
 }
+pub const PROVIDER_REJECTED_UNBILLED: &str = "provider_rejected_unbilled";
+
+pub fn is_rejected_client_status(status: i32) -> bool {
+    (400..500).contains(&status) && status != 408 && status != 429
+}
+
+fn social_accounting_valid(c: &Completion, social: &SocialAccounting) -> bool {
+    if social.reserved_micro_usd <= 0
+        || social.cache_creation_input_tokens.is_some_and(|n| n < 0)
+        || social.cache_read_input_tokens.is_some_and(|n| n < 0)
+    {
+        return false;
+    }
+    if social.cost_basis == PROVIDER_REJECTED_UNBILLED {
+        return !c.success
+            && social.estimated_micro_usd == Some(0)
+            && c.tokens_in.is_none()
+            && c.tokens_out.is_none()
+            && c.total.is_none()
+            && social.cache_creation_input_tokens.is_none()
+            && social.cache_read_input_tokens.is_none()
+            && c.http_status.is_some_and(is_rejected_client_status);
+    }
+    social.estimated_micro_usd.is_none_or(|n| n > 0)
+        && social.cost_basis
+            == if social
+                .estimated_micro_usd
+                .is_some_and(|n| c.success || n > social.reserved_micro_usd)
+            {
+                "usage_priced_estimate"
+            } else {
+                "reserved_upper_bound"
+            }
+}
+
 pub async fn recover_with_pool(
     pool: &PgPool,
     c: &Completion,
@@ -134,20 +168,7 @@ pub async fn recover_with_pool(
 ) -> Result<(), RecoveryError> {
     let state = if c.success { "succeeded" } else { "failed" };
     if let Some(social) = &c.social_accounting {
-        if social.reserved_micro_usd <= 0
-            || social.estimated_micro_usd.is_some_and(|n| n <= 0)
-            || social.cache_creation_input_tokens.is_some_and(|n| n < 0)
-            || social.cache_read_input_tokens.is_some_and(|n| n < 0)
-            || social.cost_basis
-                != if social
-                    .estimated_micro_usd
-                    .is_some_and(|n| c.success || n > social.reserved_micro_usd)
-                {
-                    "usage_priced_estimate"
-                } else {
-                    "reserved_upper_bound"
-                }
-        {
+        if !social_accounting_valid(c, social) {
             return Err(RecoveryError);
         }
         let result = sqlx::query("UPDATE public.llm_usage SET tokens_in=$2,tokens_out=$3,total=$4,success=$5,attempt_state=$6,request_id=$7,error_code=$8,http_status=$9,latency_ms=$10,finished_at=now(),estimated_micro_usd=$11,cost_basis=$12,cache_creation_input_tokens=$13,cache_read_input_tokens=$14 WHERE id=$1 AND attempt_state='started' AND project=$15 AND service=$16 AND purpose='social_editor' AND provider='anthropic' AND reserved_micro_usd=$17")

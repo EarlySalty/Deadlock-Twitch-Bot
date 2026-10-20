@@ -57,14 +57,14 @@ export function requireLimits(value: unknown): ProcessingLimits {
   const data = record(value);
   requireValid(typeof data.enforcement_available === 'boolean' && typeof data.plan_configuration_available === 'boolean' && data.plan_policies_active === false);
   const global = record(data.global);
-  requireValid(count(global.revision) && global.initial_total_cap_micro_usd === 2_000_000 && typeof global.paused === 'boolean' && string(global.updated_at) && string(global.updated_by) && string(global.reason));
-  requireValid(nullableCount(global.monthly_cap_micro_usd) && (global.monthly_cap_micro_usd === null || Number(global.monthly_cap_micro_usd) <= 2_000_000));
+  requireValid(count(global.revision) && global.initial_total_cap_micro_usd === 20_000_000 && typeof global.paused === 'boolean' && string(global.updated_at) && string(global.updated_by) && string(global.reason));
+  requireValid(nullableCount(global.monthly_cap_micro_usd) && (global.monthly_cap_micro_usd === null || Number(global.monthly_cap_micro_usd) <= 20_000_000));
   const users = rows(data.users);
   const userIds = new Set<unknown>();
   for (const user of users) {
     requireValid(string(user.twitch_user_id) && /^\d+$/.test(user.twitch_user_id) && !userIds.has(user.twitch_user_id) && count(user.revision) && typeof user.paused === 'boolean' && nullableCount(user.monthly_cap_micro_usd) && string(user.updated_at) && string(user.updated_by) && string(user.reason));
     userIds.add(user.twitch_user_id);
-    requireValid(user.monthly_cap_micro_usd === null || Number(user.monthly_cap_micro_usd) <= 2_000_000);
+    requireValid(user.monthly_cap_micro_usd === null || Number(user.monthly_cap_micro_usd) <= 20_000_000);
     requireValid(nullableCount(user.monthly_ai_jobs) && nullableCount(user.monthly_revisions));
   }
   const planIds = new Set<unknown>();
@@ -72,7 +72,7 @@ export function requireLimits(value: unknown): ProcessingLimits {
     requireValid(string(plan.plan_id) && !!plan.plan_id && !planIds.has(plan.plan_id) && string(plan.name) && count(plan.revision) && string(plan.reason));
     planIds.add(plan.plan_id);
     for (const key of ['monthly_cap_micro_usd', 'monthly_ai_jobs', 'monthly_revisions']) requireValid(nullableCount(plan[key]));
-    requireValid(plan.monthly_cap_micro_usd === null || Number(plan.monthly_cap_micro_usd) <= 2_000_000);
+    requireValid(plan.monthly_cap_micro_usd === null || Number(plan.monthly_cap_micro_usd) <= 20_000_000);
   }
   return data as unknown as ProcessingLimits;
 }

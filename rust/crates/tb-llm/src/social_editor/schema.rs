@@ -66,3 +66,61 @@ pub(super) fn compile(schema: &Value) -> Result<Validator, EditorError> {
         .build(schema)
         .map_err(|_| EditorError::new(ErrorKind::InvalidRequest))
 }
+
+const WIRE_UNSUPPORTED: [&str; 10] = [
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+    "minLength",
+    "maxLength",
+    "maxItems",
+    "minProperties",
+    "maxProperties",
+];
+
+pub(super) fn wire(schema: &Value) -> Value {
+    let Some(fields) = schema.as_object() else {
+        return schema.clone();
+    };
+    let mut out = serde_json::Map::new();
+    let mut stripped = serde_json::Map::new();
+    for (key, value) in fields {
+        match key.as_str() {
+            "properties" => {
+                let properties = value
+                    .as_object()
+                    .map(|properties| {
+                        properties
+                            .iter()
+                            .map(|(name, child)| (name.clone(), wire(child)))
+                            .collect::<serde_json::Map<_, _>>()
+                    })
+                    .map_or_else(|| value.clone(), Value::Object);
+                out.insert(key.clone(), properties);
+            }
+            "items" => {
+                out.insert(key.clone(), wire(value));
+            }
+            "minItems" if value.as_u64().is_some_and(|n| n > 1) => {
+                stripped.insert(key.clone(), value.clone());
+            }
+            name if WIRE_UNSUPPORTED.contains(&name) => {
+                stripped.insert(key.clone(), value.clone());
+            }
+            _ => {
+                out.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    if !stripped.is_empty() {
+        let hint = Value::Object(stripped).to_string();
+        let description = match out.get("description").and_then(Value::as_str) {
+            Some(text) => format!("{text}\n\n{hint}"),
+            None => hint,
+        };
+        out.insert("description".into(), Value::String(description));
+    }
+    Value::Object(out)
+}

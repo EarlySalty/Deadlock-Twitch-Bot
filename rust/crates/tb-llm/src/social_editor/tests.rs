@@ -296,6 +296,12 @@ impl DisposablePostgres {
             .execute(&pool)
             .await
             .expect("admin console limits migration");
+            sqlx::raw_sql(include_str!(
+                "../../../../migrations/20261020120000_social_ai_provider_rejected_unbilled.sql"
+            ))
+            .execute(&pool)
+            .await
+            .expect("rejected unbilled migration");
         }
         static LEDGER_IDENTITY: std::sync::Once = std::sync::Once::new();
         LEDGER_IDENTITY.call_once(|| {
@@ -617,6 +623,105 @@ async fn structured_provider_codes_are_bounded_and_saved_without_messages() {
 }
 
 #[tokio::test]
+async fn rejected_client_error_without_usage_is_unbilled_but_unknown_failures_stay_reserved() {
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+    let database = DisposablePostgres::start().await;
+    let pool = &database.pool;
+    let context = EditorContext {
+        twitch_user_id: "person".into(),
+        job_id: "job".into(),
+        stage: "analyzing".into(),
+    };
+    sqlx::query("INSERT INTO public.social_ai_user_consent(twitch_user_id,external_ai_consent) VALUES ($1,true)")
+        .bind(&context.twitch_user_id).execute(pool).await.expect("user consent");
+    sqlx::query("INSERT INTO public.social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb)")
+        .execute(pool).await.expect("global consent");
+    let mock = MockServer::start().await;
+    let mut configuration = config();
+    configuration.provider.endpoint = mock.uri();
+    configuration.provider.max_retries = 0;
+    let reservation = configuration
+        .provider
+        .pricing
+        .reservation(
+            u64::from(configuration.provider.max_input_tokens),
+            u64::from(configuration.provider.max_output_tokens),
+        )
+        .expect("reservation");
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({"type":"error","error":{"type":"invalid_request_error","message":"schema rejected"}})))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let rejected = complete_with_key(pool, &context, &configuration, &request(), "fake-key")
+        .await
+        .expect_err("rejected request");
+    assert_eq!(rejected.cost_basis, Some("provider_rejected_unbilled"));
+    assert_eq!(rejected.estimated_micro_usd, Some(0));
+    let saved: (Option<i64>, String) =
+        sqlx::query_as("SELECT estimated_micro_usd,cost_basis FROM public.llm_usage WHERE id=$1")
+            .bind(rejected.ledger_id.expect("ledger id"))
+            .fetch_one(pool)
+            .await
+            .expect("rejected ledger");
+    assert_eq!(saved, (Some(0), "provider_rejected_unbilled".into()));
+    let mut connection = pool.acquire().await.expect("accounting");
+    assert_eq!(
+        usage::consumption_on(&mut connection, None)
+            .await
+            .expect("rejected debit"),
+        0
+    );
+    drop(connection);
+    mock.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(
+            json!({"type":"error","error":{"type":"api_error","message":"unknown"}}),
+        ))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let unknown = complete_with_key(pool, &context, &configuration, &request(), "fake-key")
+        .await
+        .expect_err("server failure");
+    assert_eq!(unknown.cost_basis, Some("reserved_upper_bound"));
+    let mut connection = pool.acquire().await.expect("accounting");
+    assert_eq!(
+        usage::consumption_on(&mut connection, None)
+            .await
+            .expect("unknown debit"),
+        reservation
+    );
+}
+
+#[test]
+fn wire_schema_omits_constraints_structured_outputs_reject() {
+    let mut constrained = request();
+    constrained.json_schema = json!({"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":80},"moments":{"type":"array","minItems":2,"maxItems":4,"items":{"type":"integer","minimum":0,"maximum":9}}},"required":["title","moments"],"additionalProperties":false});
+    let body = build_body(&config().provider, &constrained).expect("body");
+    let wire = body["output_config"]["format"]["schema"].to_string();
+    for keyword in [
+        "minLength",
+        "maxLength",
+        "minItems",
+        "maxItems",
+        "minimum",
+        "maximum",
+    ] {
+        assert!(!wire.contains(&format!("\"{keyword}\":")), "{keyword}");
+    }
+    assert_eq!(
+        body["output_config"]["format"]["schema"]["required"],
+        json!(["title", "moments"])
+    );
+}
+
+#[tokio::test]
 async fn failed_finalization_blocks_reservations_until_exact_recovery() {
     let database = DisposablePostgres::start().await;
     let pool = &database.pool;
@@ -895,6 +1000,7 @@ async fn consent_budget_and_native_mock_contract() {
     let mut configuration = config();
     let mock = MockServer::start().await;
     configuration.provider.endpoint = mock.uri();
+    configuration.provider.initial_total_cap_micro_usd = 2_000_000;
     let prompt = request();
     let response = json!({"model":configuration.provider.model,"stop_reason":"end_turn","content":[{"type":"text","text":"{\"title\":\"clip\"}"}],"usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}});
     Mock::given(method("POST"))

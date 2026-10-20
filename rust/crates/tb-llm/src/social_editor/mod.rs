@@ -227,7 +227,7 @@ fn build_body(config: &ProviderConfig, request: &EditorRequest) -> Result<Value,
         "model":config.model,
         "max_tokens":config.max_output_tokens,
         "thinking":{"type":"adaptive"},
-        "output_config":{"effort":effort,"format":{"type":"json_schema","schema":request.json_schema}},
+        "output_config":{"effort":effort,"format":{"type":"json_schema","schema":schema::wire(&request.json_schema)}},
         "system":request.system,
         "messages":[{"role":"user","content":blocks}]
     }))
@@ -445,7 +445,13 @@ fn completion(id: i64, reserved: i64, outcome: AttemptOutcome<'_>) -> crate::led
         kind,
         provider_code,
     } = outcome;
-    let safe_estimated = estimated.filter(|_| usage.is_some());
+    let rejected =
+        kind == Some(ErrorKind::Provider) && rejected_unbilled(status, usage, provider_code);
+    let safe_estimated = if rejected {
+        Some(0)
+    } else {
+        estimated.filter(|_| usage.is_some())
+    };
     let tokens_in = usage
         .and_then(|u| u.input_tokens)
         .and_then(|n| i64::try_from(n).ok());
@@ -471,7 +477,9 @@ fn completion(id: i64, reserved: i64, outcome: AttemptOutcome<'_>) -> crate::led
         social_accounting: Some(crate::ledger::SocialAccounting {
             reserved_micro_usd: reserved,
             estimated_micro_usd: safe_estimated,
-            cost_basis: if safe_estimated.is_some_and(|cost| kind.is_none() || cost > reserved) {
+            cost_basis: if rejected {
+                crate::ledger::PROVIDER_REJECTED_UNBILLED
+            } else if safe_estimated.is_some_and(|cost| kind.is_none() || cost > reserved) {
                 "usage_priced_estimate"
             } else {
                 "reserved_upper_bound"
@@ -484,6 +492,30 @@ fn completion(id: i64, reserved: i64, outcome: AttemptOutcome<'_>) -> crate::led
                 .and_then(|u| u.cache_read_input_tokens)
                 .and_then(|n| i64::try_from(n).ok()),
         }),
+    }
+}
+
+fn rejected_unbilled(
+    status: Option<StatusCode>,
+    usage: Option<&Usage>,
+    provider_code: Option<&str>,
+) -> bool {
+    usage.is_none()
+        && status.is_some_and(|s| crate::ledger::is_rejected_client_status(i32::from(s.as_u16())))
+        && provider_code
+            .and_then(|code| code.split('/').next())
+            .is_some_and(|kind| {
+                !matches!(kind, "rate_limit_error" | "api_error" | "overloaded_error")
+            })
+}
+
+fn failure_cost(rejected: bool, exceeds_reservation: bool) -> &'static str {
+    if rejected {
+        crate::ledger::PROVIDER_REJECTED_UNBILLED
+    } else if exceeds_reservation {
+        "usage_priced_estimate"
+    } else {
+        "reserved_upper_bound"
     }
 }
 
@@ -676,6 +708,9 @@ async fn complete_with_key(
             Err(kind.unwrap_or(ErrorKind::Provider))
         };
         let error_kind = parsed.as_ref().err().copied();
+        let rejected = error_kind == Some(ErrorKind::Provider)
+            && rejected_unbilled(status, usage.as_ref(), provider_code.as_deref());
+        let failure_estimate = if rejected { Some(0) } else { estimated };
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let completed = completion(
             id,
@@ -698,13 +733,9 @@ async fn complete_with_key(
             err.provider_error_code = provider_code.map(String::into_boxed_str);
             err.usage = usage.map(Box::new);
             err.latency_ms = Some(u32::try_from(latency_ms).unwrap_or(u32::MAX));
-            err.estimated_micro_usd = estimated;
+            err.estimated_micro_usd = failure_estimate;
             err.reserved_micro_usd = Some(reservation);
-            err.cost_basis = Some(if exceeds_reservation {
-                "usage_priced_estimate"
-            } else {
-                "reserved_upper_bound"
-            });
+            err.cost_basis = Some(failure_cost(rejected, exceeds_reservation));
             return Err(err);
         }
         match parsed {
@@ -737,13 +768,9 @@ async fn complete_with_key(
                     provider_error_code: provider_code.map(String::into_boxed_str),
                     usage: usage.map(Box::new),
                     latency_ms: Some(u32::try_from(latency_ms).unwrap_or(u32::MAX)),
-                    estimated_micro_usd: estimated,
+                    estimated_micro_usd: failure_estimate,
                     reserved_micro_usd: Some(reservation),
-                    cost_basis: Some(if exceeds_reservation {
-                        "usage_priced_estimate"
-                    } else {
-                        "reserved_upper_bound"
-                    }),
+                    cost_basis: Some(failure_cost(rejected, exceeds_reservation)),
                 })
             }
         }

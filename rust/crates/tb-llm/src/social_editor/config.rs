@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{EditorError, ErrorKind};
 
-const APPROVED_INITIAL_CAP_MICRO_USD: i64 = 2_000_000;
+const APPROVED_INITIAL_CAP_MICRO_USD: i64 = 20_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -376,7 +376,7 @@ fn social_ai_section_keeps_optional_services_disabled_and_the_shared_cap() {
     let runtime = root.editor().expect("fixture runtime");
     assert_eq!(
         runtime.configuration.provider.initial_total_cap_micro_usd,
-        2_000_000
+        20_000_000
     );
     assert!(runtime.limits.brain.is_none());
     assert!(runtime.limits.stt.settings.language.is_none());

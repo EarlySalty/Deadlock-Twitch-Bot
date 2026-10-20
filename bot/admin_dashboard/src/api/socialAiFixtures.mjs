@@ -7,7 +7,7 @@ export const totals = {
 
 export const limits = {
   enforcement_available: true, plan_configuration_available: true, plan_policies_active: false,
-  global: { revision: 1, paused: false, initial_total_cap_micro_usd: 2000000, monthly_cap_micro_usd: 1500000, updated_at: '2026-10-11T12:00:00Z', updated_by: 'Synthetischer Admin', reason: 'Isolierter Teststand.' },
+  global: { revision: 1, paused: false, initial_total_cap_micro_usd: 20000000, monthly_cap_micro_usd: 1500000, updated_at: '2026-10-11T12:00:00Z', updated_by: 'Synthetischer Admin', reason: 'Isolierter Teststand.' },
   users: [{ twitch_user_id: '100000001', revision: 1, paused: false, monthly_cap_micro_usd: 1000000, monthly_ai_jobs: 12, monthly_revisions: 4, updated_at: '2026-10-11T12:00:00Z', updated_by: 'Synthetischer Admin', reason: 'Isolierte Testgrenze.' }],
   plans: [{ plan_id: 'free', name: 'Free', revision: 0, monthly_cap_micro_usd: null, monthly_ai_jobs: null, monthly_revisions: null, reason: '' }],
 };

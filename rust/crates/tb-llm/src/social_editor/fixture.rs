@@ -15,7 +15,7 @@ request_timeout_ms = 30000
 total_deadline_ms = 90000
 max_retries = 1
 retry_backoff_ms = 1000
-initial_total_cap_micro_usd = 2000000
+initial_total_cap_micro_usd = 20000000
 pricing_version = 1
 
 [provider.pricing]
