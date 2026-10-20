@@ -323,6 +323,27 @@ mod tests {
     }
 
     #[test]
+    fn copy_schema_passes_the_structured_output_wire_contract() {
+        let root = tempfile::tempdir().expect("package root");
+        let mut editor = toml::from_str::<social_editor::SocialAiSection>(
+            social_editor::fixture::SOCIAL_AI_SECTION,
+        )
+        .expect("social_ai fixture")
+        .into_editor_config()
+        .expect("trusted configuration");
+        editor.runtime["source_root"] = json!("clips");
+        editor.runtime["output_root"] = json!("clips");
+        editor.runtime["work_root"] = json!("clips/.ai-editor-work");
+        let runtime =
+            EditorRuntime::from_configuration(root.path(), editor).expect("bounded editor runtime");
+        let targets = drafts(&["instagram", "tiktok", "youtube"]);
+        for scope in [PolicyScope::Shared, PolicyScope::PerPlatform] {
+            social_editor::check_schema(&copy_schema(scope, &targets, &runtime))
+                .expect("copy schema");
+        }
+    }
+
+    #[test]
     fn per_platform_copy_requires_every_target_and_rejects_unknown_fields() {
         let targets = drafts(&["instagram", "tiktok"]);
         let content = json!({

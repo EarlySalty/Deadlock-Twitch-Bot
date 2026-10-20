@@ -360,6 +360,25 @@ async fn analyzed_highlights_guard_fresh_and_resumed_plans_before_render_and_qa(
 }
 
 #[test]
+fn every_stage_schema_passes_the_structured_output_wire_contract() {
+    let root = tempfile::tempdir().expect("package root");
+    let runtime = runtime(root.path());
+    let limits = &runtime.limits;
+    let duration = limits.plan.max_source_duration_ms;
+    tb_llm::social_editor::check_schema(&analysis_schema(&limits.plan, duration))
+        .expect("analysis schema");
+    for max_variants in [0, limits.revisions.max_variants.saturating_sub(1)] {
+        for mut schema in [
+            planning_schema(&limits.plan, &limits.copy, duration),
+            super::super::stage_contract::revision_schema(&limits.plan, &limits.copy, duration),
+        ] {
+            schema["properties"]["variants"]["maxItems"] = json!(max_variants);
+            tb_llm::social_editor::check_schema(&schema).expect("planning schema");
+        }
+    }
+}
+
+#[test]
 fn packaged_runtime_is_strict_and_transient_stt_seed_is_valid() {
     let root = tempfile::tempdir().expect("package root");
     let runtime = runtime(root.path());

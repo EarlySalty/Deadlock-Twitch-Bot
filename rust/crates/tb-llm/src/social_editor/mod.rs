@@ -212,6 +212,11 @@ pub struct EditorResponse {
     pub cost_basis: &'static str,
 }
 
+pub fn check_schema(schema: &Value) -> Result<(), EditorError> {
+    schema::compile(schema)?;
+    schema::conformant_wire(schema).map(|_| ())
+}
+
 fn build_body(config: &ProviderConfig, request: &EditorRequest) -> Result<Value, EditorError> {
     let mut blocks = Vec::with_capacity(request.frames.len() * 2 + 1);
     for frame in &request.frames {
@@ -223,11 +228,12 @@ fn build_body(config: &ProviderConfig, request: &EditorRequest) -> Result<Value,
     blocks.push(json!({"type":"text","text":request.text}));
     let effort = serde_json::to_value(config.effort)
         .map_err(|_| EditorError::new(ErrorKind::Configuration))?;
+    let wire = schema::conformant_wire(&request.json_schema)?;
     Ok(json!({
         "model":config.model,
         "max_tokens":config.max_output_tokens,
         "thinking":{"type":"adaptive"},
-        "output_config":{"effort":effort,"format":{"type":"json_schema","schema":schema::wire(&request.json_schema)}},
+        "output_config":{"effort":effort,"format":{"type":"json_schema","schema":wire}},
         "system":request.system,
         "messages":[{"role":"user","content":blocks}]
     }))
@@ -575,6 +581,52 @@ fn provider_error_code(body: &[u8]) -> Option<String> {
     Some(format!("{kind}/{code}"))
 }
 
+const MAX_PROVIDER_MESSAGE_CHARS: usize = 300;
+
+fn provider_error_message(body: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let message = value.get("error")?.get("message")?.as_str()?;
+    let words = message
+        .split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            if word
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .starts_with("sk-")
+            {
+                "[redacted]"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let truncated = words
+        .chars()
+        .take(MAX_PROVIDER_MESSAGE_CHARS)
+        .collect::<String>();
+    (!truncated.is_empty()).then_some(truncated)
+}
+
+fn log_provider_rejection(
+    context: &EditorContext,
+    ledger_id: i64,
+    status: Option<StatusCode>,
+    request_id: Option<&str>,
+    provider_code: Option<&str>,
+    body: &[u8],
+) {
+    tracing::warn!(
+        stage = %context.stage,
+        ledger_id,
+        http_status = status.map(|s| s.as_u16()),
+        provider_error = provider_code.unwrap_or("unknown"),
+        request_id = request_id.unwrap_or("none"),
+        provider_message = provider_error_message(body).as_deref().unwrap_or("none"),
+        "Social AI provider rejected the request"
+    );
+}
+
 pub async fn complete(
     pool: &PgPool,
     context: &EditorContext,
@@ -684,7 +736,16 @@ async fn complete_with_key(
             Err(_) => (None, None, Vec::new(), Some(ErrorKind::Transport), true),
         };
         let provider_code = if kind == Some(ErrorKind::Provider) {
-            provider_error_code(&bytes)
+            let code = provider_error_code(&bytes);
+            log_provider_rejection(
+                context,
+                id,
+                status,
+                request_id.as_deref(),
+                code.as_deref(),
+                &bytes,
+            );
+            code
         } else {
             None
         };

@@ -721,6 +721,40 @@ fn wire_schema_omits_constraints_structured_outputs_reject() {
     );
 }
 
+#[test]
+fn wire_schema_rejects_shapes_structured_outputs_cannot_compile() {
+    let optional = (0..25)
+        .map(|n| (format!("field_{n}"), json!({"type":"string"})))
+        .collect::<serde_json::Map<_, _>>();
+    let too_optional =
+        json!({"type":"object","properties":optional,"required":[],"additionalProperties":false});
+    assert!(check_schema(&too_optional).is_err());
+    let unions = (0..17)
+        .map(|n| (format!("field_{n}"), json!({"type":["string","null"]})))
+        .collect::<serde_json::Map<_, _>>();
+    let names = unions.keys().cloned().collect::<Vec<_>>();
+    let too_many_unions =
+        json!({"type":"object","properties":unions,"required":names,"additionalProperties":false});
+    assert!(check_schema(&too_many_unions).is_err());
+    let object_enum = json!({"type":"object","properties":{"mode":{"enum":[{"a":1}]}},"required":["mode"],"additionalProperties":false});
+    assert!(check_schema(&object_enum).is_err());
+    let mut rejected = request();
+    rejected.json_schema = object_enum;
+    assert!(build_body(&config().provider, &rejected).is_err());
+    assert!(check_schema(&request().json_schema).is_ok());
+}
+
+#[test]
+fn provider_message_is_flattened_redacted_and_truncated() {
+    let body = json!({"type":"error","error":{"type":"invalid_request_error","message":format!("bad\n\tschema key \"sk-ant-api03-secret\" {}", "x".repeat(400))}});
+    let message = provider_error_message(body.to_string().as_bytes()).expect("message");
+    assert!(message.starts_with("bad schema key [redacted] x"));
+    assert!(!message.contains("sk-"));
+    assert!(!message.chars().any(char::is_control));
+    assert_eq!(message.chars().count(), MAX_PROVIDER_MESSAGE_CHARS);
+    assert_eq!(provider_error_message(b"not json"), None);
+}
+
 #[tokio::test]
 async fn failed_finalization_blocks_reservations_until_exact_recovery() {
     let database = DisposablePostgres::start().await;
