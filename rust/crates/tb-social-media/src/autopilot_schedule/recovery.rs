@@ -56,6 +56,7 @@ pub async fn retry_or_fail(
     job: &ProductionJob,
     reason: &str,
     retryable: bool,
+    detail: Option<&str>,
 ) -> Result<(), ScheduleError> {
     if job.attempts >= job.max_attempts {
         production_jobs::finish(
@@ -64,7 +65,10 @@ pub async fn retry_or_fail(
             job.id,
             JobCompletion::Failed,
             &["attempts_exhausted".into()],
-            Some("Die Produktion ist nach mehreren Versuchen fehlgeschlagen."),
+            Some(&with_detail(
+                detail,
+                "Die Produktion ist nach mehreren Versuchen fehlgeschlagen.",
+            )),
         )
         .await?;
         return Ok(());
@@ -76,7 +80,10 @@ pub async fn retry_or_fail(
             job.id,
             JobCompletion::Failed,
             &[reason.into()],
-            Some("Die Produktion konnte nicht abgeschlossen werden. Der Autopilot macht mit dem nächsten Clip weiter, Testläufe kannst du erneut starten."),
+            Some(&with_detail(
+                Some(detail.unwrap_or("Die Produktion konnte nicht abgeschlossen werden.")),
+                "Der Autopilot macht mit dem nächsten Clip weiter, Testläufe kannst du erneut starten.",
+            )),
         )
         .await?;
         return Ok(());
@@ -86,7 +93,7 @@ pub async fn retry_or_fail(
     autopilot_settings::lock_owner(&mut tx, &job.twitch_user_id).await?;
     let changed = sqlx::query(
         "UPDATE social_production_jobs SET status = 'queued',
-        last_error = 'Die Produktion wird nach einer kurzen Wartezeit erneut versucht.',
+        last_error = $5,
         metadata = metadata || $4::text::jsonb
         WHERE id = $1 AND twitch_user_id = $2 AND status = 'running' AND attempts = $3",
     )
@@ -96,6 +103,10 @@ pub async fn retry_or_fail(
     .bind(serde_json::to_string(
         &json!({"retry_after":retry_after,"last_failure":reason}),
     )?)
+    .bind(with_detail(
+        detail,
+        "Die Produktion wird nach einer kurzen Wartezeit erneut versucht.",
+    ))
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -104,4 +115,11 @@ pub async fn retry_or_fail(
     }
     tx.commit().await?;
     Ok(())
+}
+
+fn with_detail(detail: Option<&str>, text: &str) -> String {
+    match detail {
+        Some(detail) => format!("{detail} {text}"),
+        None => text.to_owned(),
+    }
 }

@@ -20,12 +20,14 @@ use crate::{
     produced_video::{self, NewProducedVideo, ProducedVideo, RenderedVideo},
     production_jobs::{self, JobCompletion, JobSource, ProductionJob, ProductionMode},
     production_lease::ProductionLease,
-    video_processor::bounded_ffmpeg_command,
+    video_processor::{bounded_ffmpeg_command, VIDEO_CRF, VIDEO_PRESET},
 };
 
 const YOUTUBE_MAX_MS: u64 = 180_000;
 const INSTAGRAM_MIN_MS: u64 = 3_000;
 const INSTAGRAM_MAX_MS: u64 = 900_000;
+const TRANSCODE_DEADLINE_PER_MEDIA_MS: u64 = 10;
+const MAX_TRANSCODE_DEADLINE_MS: u64 = 600_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -449,9 +451,13 @@ impl AutopilotWorker {
                 return Err(RunnerError::Source);
             }
             lease.ensure_held().await?;
-            self.write_artifact(checkpoint.conversion, &source, &staged)
-                .await?;
-            self.verified_artifact(checkpoint, &staged, None).await?;
+            self.write_artifact(checkpoint, &source, &staged).await?;
+            self.verified_artifact(checkpoint, &staged, None)
+                .await
+                .map_err(|error| match error {
+                    RunnerError::Source => RunnerError::RenderFailed,
+                    other => other,
+                })?;
         }
         let output_sha256 = file_sha256(&staged).await?;
         metadata["upload"]["output_sha256"] = json!(output_sha256);
@@ -616,10 +622,11 @@ impl AutopilotWorker {
 
     async fn write_artifact(
         &self,
-        conversion: Conversion,
+        checkpoint: &UploadCheckpoint,
         source: &Path,
         staged: &Path,
     ) -> Result<(), RunnerError> {
+        let conversion = checkpoint.conversion;
         if tokio::fs::try_exists(staged).await? {
             tokio::fs::remove_file(staged).await?;
         }
@@ -637,7 +644,14 @@ impl AutopilotWorker {
             command.args(["-c", "copy"]);
         } else {
             command
-                .args(["-c:v", "libx264", "-preset", "medium", "-crf", "18"])
+                .args([
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    VIDEO_PRESET,
+                    "-crf",
+                    VIDEO_CRF,
+                ])
                 .args(["-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k"])
                 .arg("-threads")
                 .arg(limits.encoder_threads.to_string());
@@ -649,16 +663,18 @@ impl AutopilotWorker {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        let status = tokio::time::timeout(
-            Duration::from_millis(limits.process_deadline_ms),
-            command.status(),
-        )
-        .await
-        .map_err(|_| RunnerError::Source)??;
+        let deadline = artifact_deadline_ms(
+            conversion,
+            checkpoint.source_media.duration_ms,
+            limits.process_deadline_ms,
+        );
+        let status = tokio::time::timeout(Duration::from_millis(deadline), command.status())
+            .await
+            .map_err(|_| RunnerError::RenderTimeout)??;
         if status.success() {
             Ok(())
         } else {
-            Err(RunnerError::Source)
+            Err(RunnerError::RenderFailed)
         }
     }
 }
@@ -701,6 +717,16 @@ fn conversion(path: &Path, probe: &Probe) -> Conversion {
         (true, false) => Conversion::Remux,
         (false, _) => Conversion::Transcode,
     }
+}
+
+fn artifact_deadline_ms(conversion: Conversion, duration_ms: u64, configured_ms: u64) -> u64 {
+    if conversion != Conversion::Transcode {
+        return configured_ms;
+    }
+    duration_ms
+        .saturating_mul(TRANSCODE_DEADLINE_PER_MEDIA_MS)
+        .min(MAX_TRANSCODE_DEADLINE_MS)
+        .max(configured_ms)
 }
 
 fn preparation_tasks(media: &MediaInfo, platforms: &[String]) -> Vec<String> {
@@ -759,4 +785,29 @@ async fn file_sha256(path: &Path) -> Result<String, RunnerError> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{artifact_deadline_ms, Conversion};
+
+    #[test]
+    fn transcode_deadline_scales_with_clip_duration() {
+        assert_eq!(
+            artifact_deadline_ms(Conversion::Transcode, 43_000, 300_000),
+            430_000
+        );
+        assert_eq!(
+            artifact_deadline_ms(Conversion::Transcode, 120_000, 300_000),
+            600_000
+        );
+        assert_eq!(
+            artifact_deadline_ms(Conversion::Transcode, 5_000, 300_000),
+            300_000
+        );
+        assert_eq!(
+            artifact_deadline_ms(Conversion::Remux, 43_000, 300_000),
+            300_000
+        );
+    }
 }

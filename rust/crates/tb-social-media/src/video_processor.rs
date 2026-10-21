@@ -13,8 +13,8 @@ use serde_json::Value;
 
 use crate::layout::{LayoutBox, StreamerLayout, TARGET_HEIGHT, TARGET_WIDTH};
 
-const VIDEO_PRESET: &str = "veryfast";
-const VIDEO_CRF: &str = "18";
+pub(crate) const VIDEO_PRESET: &str = "veryfast";
+pub(crate) const VIDEO_CRF: &str = "18";
 const VIDEO_PROFILE: &str = "high";
 const PIXEL_FORMAT: &str = "yuv420p";
 const AUDIO_BITRATE: &str = "192k";

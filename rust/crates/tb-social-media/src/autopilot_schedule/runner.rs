@@ -46,6 +46,10 @@ pub enum RunnerError {
     Json(#[from] serde_json::Error),
     #[error("Der Clip konnte vorübergehend nicht heruntergeladen werden")]
     Download,
+    #[error("Das Video hat zu lange zum Rendern gebraucht.")]
+    RenderTimeout,
+    #[error("Das Video konnte nicht erstellt werden.")]
+    RenderFailed,
     #[error("Der ursprüngliche Clip oder die fertige Datei ist nicht verfügbar oder ungültig")]
     Source,
 }
@@ -191,12 +195,26 @@ impl AutopilotWorker {
                                 autopilot_settings::SettingsError::Database(_)
                             ))
                             | RunnerError::Download
+                            | RunnerError::RenderTimeout
+                            | RunnerError::RenderFailed
                             | RunnerError::Video(ProducedVideoError::Database(_))
                             | RunnerError::Video(ProducedVideoError::Settings(
                                 autopilot_settings::SettingsError::Database(_)
                             ))
                     );
-                    retry_or_fail(&self.pool, job, "static_production_failed", retryable).await?;
+                    let detail = matches!(
+                        error,
+                        RunnerError::RenderTimeout | RunnerError::RenderFailed
+                    )
+                    .then(|| error.to_string());
+                    retry_or_fail(
+                        &self.pool,
+                        job,
+                        "static_production_failed",
+                        retryable,
+                        detail.as_deref(),
+                    )
+                    .await?;
                     if !retryable || job.attempts >= job.max_attempts {
                         self.fail_static_video(job).await?;
                     }
