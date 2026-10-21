@@ -1,4 +1,5 @@
-import { DEMO_API_BASE, LIVE_API_BASE, dashboardRuntimeConfig, isPublicTourPath } from '../runtimeConfig';
+import { DEMO_API_BASE, LIVE_API_BASE, dashboardRuntimeConfig } from '../runtimeConfig';
+import { onPublicTour } from '../publicTour';
 import { getPreviewApiFixture, getPreviewPathFixture } from '../preview/fixtures';
 import {
   PREVIEW_HOME_ROUTE,
@@ -158,13 +159,10 @@ export async function fetchJson<T>(
   options: FetchJsonOptions = {}
 ): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
-  const onTour = typeof window !== 'undefined' && isPublicTourPath(window.location.pathname);
+  const onTour = onPublicTour();
   if (onTour && method !== 'GET') {
     throw new ApiHttpError(DEMO_WRITE_BLOCKED_MESSAGE, 403);
   }
-  // Aufrufe mit absolutem Pfad (Uplink etwa) gehen nicht ueber `fetchApi` und
-  // haetten im Preview sonst keinen Gegenueber. Nur lesende Aufrufe: eine
-  // Fixture auf ein PUT waere ein erfundener Schreib-Erfolg.
   if ((isPreviewLocalhost() || onTour) && method === 'GET') {
     const fixture = demoFixtureForGet<T>(input);
     if (fixture !== undefined) {
@@ -202,7 +200,7 @@ export async function fetchApi<T>(
   timeoutMs?: number,
   signal?: AbortSignal
 ): Promise<T> {
-  const onTour = typeof window !== 'undefined' && isPublicTourPath(window.location.pathname);
+  const onTour = onPublicTour();
   if (isPreviewLocalhost() || onTour) {
     const fixture = getPreviewApiFixture(endpoint, params);
     if (fixture !== undefined) {

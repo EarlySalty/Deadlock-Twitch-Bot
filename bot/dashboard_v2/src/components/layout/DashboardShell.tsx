@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { DashboardSidebar, type DashboardRoute } from '@/components/layout/DashboardSidebar';
-import { isPublicTourPath } from '@/runtimeConfig';
+import { onPublicTour } from '@/publicTour';
 
 export type { DashboardRoute };
 
@@ -29,7 +29,7 @@ export function DashboardShell({
   showSidebar?: boolean;
   children: ReactNode;
 }) {
-  const tourMode = typeof window !== 'undefined' && isPublicTourPath(window.location.pathname);
+  const tourMode = onPublicTour();
   const withSidebar = showSidebar && (!demoMode || tourMode);
   return (
     <div className="internal-home-vibe relative min-h-screen">

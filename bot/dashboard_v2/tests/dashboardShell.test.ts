@@ -144,7 +144,7 @@ test('der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite', () => {
 
 test('DashboardShell zeigt im Rundgang Banner und Sidebar', () => {
   assert.match(SHELL, /function TourBanner/);
-  assert.match(SHELL, /isPublicTourPath\(window\.location\.pathname\)/);
+  assert.match(SHELL, /const tourMode = onPublicTour\(\);/);
   assert.match(SIDEBAR, /tourHref\(href, tourPath\)/);
 });
 

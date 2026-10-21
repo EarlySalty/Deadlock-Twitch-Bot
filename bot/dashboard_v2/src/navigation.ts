@@ -10,6 +10,7 @@ import {
   PREVIEW_UPLINK_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
 } from './preview/routes';
+import { isPublicTourPath } from './publicTour';
 
 const dashboardPaths = new Set([
   PREVIEW_ANALYTICS_ROUTE, PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE,
@@ -27,15 +28,7 @@ function navigationIndex(): number | null {
 
 function isDashboardPath(pathname: string): boolean {
   const normalized = pathname.replace(/\/+$/, '') || '/';
-  if (dashboardPaths.has(normalized)) {
-    return true;
-  }
-  return (
-    normalized === '/twitch/rundgang' ||
-    normalized.startsWith('/twitch/rundgang/') ||
-    normalized === '/demo/twitch/rundgang' ||
-    normalized.startsWith('/demo/twitch/rundgang/')
-  );
+  return dashboardPaths.has(normalized) || isPublicTourPath(normalized);
 }
 
 export function dashboardDestination(href: string): URL | null {

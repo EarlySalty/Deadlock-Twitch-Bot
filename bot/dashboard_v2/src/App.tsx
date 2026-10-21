@@ -33,10 +33,9 @@ import { shouldRetryApiQuery } from '@/api/httpError';
 import {
   dashboardRuntimeConfig,
   hasDemoRuntimeConfig,
-  isPublicTourPath,
-  livePathFromTourPath,
   resolveEffectiveDemoMode,
 } from '@/runtimeConfig';
+import { livePathFromTourPath, onPublicTour } from '@/publicTour';
 import { AlertTriangle } from 'lucide-react';
 import { pageLoaders } from './pageLoaders';
 import { navigationSnapshot, subscribeNavigation } from './navigation';
@@ -319,7 +318,7 @@ function AnalyticsDashboard() {
             isDemoMode={isDemoMode}
           />
 
-          {isDemoMode && !isPublicTourPath(window.location.pathname) && (
+          {isDemoMode && !onPublicTour() && (
             <div className="mb-4 rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3 text-sm text-warning/90">
               {t(
                 'Demo-Daten aus einem statischen Snapshot. Profilwechsel und Analysen laufen ausschließlich über den Demo-Namespace.',

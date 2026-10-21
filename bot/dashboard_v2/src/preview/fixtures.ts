@@ -9,7 +9,7 @@ import type { CatalogPlan } from '@/types/billing';
 import { DEFAULT_LAYOUT, type ClipApprovalRecord, type PostingPlan } from '../types/socialMedia';
 import type { SocialClipMitPosting, PlatformStatus } from '@/api/socialMedia';
 import { aiPreviewConsent, aiPreviewJob, type AiPreviewScenario } from '../components/socialmedia/ai/preview';
-import { isPublicTourPath } from '../runtimeConfig';
+import { onPublicTour } from '../publicTour';
 
 const SOCIAL_WORKSPACE_PREVIEW = import.meta.env?.MODE === 'preview' || import.meta.env?.MODE === undefined;
 const NOW_ISO = '2026-04-22T09:30:00Z';
@@ -467,7 +467,7 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
   const pathname = url.pathname;
   const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
   if ((init.method ?? 'GET').toUpperCase() !== 'GET') {
-    const tour = typeof window !== 'undefined' && isPublicTourPath(window.location.pathname);
+    const tour = onPublicTour();
     const error = {
       error: tour ? 'demo_readonly' : 'preview_read_only',
       message: tour ? 'In der Demo kannst du nichts ändern.' : 'Die lokale Vorschau speichert, verbindet und veröffentlicht nichts.',
@@ -528,7 +528,7 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
 }
 
 function internalHomeApiFixture(): unknown {
-  const tour = typeof window !== 'undefined' && isPublicTourPath(window.location.pathname);
+  const tour = onPublicTour();
   const displayName = tour ? 'MidCore Live' : 'Local Preview Creator';
   return {
     profile: {
@@ -680,7 +680,7 @@ export function getPreviewApiFixture(
   _params: Record<string, string | number | boolean> = {}
 ): unknown | undefined {
   if (endpoint === '/auth-status') {
-    const tour = typeof window !== 'undefined' && isPublicTourPath(window.location.pathname);
+    const tour = onPublicTour();
     const partner = tour || (SOCIAL_WORKSPACE_PREVIEW && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fixture') === 'partner');
     if (partner) {
       return {
@@ -718,7 +718,7 @@ export function getPreviewApiFixture(
   if (endpoint === '/feedback/counts') return { total: 0, unread: 0 };
   if (endpoint === '/streamers') return [{ login: 'midcore_live', twitchUserId: '123456789', isPartner: true }, ...(SOCIAL_WORKSPACE_PREVIEW ? [{ login: 'preview_second', twitchUserId: '987654321', isPartner: true }] : [])];
   if (endpoint === '/billing/catalog') {
-    const tour = typeof window !== 'undefined' && isPublicTourPath(window.location.pathname);
+    const tour = onPublicTour();
     if (!tour) return BILLING_CATALOG_FIXTURE;
     return {
       plans: BILLING_CATALOG_FIXTURE.plans.map((plan) => ({

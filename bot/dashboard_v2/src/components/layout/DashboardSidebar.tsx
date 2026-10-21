@@ -16,7 +16,7 @@ import {
   analyticsTabHref,
 } from '@/preview/routes';
 import { useOnboarding } from '@/components/onboarding/onboardingState';
-import { isPublicTourPath, tourHref } from '@/runtimeConfig';
+import { currentPathname, isPublicTourPath, tourHref } from '@/publicTour';
 import { FeedbackBadge } from '@/components/feedback/FeedbackBadge';
 import { useT } from '@/context/LanguageContext';
 import {
@@ -114,7 +114,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   const navigationId = useId();
   const compactNavigation = activeRoute === 'social';
   const shownAvatar = avatarFailed ? null : avatarUrl;
-  const tourPath = typeof window === 'undefined' ? '' : window.location.pathname;
+  const tourPath = currentPathname();
   const toHref = (href: string) => tourHref(href, tourPath);
   const canSeeChallenges = Boolean(
     authStatus?.authenticated && authStatus.twitchUserId && (authStatus.isAdmin || authStatus.partnerStatus === 'active'),
