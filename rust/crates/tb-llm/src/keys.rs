@@ -19,6 +19,10 @@ pub fn anthropic_api_key() -> Option<String> {
     nonempty_env("ANTHROPIC_API_KEY")
 }
 
+pub fn anthropic_workspace_id() -> Option<String> {
+    nonempty_env("ANTHROPIC_WORKSPACE_ID").map(|value| value.trim().to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

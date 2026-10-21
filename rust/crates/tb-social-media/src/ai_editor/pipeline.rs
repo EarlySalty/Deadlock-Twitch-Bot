@@ -497,6 +497,38 @@ fn segment_ms(seconds: f64) -> Result<i64, AiEditorError> {
     Ok((seconds * 1000.0).round() as i64)
 }
 
+fn stt_failure(error: super::stt::SttError) -> AiEditorError {
+    tracing::warn!(error = %error, "Social AI local transcription failed");
+    AiEditorError::Transcription
+}
+
+fn fit_segments(
+    raw: &[tb_engagement::transcribe::TranscriptSegment],
+    duration_ms: u64,
+    drift_ms: u64,
+) -> Result<Vec<TranscriptSegment>, AiEditorError> {
+    let duration = i64::try_from(duration_ms).map_err(|_| AiEditorError::Transcription)?;
+    let limit = duration.saturating_add(i64::try_from(drift_ms).unwrap_or(i64::MAX));
+    raw.iter()
+        .map(|segment| {
+            let start_ms = segment_ms(segment.start_seconds)?;
+            let end_ms = segment_ms(segment.end_seconds)?;
+            if end_ms > limit {
+                return Err(AiEditorError::Transcription);
+            }
+            Ok((start_ms, end_ms.min(duration), segment))
+        })
+        .filter(|fitted| !matches!(fitted, Ok((start, end, _)) if start >= end))
+        .map(|fitted| {
+            fitted.map(|(start_ms, end_ms, segment)| TranscriptSegment {
+                start_ms,
+                end_ms,
+                text: segment.text.clone(),
+            })
+        })
+        .collect()
+}
+
 async fn transcribe(
     _ctx: &StageContext<'_>,
     frozen: &PreparingSnapshot,
@@ -514,35 +546,34 @@ async fn transcribe(
     let config = runtime.limits.stt.job_config()?;
     let mut lease = super::stt::SttLease::start(&seed, &workspace.0, &config)
         .await
-        .map_err(|_| AiEditorError::Transcription)?;
+        .map_err(stt_failure)?;
     let result = lease.transcribe_clip(&frozen.source.path).await;
     lease.stop().await;
-    let transcript = result.map_err(|_| AiEditorError::Transcription)?;
-    let segments = transcript
-        .segments
-        .iter()
-        .map(|segment| {
-            Ok(TranscriptSegment {
-                start_ms: segment_ms(segment.start_seconds)?,
-                end_ms: segment_ms(segment.end_seconds)?,
-                text: segment.text.clone(),
-            })
-        })
-        .collect::<Result<Vec<_>, AiEditorError>>()?;
-    if segments
-        .iter()
-        .any(|segment| segment.end_ms as u64 > frozen.media.duration_ms)
-    {
-        return Err(AiEditorError::Transcription);
-    }
+    let transcript = result.map_err(stt_failure)?;
+    let segments = fit_segments(
+        &transcript.segments,
+        frozen.media.duration_ms,
+        runtime.limits.plan.max_source_duration_drift_ms,
+    )
+    .inspect_err(|_| {
+        tracing::warn!(
+            duration_ms = frozen.media.duration_ms,
+            "Social AI transcript segments do not fit the clip duration"
+        )
+    })?;
     let checkpoint = StageCheckpoint::Transcribing {
-        transcript: transcript.text,
+        transcript: if segments.is_empty() {
+            String::new()
+        } else {
+            transcript.text
+        },
         language: transcript.language,
         segments,
     };
-    checkpoint
-        .validate()
-        .map_err(|_| AiEditorError::Transcription)?;
+    checkpoint.validate().map_err(|_| {
+        tracing::warn!("Social AI transcript checkpoint failed validation");
+        AiEditorError::Transcription
+    })?;
     Ok(checkpoint)
 }
 
