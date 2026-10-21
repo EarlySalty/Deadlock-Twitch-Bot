@@ -1197,8 +1197,17 @@ async fn reject_demo_writes(req: axum::extract::Request, next: Next) -> Response
     next.run(req).await
 }
 
-async fn demo_api_empty() -> Response {
-    Json(json!({})).into_response()
+const DEMO_UNAVAILABLE_MESSAGE: &str = "In der Demo nicht verfügbar.";
+
+async fn demo_api_unavailable() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "error": "demo_unavailable",
+            "message": DEMO_UNAVAILABLE_MESSAGE,
+        })),
+    )
+        .into_response()
 }
 
 async fn demo_internal_home() -> Response {
@@ -1456,7 +1465,7 @@ pub fn build_demo_router() -> Router {
         .route("/twitch/demo/api/v2/challenges/me", get(demo_challenges_me))
         .route(
             "/twitch/demo/api/v2/{*path}",
-            get(demo_api_empty)
+            get(demo_api_unavailable)
                 .post(demo_write_blocked)
                 .put(demo_write_blocked)
                 .patch(demo_write_blocked)
@@ -2129,8 +2138,18 @@ mod tests {
         assert!(catalog["plans"].is_array());
         assert_eq!(catalog["plans"][1]["id"], "studio_ki");
 
-        let unknown = demo_json("/twitch/demo/api/v2/does-not-exist").await;
-        assert!(unknown.is_object());
+        let unknown = build_demo_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/twitch/demo/api/v2/category-comparison")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (unknown_status, unknown_json) = json_body(unknown).await;
+        assert_eq!(unknown_status, StatusCode::NOT_FOUND);
+        assert_eq!(unknown_json["error"], "demo_unavailable");
 
         let resp = build_demo_router()
             .oneshot(

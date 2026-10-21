@@ -501,7 +501,7 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
     return json({ error: 'preview_fixture_missing' }, 404);
   }
   const streamer = SOCIAL_WORKSPACE_PREVIEW && url.searchParams.get('twitch_user_id') === '987654321' ? 'preview_second' : 'midcore_live';
-  if (pathname.endsWith('/access/me')) return json({ allowed: true, streamer: 'midcore_live', isAdmin: true });
+  if (pathname.endsWith('/access/me')) return json({ allowed: true, streamer: 'midcore_live', isAdmin: !onPublicTour() });
   if (pathname.endsWith('/access')) return json({ items: [{ twitch_user_id: '123456789', streamer_login: 'midcore_live', granted: true }] });
   if (pathname.endsWith('/platforms/status')) {
     if (scenario === 'accounts-error') return json({ error: 'platform_status_failed' }, 503);
@@ -740,6 +740,7 @@ export function getPreviewApiFixture(
       model: 'glm-5.3-flash',
     };
   }
+  if (endpoint === '/feedback' && onPublicTour()) return { items: [], next: null };
   if (endpoint === '/challenges/me') return CHALLENGES_ME_FIXTURE;
   if (endpoint === '/challenges/viewers') return CHALLENGES_VIEWERS_FIXTURE;
   if (endpoint === '/leaderboard/effort') return EFFORT_LEADERBOARD_FIXTURE;
@@ -925,15 +926,6 @@ const DONO_GOAL_FIXTURE = {
   connected: true,
 };
 
-/**
- * Fixture zu einem absoluten Pfad. `undefined` heisst: kein Fixture, der
- * Aufruf geht wie sonst ins Netz.
- *
- * Schreibende Aufrufe bekommen absichtlich die unveraenderte Zielliste
- * zurueck. Ein Preview ohne Server kann nichts speichern, und eine erfundene
- * Bestaetigung waere schlimmer als keine: sie zeigte einen Zustand, den es
- * nirgends gibt.
- */
 const AUTOPILOT_SCHEDULE_FIXTURE = {
   settings: {
     enabled: true,

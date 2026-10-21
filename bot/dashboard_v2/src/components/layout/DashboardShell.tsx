@@ -1,18 +1,29 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { DashboardSidebar, type DashboardRoute } from '@/components/layout/DashboardSidebar';
+import { useT } from '@/context/LanguageContext';
+import { keepLinksInTour } from '@/navigation';
 import { onPublicTour } from '@/publicTour';
 
 export type { DashboardRoute };
 
 function TourBanner() {
+  const t = useT();
+  useEffect(() => {
+    document.addEventListener('click', keepLinksInTour, true);
+    document.addEventListener('auxclick', keepLinksInTour, true);
+    return () => {
+      document.removeEventListener('click', keepLinksInTour, true);
+      document.removeEventListener('auxclick', keepLinksInTour, true);
+    };
+  }, []);
   return (
     <div
       role="status"
       className="rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3 text-sm text-warning/90"
     >
-      Das ist eine Demo. Du kannst dich umsehen, nichts wird gespeichert.{' '}
+      {t('Das ist eine Demo. Du kannst dich umsehen, nichts wird gespeichert.')}{' '}
       <a className="font-semibold underline decoration-warning/40 underline-offset-2 hover:text-warning" href="/twitch/auth/login?next=%2Ftwitch%2Fdashboard">
-        Zum echten Dashboard
+        {t('Zum echten Dashboard')}
       </a>
     </div>
   );
