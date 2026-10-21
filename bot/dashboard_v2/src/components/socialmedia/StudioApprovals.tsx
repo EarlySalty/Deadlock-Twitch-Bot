@@ -23,8 +23,7 @@ function videoPlatforms(snapshot: PublishSnapshot, video: PublishVideo): Publish
 }
 
 function quickApprovalPlatforms(snapshot: PublishSnapshot, video: PublishVideo): PublishPlatform[] {
-  return videoPlatforms(snapshot, video).filter(platform => platform !== 'tiktok'
-    && snapshot.connections.some(connection => connection.platform === platform && connection.connected));
+  return videoPlatforms(snapshot, video).filter(platform => snapshot.connections.some(connection => connection.platform === platform && connection.connected));
 }
 
 function revisionVersion(job: AiJobView, videoId: number) {
@@ -157,7 +156,7 @@ function ApprovalActions({ video, snapshot, owner, client, onNavigate, testRunAp
         <Trash2 className="h-4 w-4" aria-hidden />{t(discard.isPending ? 'Wird verworfen …' : 'Test verwerfen (Clip zurück in den Vorrat)')}
       </button>}
     </div>
-    {videoPlatforms(snapshot, video).includes('tiktok') && <p className="studio-approval-note">{t('TikTok braucht eigene Angaben und wird beim Prüfen freigegeben.')}</p>}
+    {videoPlatforms(snapshot, video).includes('tiktok') && <p className="studio-approval-note">{t('TikTok erhält das Video als Entwurf. Veröffentlichen kannst du es danach in der TikTok-App.')}</p>}
     {approve.isSuccess && <p className="studio-approval-note" role="status">{t(testJobId ? 'Für den nächsten Termin eingeplant.' : 'Freigegeben.')}</p>}
     {revising && <form id={feedbackId} className="studio-approval-feedback" onSubmit={event => { event.preventDefault(); if (feedback.trim() && feedbackBytes <= 2000) revise.mutate(feedback.trim()); }}>
       <label>

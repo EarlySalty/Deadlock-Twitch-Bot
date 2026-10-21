@@ -1108,10 +1108,18 @@ pub fn plan(inventory: &Inventory) -> Plan {
             plan.rows.push(planned(table, owner, key, row, outcome));
         }
     }
-    for owner in plan_owners(&plan) {
-        let reconciliation = context.reconciliation(&owner, &plan);
-        plan.reconciliation.insert(owner, reconciliation);
+    let mut by_owner = BTreeMap::<&str, Vec<&PipelineMigrationMapping>>::new();
+    for row in &plan.rows {
+        by_owner
+            .entry(row.mapping.twitch_user_id.as_str())
+            .or_default()
+            .push(&row.mapping);
     }
+    let reconciliation: BTreeMap<String, Value> = by_owner
+        .into_iter()
+        .map(|(owner, rows)| (owner.to_string(), context.reconciliation(owner, &rows)))
+        .collect();
+    plan.reconciliation.extend(reconciliation);
     plan
 }
 
@@ -1558,15 +1566,9 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn reconciliation(&self, owner: &str, plan: &Plan) -> Value {
-        let rows: Vec<&PipelineMigrationMapping> = plan
-            .rows
-            .iter()
-            .map(|row| &row.mapping)
-            .filter(|mapping| mapping.twitch_user_id == owner)
-            .collect();
+    fn reconciliation(&self, owner: &str, rows: &[&PipelineMigrationMapping]) -> Value {
         let mut counts = BTreeMap::<String, DispositionCounts>::new();
-        for mapping in &rows {
+        for mapping in rows {
             count(
                 counts.entry(mapping.legacy_table.clone()).or_default(),
                 mapping.disposition,
@@ -1581,7 +1583,7 @@ impl<'a> Context<'a> {
             "counts": counts,
             "unresolved": unresolved,
             "ready": unresolved == 0,
-            "proposed_policy": self.proposed_policy(owner, &rows),
+            "proposed_policy": self.proposed_policy(owner, rows),
         })
     }
 

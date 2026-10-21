@@ -238,7 +238,7 @@ export function ClipCard({
               : stoppbar
                 ? t('Geplant')
                 : tiktokInbox && !clip.platform_status.youtube && !clip.platform_status.instagram
-                  ? t('Im TikTok-Postfach')
+                  ? t('Als Entwurf in TikTok')
                   : clip.youtube_visibility === 'private' && clip.platform_status.youtube && !clip.platform_status.tiktok && !clip.platform_status.instagram
                     ? t('Privat auf YouTube')
                     : t(status.label)}

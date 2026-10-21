@@ -1878,7 +1878,7 @@ fn stored_platform_scopes(raw: Option<&str>) -> Option<Vec<&str>> {
 
 fn platform_authorization_json(status: &PlatformStatus, has_scope: bool) -> Value {
     let required: &[&str] = match status.platform.as_str() {
-        "tiktok" => &["video.publish"],
+        "tiktok" => &["video.upload"],
         "youtube" => &["youtube.upload"],
         "instagram" => &[
             "instagram_business_basic",
@@ -2081,8 +2081,7 @@ async fn load_upload_queue_info(
     }
     let rows = sqlx::query(
         "SELECT DISTINCT ON (clip_id, platform) clip_id, platform, scheduled_at, last_error, status, youtube_visibility, \
-         to_jsonb(twitch_clips_upload_queue)->>'tiktok_publish_status' AS publish_status, \
-         to_jsonb(twitch_clips_upload_queue)->'tiktok_post_options' AS tiktok_options \
+         to_jsonb(twitch_clips_upload_queue)->>'tiktok_publish_status' AS publish_status \
          FROM twitch_clips_upload_queue WHERE clip_id = ANY($1) \
          ORDER BY clip_id, platform, CASE WHEN platform = 'tiktok' AND status IN ('inbox', 'inbox_pending') THEN 3 \
              WHEN platform = 'tiktok' AND status = 'completed' THEN 2 ELSE 0 END DESC, id DESC",
@@ -2096,23 +2095,11 @@ async fn load_upload_queue_info(
         let scheduled_at = r
             .try_get::<Option<DateTime<Utc>>, _>("scheduled_at")?
             .map(|ts| ts.to_rfc3339());
-        let mut status = r.try_get::<Option<String>, _>("status")?;
+        let status = r.try_get::<Option<String>, _>("status")?;
         let mut last_error = r
             .try_get::<Option<String>, _>("last_error")?
             .filter(|s| !s.trim().is_empty());
-        let options = r.try_get::<Option<Value>, _>("tiktok_options")?;
-        if platform == "tiktok"
-            && matches!(
-                status.as_deref(),
-                Some("pending" | "failed" | "waiting_connection")
-            )
-            && !tb_social_media::clip_queue::tiktok_choice_is_complete(options.as_ref())
-        {
-            status = Some("waiting_tiktok_approval".into());
-        }
-        if status.as_deref() == Some("waiting_tiktok_approval") {
-            last_error = Some("Öffne die TikTok-Freigabe und wähle die Veröffentlichungseinstellungen. Bis dahin wird der Clip nicht veröffentlicht.".into());
-        } else if status.as_deref() == Some("waiting_schedule") {
+        if status.as_deref() == Some("waiting_schedule") {
             last_error = Some("Der bisherige Termin ist verstrichen oder fehlt. Plane TikTok erneut ein, damit der Clip einen neuen Termin bekommt.".into());
         }
         info.entry(clip_id).or_default().insert(
@@ -7657,8 +7644,11 @@ mod tests {
         assert!(detail["scheduled_at"]["tiktok"].is_null());
         assert!(detail["scheduled_at"]["instagram"].is_null());
         assert!(detail["upload_errors"]["youtube"].is_null());
-        assert_eq!(detail["upload_states"]["tiktok"], "waiting_tiktok_approval");
-        assert!(detail["upload_errors"]["tiktok"].as_str().is_some());
+        assert_eq!(detail["upload_states"]["tiktok"], "failed");
+        assert_eq!(
+            detail["upload_errors"]["tiktok"],
+            "quota exceeded: daily limit"
+        );
         assert!(detail["upload_errors"]["instagram"].is_null());
 
         // Die Liste liefert dieselben Felder (eine Abfrage fuer die ganze Seite).
@@ -7679,7 +7669,7 @@ mod tests {
         .await;
         let item = &liste["items"][0];
         assert_eq!(item["scheduled_at"]["youtube"], "2026-08-24T18:00:00+00:00");
-        assert_eq!(item["upload_states"]["tiktok"], "waiting_tiktok_approval");
+        assert_eq!(item["upload_states"]["tiktok"], "failed");
         assert_eq!(
             item["upload_errors"]["tiktok"],
             detail["upload_errors"]["tiktok"]

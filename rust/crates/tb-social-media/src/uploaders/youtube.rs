@@ -893,7 +893,7 @@ impl YouTubeUploader {
         }
         let body = baue_snippet(title, description, hashtags)?;
 
-        let (sitzung, mut offset) = match session.filter(|s| !s.is_empty()) {
+        let (mut sitzung, mut offset) = match session.filter(|s| !s.is_empty()) {
             Some(uri) => match self.resumable_offset(uri, groesse).await? {
                 ResumeStand::Fertig(video_id) => {
                     return Ok(ShortsUpload {
@@ -910,6 +910,7 @@ impl YouTubeUploader {
             None => (self.sitzung_starten(&body, groesse, "video/mp4").await?, 0),
         };
         self.melde_fortschritt(&sitzung, offset);
+        let mut neu_begonnen = false;
 
         loop {
             if offset >= groesse {
@@ -919,10 +920,33 @@ impl YouTubeUploader {
                     "YouTube upload: vollstaendig uebertragen, aber ohne Video-ID".to_string(),
                 ));
             }
-            match self
+            let ergebnis = match self
                 .upload_chunk(&sitzung, Path::new(video_path), offset)
-                .await?
+                .await
             {
+                Ok(ergebnis) => ergebnis,
+                Err(fehler) if !neu_begonnen => {
+                    match self.resumable_offset(&sitzung, groesse).await {
+                        Ok(ResumeStand::Verfallen) => {
+                            tracing::info!(video_path, "Upload-Sitzung verfallen, beginne neu");
+                            neu_begonnen = true;
+                            sitzung = self.sitzung_starten(&body, groesse, "video/mp4").await?;
+                            offset = 0;
+                            self.melde_fortschritt(&sitzung, offset);
+                            continue;
+                        }
+                        Ok(ResumeStand::Fertig(video_id)) => {
+                            return Ok(ShortsUpload {
+                                video_id,
+                                session_uri: sitzung.clone(),
+                            })
+                        }
+                        _ => return Err(fehler),
+                    }
+                }
+                Err(fehler) => return Err(fehler),
+            };
+            match ergebnis {
                 ChunkOutcome::Fertig(video_id) => {
                     return Ok(ShortsUpload {
                         video_id,
@@ -1659,6 +1683,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(id, "yt-123");
+    }
+
+    #[tokio::test]
+    async fn verfallene_sitzung_beginnt_einmal_neu() {
+        let server = MockServer::start().await;
+        let alt = format!("{}/session/alt", server.uri());
+        let neu = format!("{}/session/neu", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/videos"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Location", alt.as_str()))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/videos"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Location", neu.as_str()))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/session/alt"))
+            .respond_with(ResponseTemplate::new(410))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/session/neu"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "yt-neu" })))
+            .mount(&server)
+            .await;
+        let up = uploader(&server);
+        let video = temp_video().await;
+        let fertig = up
+            .upload_short_resumable(&video, "Titel", "Desc", &[], None)
+            .await
+            .unwrap();
+        assert_eq!(fertig.video_id, "yt-neu");
+        assert_eq!(fertig.session_uri, neu);
+        let inits = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method.as_str() == "POST")
+            .count();
+        assert_eq!(inits, 2);
+    }
+
+    #[tokio::test]
+    async fn verfallene_sitzung_wird_nur_einmal_neu_begonnen() {
+        let server = MockServer::start().await;
+        let alt = format!("{}/session/immer-weg", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/videos"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Location", alt.as_str()))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/session/immer-weg"))
+            .respond_with(ResponseTemplate::new(410))
+            .mount(&server)
+            .await;
+        let up = uploader(&server);
+        let video = temp_video().await;
+        let fehler = up
+            .upload_short_resumable(&video, "Titel", "Desc", &[], None)
+            .await
+            .unwrap_err();
+        assert!(matches!(fehler, UploadError::Api(_)));
     }
 
     // Der Shorts-Pfad meldet die benutzte Sitzung nach aussen und schreibt den

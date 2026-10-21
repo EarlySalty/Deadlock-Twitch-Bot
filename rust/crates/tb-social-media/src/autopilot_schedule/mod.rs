@@ -87,6 +87,7 @@ pub struct QueueJob {
     pub last_error: Option<String>,
     pub review_reasons: Vec<String>,
     pub review_explanation: Option<String>,
+    pub superseded: bool,
 }
 
 impl QueueJob {
@@ -94,6 +95,7 @@ impl QueueJob {
         job: ProductionJob,
         clip_title: String,
         reservations: Vec<Reservation>,
+        superseded: bool,
     ) -> Result<Self, ScheduleError> {
         Ok(Self {
             id: job.id,
@@ -116,6 +118,7 @@ impl QueueJob {
                 .get("review_explanation")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
+            superseded,
         })
     }
 }
@@ -895,11 +898,24 @@ async fn queue_jobs_on(
             scheduled_at,
         }]);
     }
+    let superseded: std::collections::HashSet<i64> = sqlx::query_scalar(
+        "SELECT f.id FROM social_production_jobs f
+        WHERE f.id = ANY($1) AND f.status = 'failed' AND EXISTS (
+            SELECT 1 FROM social_production_jobs later
+            WHERE later.twitch_user_id = f.twitch_user_id AND later.clip_id = f.clip_id
+            AND later.id > f.id AND later.status IN ('queued', 'running', 'review', 'completed'))",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .collect();
     let mut queued = Vec::with_capacity(jobs.len());
     for job in jobs {
         let title = titles.get(&job.clip_id).cloned().unwrap_or_default();
         let reservations = reserved.remove(&job.id).unwrap_or_default();
-        queued.extend([QueueJob::from_job(job, title, reservations)?]);
+        let replaced = superseded.contains(&job.id);
+        queued.extend([QueueJob::from_job(job, title, reservations, replaced)?]);
     }
     Ok(queued)
 }

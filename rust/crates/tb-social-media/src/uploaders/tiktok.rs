@@ -1,19 +1,3 @@
-//! TikTok-Uploader gegen die Content Posting API v2 (Direct Post).
-//!
-//! Ablauf laut Doku (developers.tiktok.com, "Direct Post" + "Media Transfer
-//! Guide"):
-//!
-//! 1. `POST /v2/post/publish/creator_info/query/` holt die erlaubten
-//!    Privacy-Level und die Interaktionsschalter des Creators. Der Call ist vor
-//!    jedem Direct Post Pflicht.
-//! 2. `POST /v2/post/publish/video/init/` meldet Caption, Privacy-Level und den
-//!    Chunk-Plan an und liefert `publish_id` plus `upload_url`.
-//! 3. Die Chunks gehen sequenziell per `PUT` an die `upload_url`.
-//!
-//! Einen eigenen Publish-Call gibt es nicht: TikTok startet die
-//! Veroeffentlichung selbst, sobald der letzte Chunk angekommen ist. Der Status
-//! laeuft danach ueber `POST /v2/post/publish/status/fetch/`.
-
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -27,16 +11,9 @@ use super::{
 };
 use crate::video_processor::format_hashtags;
 
-/// Echte Obergrenze der Content Posting API: 4 GB je Datei.
 const MAX_FILE_MB: f64 = 4096.0;
-/// TikTok kennt in `post_info` nur ein Textfeld (`title`). Titel, Beschreibung
-/// und Hashtags landen also zusammen in diesem einen Feld, Grenze 2200
-/// UTF-16-Einheiten.
 const CAPTION_MAX: usize = 2200;
 
-/// Chunk-Grenzen aus dem Media Transfer Guide. MB wird hier binaer gerechnet
-/// (MiB); das liegt bei der Untergrenze auf der sicheren Seite und bleibt bei
-/// der Obergrenze innerhalb dessen, was die Doku als Beispiel zeigt.
 const MIN_CHUNK_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_CHUNK_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_CHUNK_BYTES: u64 = 10 * 1024 * 1024;
@@ -124,12 +101,9 @@ impl TikTokPostOptions {
     }
 }
 
-/// Versuche je HTTP-Aufruf (erster Versuch plus zwei Wiederholungen).
 const MAX_ATTEMPTS: u32 = 3;
 const BACKOFF_BASE_MS: u64 = 200;
 
-/// Antwort von `creator_info/query`. Bestimmt, welches Privacy-Level erlaubt
-/// ist und welche Interaktionen der Creator generell gesperrt hat.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CreatorInfo {
     pub creator_username: String,
@@ -141,41 +115,37 @@ pub struct CreatorInfo {
     pub max_video_post_duration_sec: i64,
 }
 
-/// Plan fuer den Datei-Upload: wie gross ein Chunk ist und wie viele es sind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ChunkPlan {
     chunk_size: u64,
     total_chunk_count: u64,
 }
 
-/// Chunk-Regeln der Doku als reine Funktion:
-///
-/// * Datei unter 5 MB geht als ein Stueck hoch, `chunk_size == video_size`.
-/// * sonst 10 MiB je Chunk, `total_chunk_count = floor(video_size / chunk_size)`.
-/// * jeder Chunk mindestens 5 MB und hoechstens 64 MB; der letzte Chunk nimmt
-///   die Restbytes mit und darf dadurch bis 128 MB gross werden.
-/// * hoechstens 1000 Chunks, notfalls wird `chunk_size` hochgezogen.
+fn source_info(video_size: u64, plan: ChunkPlan) -> Value {
+    json!({
+        "source": "FILE_UPLOAD",
+        "video_size": video_size,
+        "chunk_size": plan.chunk_size,
+        "total_chunk_count": plan.total_chunk_count,
+    })
+}
+
 fn chunk_plan(video_size: u64) -> (u64, u64) {
     if video_size < MIN_CHUNK_BYTES {
         return (video_size, 1);
     }
     let mut chunk_size = DEFAULT_CHUNK_BYTES;
     if video_size / chunk_size > MAX_CHUNKS {
-        // Bei sehr grossen Dateien den Chunk so weit hochziehen, dass die
-        // 1000er-Grenze haelt.
         chunk_size = video_size.div_ceil(MAX_CHUNKS);
     }
     chunk_size = chunk_size.clamp(MIN_CHUNK_BYTES, MAX_CHUNK_BYTES);
     let total_chunk_count = video_size / chunk_size;
     if total_chunk_count <= 1 {
-        // Ein einziger Chunk heisst: die ganze Datei ist der Chunk. Ein
-        // `chunk_size` groesser als die Datei waere laut Doku ungueltig.
         return (video_size, 1);
     }
     (chunk_size, total_chunk_count)
 }
 
-/// Titel, Beschreibung und Hashtags in das eine TikTok-Textfeld giessen.
 pub fn build_caption(title: &str, description: &str, hashtags: &[String]) -> String {
     let tags = format_hashtags(hashtags);
     let parts: Vec<&str> = [title.trim(), description.trim(), tags.trim()]
@@ -185,36 +155,21 @@ pub fn build_caption(title: &str, description: &str, hashtags: &[String]) -> Str
     truncate_utf16(&parts.join("\n\n"), CAPTION_MAX)
 }
 
-pub(crate) fn direct_post_uploader(
+pub(crate) fn draft_uploader(
     credentials: &crate::credentials::SocialMediaCredentials,
-    options: &TikTokPostOptions,
 ) -> Result<TikTokUploader, UploadError> {
-    if !options.consent {
-        return Err(UploadError::not_started(UploadError::Validation(
-            "Bitte öffne die TikTok-Freigabe am Clip und wähle die Veröffentlichungseinstellungen."
-                .into(),
-        )));
-    }
-    if options.credential_id != credentials.id
-        || Some(options.platform_user_id.as_str()) != credentials.platform_user_id.as_deref()
-    {
-        return Err(UploadError::not_started(UploadError::Validation(
-            "Das TikTok-Konto hat sich geändert. Bitte öffne die TikTok-Freigabe erneut.".into(),
-        )));
-    }
-    let publish_scope = credentials
+    let upload_scope = credentials
         .scopes
         .as_deref()
         .unwrap_or("")
         .split([',', ' '])
-        .any(|scope| scope == "video.publish");
-    if !publish_scope {
+        .any(|scope| scope == "video.upload");
+    if !upload_scope || credentials.access_token.is_empty() {
         return Err(UploadError::not_started(UploadError::NotAuthenticated));
     }
-    Ok(TikTokUploader::new(credentials.access_token.clone()).with_post_options(options.clone()))
+    Ok(TikTokUploader::new(credentials.access_token.clone()))
 }
 
-/// TikTok Content-Posting-Uploader (Direct Post).
 pub struct TikTokUploader {
     access_token: String,
     api_base: String,
@@ -237,7 +192,6 @@ impl TikTokUploader {
         }
     }
 
-    /// Ueberschreibt die API-Basis-URL (fuer Tests).
     pub fn with_api_base(mut self, base: impl Into<String>) -> Self {
         self.api_base = base.into();
         self
@@ -257,7 +211,6 @@ impl TikTokUploader {
         self
     }
 
-    /// Pflicht-Vorabfrage vor jedem Direct Post.
     pub async fn query_creator_info(&self) -> Result<CreatorInfo, UploadError> {
         let url = format!("{}/post/publish/creator_info/query/", self.api_base);
         let payload = self
@@ -303,11 +256,18 @@ impl TikTokUploader {
             chunk_size,
             total_chunk_count,
         };
-        let options = self.post_options.as_ref().ok_or_else(|| {
-            UploadError::not_started(UploadError::Validation(
-                "Bitte öffne die TikTok-Freigabe am Clip und wähle die Veröffentlichungseinstellungen.".into(),
-            ))
-        })?;
+        let Some(options) = self.post_options.as_ref() else {
+            let body = json!({ "source_info": source_info(video_size, plan) });
+            let (publish_id, upload_url) = self
+                .init_transfer("/post/publish/inbox/video/init/", "TikTok draft init", body)
+                .await?;
+            if let Some(checkpoint) = checkpoint {
+                checkpoint.record_publish_id(&publish_id).await?;
+            }
+            self.upload_chunks(video_path, &upload_url, video_size, plan)
+                .await?;
+            return Ok(publish_id);
+        };
         let info = self
             .query_creator_info()
             .await
@@ -342,13 +302,6 @@ impl TikTokUploader {
         video_size: u64,
         plan: ChunkPlan,
     ) -> Result<(String, String), UploadError> {
-        let url = format!("{}/post/publish/video/init/", self.api_base);
-        let source = json!({
-            "source": "FILE_UPLOAD",
-            "video_size": video_size,
-            "chunk_size": plan.chunk_size,
-            "total_chunk_count": plan.total_chunk_count,
-        });
         let body = json!({
             "post_info": {
                 "title": options.caption,
@@ -360,8 +313,19 @@ impl TikTokUploader {
                 "brand_content_toggle": options.brand_content_toggle,
                 "video_cover_timestamp_ms": 1000,
             },
-            "source_info": source,
+            "source_info": source_info(video_size, plan),
         });
+        self.init_transfer("/post/publish/video/init/", "TikTok init upload", body)
+            .await
+    }
+
+    async fn init_transfer(
+        &self,
+        endpoint: &str,
+        context: &str,
+        body: Value,
+    ) -> Result<(String, String), UploadError> {
+        let url = format!("{}{endpoint}", self.api_base);
         let response = self
             .http
             .post(&url)
@@ -376,7 +340,7 @@ impl TikTokUploader {
             .json()
             .await
             .map_err(|error| UploadError::Request(error.without_url().to_string()))?;
-        if let Err(error) = tiktok_error_guard(&payload, "TikTok init upload") {
+        if let Err(error) = tiktok_error_guard(&payload, context) {
             let code = payload["error"]["code"].as_str().unwrap_or("");
             if !status.is_server_error()
                 && matches!(
@@ -399,26 +363,23 @@ impl TikTokUploader {
             return Err(error);
         }
         if !status.is_success() {
-            return Err(UploadError::Api(format!("TikTok init upload: {status}")));
+            return Err(UploadError::Api(format!("{context}: {status}")));
         }
         let publish_id = payload["data"]["publish_id"]
             .as_str()
             .map(str::to_string)
             .ok_or_else(|| {
-                UploadError::Api("TikTok init upload: kein publish_id in der Antwort".to_string())
+                UploadError::Api(format!("{context}: kein publish_id in der Antwort"))
             })?;
         let upload_url = payload["data"]["upload_url"]
             .as_str()
             .map(str::to_string)
             .ok_or_else(|| {
-                UploadError::Api("TikTok init upload: keine upload_url in der Antwort".to_string())
+                UploadError::Api(format!("{context}: keine upload_url in der Antwort"))
             })?;
         Ok((publish_id, upload_url))
     }
 
-    /// Schiebt die Datei sequenziell an die `upload_url`. Trailing Bytes gehen
-    /// an den letzten Chunk, es entsteht also kein zusaetzlicher Kurz-Chunk.
-    /// Nach dem letzten Chunk (HTTP 201) uebernimmt TikTok von selbst.
     async fn upload_chunks(
         &self,
         video_path: &str,
@@ -486,8 +447,6 @@ impl TikTokUploader {
         Err(last)
     }
 
-    /// Ein JSON-Aufruf mit Wiederholung bei 5xx und Netzwerkfehlern. Client-
-    /// Fehler werden sofort durchgereicht, ein Retry aendert daran nichts.
     async fn json_with_retry<F>(&self, ctx: &str, build: F) -> Result<Value, UploadError>
     where
         F: Fn() -> reqwest::RequestBuilder,
@@ -502,8 +461,6 @@ impl TikTokUploader {
                         last = UploadError::Api(format!("{ctx} failed: {status} {text}"));
                     } else {
                         let payload = expect_ok_json(resp, ctx).await?;
-                        // Die Content-API antwortet auch im Fehlerfall mit 200
-                        // und packt den Code nach `error.code`.
                         tiktok_error_guard(&payload, ctx)?;
                         return Ok(payload);
                     }
@@ -516,7 +473,6 @@ impl TikTokUploader {
     }
 }
 
-/// Einfaches exponentielles Backoff, letzter Versuch wartet nicht mehr.
 async fn backoff(attempt: u32) {
     if attempt >= MAX_ATTEMPTS {
         return;
@@ -580,9 +536,6 @@ impl PlatformUploader for TikTokUploader {
         match result {
             Ok(payload) => payload.get("data").cloned().unwrap_or_else(|| json!({})),
             Err(e) => {
-                // Die Trait-Signatur kennt keinen Fehlerwert, deshalb bleibt
-                // `{}` der Rueckgabewert; stumm verschluckt wird der Grund aber
-                // nicht mehr.
                 tracing::warn!(publish_id = %video_id, error = %e, "TikTok status fetch fehlgeschlagen");
                 json!({})
             }
@@ -594,17 +547,6 @@ impl PlatformUploader for TikTokUploader {
         _video_id: &str,
         _bucket: &str,
     ) -> Result<AnalyticsSnapshot, UploadError> {
-        // Frueher lief hier `/v2/video/query/`. Das gehoert zur Display API,
-        // braucht den Scope `video.list` (den die App nicht anfragt) und
-        // erwartet eine echte Video-ID, waehrend der Uploader nur die
-        // `publish_id` kennt. Ergebnis war ein leeres Resultat, aus dem
-        // strukturell Nullen als "Messung" in die Datenbank liefen.
-        //
-        // Damit das wieder geht, braucht es drei Dinge: den Scope `video.list`
-        // in der TikTok-App plus im OAuth-Flow, das Nachschlagen der echten
-        // Video-ID (Status-Fetch liefert nach der Veroeffentlichung eine
-        // `publicaly_available_post_id`) und erst dann die Abfrage von
-        // `/v2/video/query/` mit dieser ID.
         Err(UploadError::NotImplemented(
             "TikTok Display API nicht freigeschaltet: Scope video.list fehlt".to_string(),
         ))
@@ -950,19 +892,15 @@ mod tests {
         tokio::fs::remove_file(video).await.unwrap();
     }
 
-    // --- Chunk-Plan ---------------------------------------------------------
-
     #[test]
     fn chunk_plan_kleine_datei_geht_am_stueck() {
         assert_eq!(chunk_plan(3 * MIB), (3 * MIB, 1));
-        // 5 MB liegt genau auf der Untergrenze: ein Chunk, ganze Datei.
         assert_eq!(chunk_plan(5 * MIB), (5 * MIB, 1));
         assert_eq!(chunk_plan(10 * MIB), (10 * MIB, 1));
     }
 
     #[test]
     fn chunk_plan_mittlere_dateien() {
-        // floor(64/10) = 6 Chunks, der letzte nimmt die restlichen 14 MiB mit.
         assert_eq!(chunk_plan(64 * MIB), (10 * MIB, 6));
         assert_eq!(chunk_plan(70 * MIB), (10 * MIB, 7));
         assert_eq!(chunk_plan(300 * MIB), (10 * MIB, 30));
@@ -1021,8 +959,6 @@ mod tests {
         assert_eq!(lang.chars().count(), CAPTION_MAX);
     }
 
-    // --- Voller Ablauf ------------------------------------------------------
-
     #[test]
     fn individuelle_freigabe_prueft_alle_pflichtangaben() {
         let info: CreatorInfo = serde_json::from_value(
@@ -1078,17 +1014,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ohne_individuelle_freigabe_wird_nichts_gesendet() {
+    async fn entwurf_geht_ohne_freigabe_ins_postfach() {
         let server = MockServer::start().await;
-        let video = temp_video("tb_tiktok_no_choice.mp4", 16).await;
-        let error = TikTokUploader::new("tok")
+        Mock::given(method("POST"))
+            .and(path("/post/publish/inbox/video/init/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "publish_id": "draft-7", "upload_url": format!("{}/upload/", server.uri()) },
+                "error": { "code": "ok", "message": "", "log_id": "l3" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        let checkpoint = RecordingCheckpoint {
+            ids: Default::default(),
+            fail: false,
+        };
+        let video = temp_video("tb_tiktok_draft.mp4", 16).await;
+        let id = TikTokUploader::new("tok")
             .with_api_base(server.uri())
-            .upload_video(&video, "Titel", "Beschreibung", &[])
+            .upload_video_checkpointed(&video, "Titel", "Beschreibung", &[], &checkpoint)
             .await
-            .unwrap_err();
-        assert!(matches!(error, UploadError::Validation(_)));
-        assert!(server.received_requests().await.unwrap().is_empty());
+            .unwrap();
+        assert_eq!(id, "draft-7");
+        assert_eq!(*checkpoint.ids.lock().unwrap(), vec!["draft-7".to_string()]);
+        let requests = server.received_requests().await.unwrap();
+        let paths: Vec<&str> = requests.iter().map(|r| r.url.path()).collect();
+        assert_eq!(paths, vec!["/post/publish/inbox/video/init/", "/upload/"]);
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert!(body.get("post_info").is_none());
+        assert_eq!(body["source_info"]["source"], json!("FILE_UPLOAD"));
+        assert_eq!(body["source_info"]["video_size"], json!(16));
+        assert_eq!(body["source_info"]["total_chunk_count"], json!(1));
         tokio::fs::remove_file(video).await.unwrap();
+    }
+
+    #[test]
+    fn entwurf_braucht_den_upload_scope() {
+        let credentials = |scopes: &str| crate::credentials::SocialMediaCredentials {
+            id: 7,
+            platform: "tiktok".into(),
+            streamer_login: None,
+            access_token: "tok".into(),
+            refresh_token: None,
+            client_id: None,
+            client_secret: None,
+            expires_at: None,
+            scopes: Some(scopes.into()),
+            platform_user_id: Some("account-1".into()),
+            platform_username: None,
+        };
+        assert!(draft_uploader(&credentials("user.info.basic,video.upload")).is_ok());
+        assert!(matches!(
+            draft_uploader(&credentials("user.info.basic,video.publish")),
+            Err(UploadError::NotStarted(cause)) if matches!(*cause, UploadError::NotAuthenticated)
+        ));
     }
 
     #[tokio::test]
@@ -1135,7 +1118,6 @@ mod tests {
             json!("Mein Titel\n\nBeschreibung\n\n#deadlock #haze")
         );
         assert_eq!(body["post_info"]["privacy_level"], json!("SELF_ONLY"));
-        // Interaktionsschalter kommen aus creator_info, nicht aus Konstanten.
         assert_eq!(body["post_info"]["disable_comment"], json!(true));
         assert_eq!(body["post_info"]["disable_duet"], json!(true));
         assert_eq!(body["post_info"]["disable_stitch"], json!(true));
@@ -1186,7 +1168,6 @@ mod tests {
     #[tokio::test]
     async fn privacy_level_nicht_in_optionen_ist_validation() {
         let server = MockServer::start().await;
-        // Nicht auditierte App: TikTok bietet nur den privaten Post an.
         mount_creator_info(&server, json!(["SELF_ONLY"])).await;
 
         let video = temp_video("tb_tiktok_privacy.mp4", 16).await;
@@ -1201,7 +1182,6 @@ mod tests {
             matches!(err, UploadError::Validation(_)),
             "erwartet Validation, war {err:?}"
         );
-        // Kein init-Call: der Upload bricht vor dem Anmelden ab.
         let requests = server.received_requests().await.unwrap();
         assert!(requests
             .iter()
@@ -1267,14 +1247,12 @@ mod tests {
     async fn upload_ohne_token_und_fehlerpfade() {
         let video = temp_video("tb_tiktok_fehler.mp4", 16).await;
 
-        // Kein Token, kein HTTP.
         let no_tok = TikTokUploader::new("");
         assert!(matches!(
             no_tok.upload_video(&video, "t", "d", &[]).await,
             Err(UploadError::NotAuthenticated)
         ));
 
-        // creator_info liefert 403 (kein 5xx, also kein Retry) -> Api-Fehler.
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/post/publish/creator_info/query/"))
@@ -1290,7 +1268,6 @@ mod tests {
             Err(UploadError::Api(_))
         ));
 
-        // Fehlende Datei -> Validation.
         assert!(matches!(
             uploader
                 .upload_video("/nope/missing.mp4", "t", "d", &[])
@@ -1315,10 +1292,7 @@ mod tests {
             matches!(err, UploadError::Api(_)),
             "erwartet Api, war {err:?}"
         );
-        // `expect(3)` wird beim Drop des Servers geprueft.
     }
-
-    // --- Status und Analytics ----------------------------------------------
 
     #[tokio::test]
     async fn status_laeuft_per_post_mit_publish_id() {

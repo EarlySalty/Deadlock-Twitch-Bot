@@ -572,7 +572,7 @@ export const SOCIAL_EN: Record<string, string> = {
   'Twitch-Clips importieren': 'Import Twitch clips',
   'Twitch-Clips weiter importieren': 'Continue importing Twitch clips',
   'Neu importieren statt fortsetzen': 'Start a new import instead',
-  'TikTok braucht eigene Angaben und wird beim Prüfen freigegeben.': 'TikTok needs its own details and is approved during review.',
+  'TikTok erhält das Video als Entwurf. Veröffentlichen kannst du es danach in der TikTok-App.': 'TikTok receives the video as a draft. You can publish it afterwards in the TikTok app.',
   'Prüfung & Freigabe': 'Review & approval',
   'Test verwerfen': 'Discard test',
   'Wird erneut versucht …': 'Retrying …',

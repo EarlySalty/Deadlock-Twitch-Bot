@@ -62,10 +62,6 @@ const TIKTOK_PRIVACY_LEVELS: [&str; 4] = [
     "FOLLOWER_OF_CREATOR",
     "SELF_ONLY",
 ];
-const TIKTOK_EFFECT_STARTED: &str =
-    "Für dieses Video hat die TikTok-Übertragung bereits begonnen. Die Freigabe kann nicht mehr geändert werden.";
-const TIKTOK_OPTIONS_UNREADABLE: &str =
-    "Die TikTok-Freigabe ist unvollständig. Bitte öffne sie erneut.";
 
 pub(crate) mod queue_status {
     pub const PENDING: &str = "waiting_exact_file";
@@ -949,13 +945,6 @@ pub async fn approve(
     autopilot_settings::lock_owner(&mut tx, owner).await?;
     produced_video::approve_on(&mut tx, owner, id, &platforms).await?;
     bind_on(&mut tx, owner, id, &binding, &platforms).await?;
-    if platforms.iter().any(|platform| platform == "tiktok") {
-        let choice = decisions
-            .iter()
-            .find(|decision| decision.platform == "tiktok")
-            .and_then(|decision| decision.tiktok_options.clone());
-        bind_tiktok_on(&mut tx, owner, id, &binding, choice).await?;
-    }
     sqlx::query(
         "UPDATE twitch_clips_upload_queue SET status = $3, next_retry_at = clock_timestamp(), outcome_reason = NULL
          WHERE produced_video_id = $1 AND platform = ANY($2) AND status = $4
@@ -1065,71 +1054,6 @@ async fn music_consent_on(
                 && text("music_consent_platform_user_id") == Some(account)
         }
     }))
-}
-
-async fn tiktok_effect_started_on(
-    connection: &mut PgConnection,
-    id: i64,
-) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM twitch_clips_upload_queue WHERE produced_video_id = $1
-         AND platform = 'tiktok' AND (effect_started_at IS NOT NULL OR external_id IS NOT NULL
-         OR status = ANY($2)))",
-    )
-    .bind(id)
-    .bind([
-        queue_status::EFFECT_STARTED,
-        queue_status::PUBLISHED,
-        queue_status::PROCESSING,
-        queue_status::UNCERTAIN,
-    ])
-    .fetch_one(connection)
-    .await
-}
-
-async fn bind_tiktok_on(
-    connection: &mut PgConnection,
-    owner: &str,
-    id: i64,
-    binding: &Binding,
-    choice: Option<Value>,
-) -> Result<(), PublishError> {
-    let subject = tiktok_subject_on(connection, owner, id, binding).await?;
-    let options = match choice {
-        Some(raw) => {
-            let mut options: TikTokPostOptions = serde_json::from_value(raw)
-                .map_err(|_| PublishError::Invalid(TIKTOK_OPTIONS_UNREADABLE.into()))?;
-            options.video_path = subject.file_path.clone();
-            options
-        }
-        None => subject.bound_options.clone().ok_or_else(|| {
-            PublishError::Invalid(TikTokBindingIssue::ConsentMissing.message().into())
-        })?,
-    };
-    if let Some(issue) = subject.issue(&options) {
-        return Err(PublishError::Invalid(issue.message().into()));
-    }
-    if subject.bound_options.as_ref() == Some(&options) {
-        return Ok(());
-    }
-    if tiktok_effect_started_on(connection, id).await? {
-        return Err(PublishError::Invalid(TIKTOK_EFFECT_STARTED.into()));
-    }
-    let changed = sqlx::query(
-        "UPDATE social_produced_videos SET metadata = jsonb_set(metadata, '{publication,tiktok_options}', $3::text::jsonb)
-         WHERE id = $1 AND twitch_user_id = $2 AND file_path = $4 AND artifact_deleted_at IS NULL",
-    )
-    .bind(id)
-    .bind(owner)
-    .bind(serde_json::to_string(&options)?)
-    .bind(&subject.file_path)
-    .execute(&mut *connection)
-    .await?
-    .rows_affected();
-    if changed != 1 {
-        return Err(PublishError::State);
-    }
-    Ok(())
 }
 
 type SlotState = (Option<DateTime<Utc>>, Option<DateTime<Utc>>);

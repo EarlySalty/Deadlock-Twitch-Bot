@@ -6,8 +6,8 @@ use chrono::{DateTime, Datelike, Duration as Span, Utc};
 
 use super::*;
 use crate::autopilot_publish::{
-    self, approve, snapshot, tiktok_subject, DestinationDecision, DestinationPublisher,
-    PublishExecutor, PublishOutcome, PublishRequest,
+    self, approve, tiktok_subject, DestinationDecision, DestinationPublisher, PublishExecutor,
+    PublishOutcome, PublishRequest,
 };
 use crate::autopilot_settings::{
     PipelineMode, PolicyScope, ReviewPolicy, ScheduleSlot, TextDefaults,
@@ -15,7 +15,6 @@ use crate::autopilot_settings::{
 use crate::production_jobs::autopilot_schedule::{
     resolve_review, save_schedule, ReviewDecision, SchedulePatch,
 };
-use crate::uploaders::tiktok::TikTokPostOptions;
 use crate::uploaders::{UploadCheckpoint, UploadError};
 
 const OWNER: &str = "101";
@@ -87,22 +86,15 @@ impl DestinationPublisher for FakePlatforms {
         &self,
         _owner: &str,
         request: &PublishRequest,
-        options: &TikTokPostOptions,
         checkpoint: &dyn UploadCheckpoint,
     ) -> Result<String, UploadError> {
-        assert!(options.consent, "TikTok dispatch without per-post consent");
         let number = self.record("tiktok", request).await;
         let publish_id = format!("pub-{number}");
         checkpoint.record_publish_id(&publish_id).await?;
         Ok(publish_id)
     }
 
-    async fn tiktok_status(
-        &self,
-        _owner: &str,
-        _options: &TikTokPostOptions,
-        publish_id: &str,
-    ) -> Result<Value, UploadError> {
+    async fn tiktok_status(&self, _owner: &str, publish_id: &str) -> Result<Value, UploadError> {
         self.polls.lock().expect("polls").push(publish_id.into());
         Ok(
             json!({"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": [format!("post-{publish_id}")]}),
@@ -564,23 +556,6 @@ async fn bound_hash(pool: &PgPool, id: i64, platform: &str) -> Option<String> {
     .expect("bound hash")
 }
 
-async fn visible_reason(pool: &PgPool, id: i64, platform: &str) -> Option<String> {
-    snapshot(pool, OWNER)
-        .await
-        .expect("snapshot")
-        .videos
-        .into_iter()
-        .find(|video| video.id == id)
-        .and_then(|video| video.event)
-        .and_then(|event| {
-            event
-                .destinations
-                .into_iter()
-                .find(|destination| destination.platform == platform)
-        })
-        .and_then(|destination| destination.reason)
-}
-
 fn assert_delivered(call: &Call, video: &ProducedVideo, hash: &str) {
     let (title, description, hashtags) = frozen_text(&video.metadata, &call.platform);
     assert_eq!(Some(call.file_path.as_str()), video.file_path.as_deref());
@@ -688,50 +663,14 @@ async fn run_cell(cell: Cell) {
         Some(artifact.as_str())
     );
     assert_delivered(&youtube[0], &video, &artifact);
-    if cell.review == ReviewPolicy::Required {
-        assert_eq!(fake.on("tiktok").len(), 1, "{} tiktok dispatch", cell.name);
-        assert_delivered(&fake.on("tiktok")[0], &video, &artifact);
-        age_tiktok(pool, video.id).await;
-        executor.tick().await.expect("reconcile tick");
-        assert_eq!(
-            status_of(pool, video.id, "tiktok").await.map(|row| row.0),
-            Some(autopilot_publish::queue_status::PUBLISHED.into())
-        );
-    } else {
-        assert!(
-            fake.on("tiktok").is_empty(),
-            "{} TikTok without consent",
-            cell.name
-        );
-        let held = status_of(pool, video.id, "tiktok")
-            .await
-            .expect("tiktok destination");
-        assert_eq!(
-            held.0,
-            autopilot_publish::queue_status::HELD,
-            "{}",
-            cell.name
-        );
-        let reason = held.1.expect("held reason");
-        assert!(
-            reason.starts_with("tiktok_"),
-            "{} reason {reason}",
-            cell.name
-        );
-        assert_eq!(visible_reason(pool, video.id, "tiktok").await, Some(reason));
-        let consent: Option<Value> = sqlx::query_scalar(
-            "SELECT metadata #> '{publication,tiktok_options}' FROM social_produced_videos WHERE id = $1",
-        )
-        .bind(video.id)
-        .fetch_one(pool)
-        .await
-        .expect("tiktok binding");
-        assert!(
-            consent.is_none_or(|options| options["consent"] != json!(true)),
-            "{} consent was set automatically",
-            cell.name
-        );
-    }
+    assert_eq!(fake.on("tiktok").len(), 1, "{} tiktok dispatch", cell.name);
+    assert_delivered(&fake.on("tiktok")[0], &video, &artifact);
+    age_tiktok(pool, video.id).await;
+    executor.tick().await.expect("reconcile tick");
+    assert_eq!(
+        status_of(pool, video.id, "tiktok").await.map(|row| row.0),
+        Some(autopilot_publish::queue_status::PUBLISHED.into())
+    );
     assert!(
         fake.on("instagram").is_empty(),
         "unselected destination contacted"

@@ -428,7 +428,7 @@ function socialApproval(platforms: ClipApprovalRecord['approved_platforms'], app
 
 export const SOCIAL_CLIPS_FIXTURE: SocialClipMitPosting[] = [
   { title: 'Die letzte Sekunde: Lash hält den Patron', status: 'awaiting_approval', approval: socialApproval([], false) },
-  { title: 'Bebop dreht den Teamfight am Markt', status: 'approved', approval: socialApproval(['youtube']), scheduled_at: { youtube: '2026-10-12T16:00:00Z' }, upload_states: { youtube: 'pending', tiktok: 'waiting_tiktok_approval' } },
+  { title: 'Bebop dreht den Teamfight am Markt', status: 'approved', approval: socialApproval(['youtube']), scheduled_at: { youtube: '2026-10-12T16:00:00Z' }, upload_states: { youtube: 'pending', tiktok: 'waiting_connection' } },
   { title: 'Ein ruhiger Moment vor dem nächsten Push', status: 'pending', enrichment_status: 'transcribing' },
   { title: 'Paradox rettet den Rückzug', status: 'published_partial', approval: socialApproval(['tiktok']), upload_states: { tiktok: 'inbox' } },
   { title: 'Haze im Finale: Upload gespeichert, privat auf YouTube', status: 'published_all', approval: socialApproval(['youtube']), platform_status: { youtube: true, tiktok: false, instagram: false }, youtube_visibility: 'private', upload_states: { youtube: 'completed' } },
