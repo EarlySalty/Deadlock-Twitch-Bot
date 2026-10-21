@@ -95,7 +95,9 @@ async fn main() -> Result<(), String> {
     };
     let direct: Option<Arc<dyn DirectDiscord>> = match config.bot_token.as_deref() {
         Some(bot_token) => Some(Arc::new(
-            DiscordRest::new(bot_token).map_err(|e| format!("Discord-REST: {e}"))?,
+            DiscordRest::new(bot_token)
+                .map_err(|e| format!("Discord-REST: {e}"))?
+                .with_dm_optout_pool(pool.clone()),
         )),
         None => {
             tracing::warn!("DISCORD_DEADLOCK_TWITCH_BOT fehlt: nur Weiterleitung an den Broker");

@@ -563,10 +563,28 @@ async fn send_to_broker(
         .json(&json!({"user_id":credential.user_id,"content":content,"idempotency_key":key}))
         .send()
         .await?;
-    if !response.status().is_success() {
-        return Err(format!("local notification broker returned {}", response.status()).into());
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
     }
-    Ok(())
+    let body = response.text().await.unwrap_or_default();
+    if is_dm_opted_out(status.as_u16(), &body) {
+        eprintln!("Watchdog-DM übersprungen: Empfänger hat Bot-Nachrichten abbestellt.");
+        return Ok(());
+    }
+    Err(format!("local notification broker returned {status}").into())
+}
+
+fn is_dm_opted_out(status: u16, body: &str) -> bool {
+    status == 403
+        && serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|json| {
+                json.pointer("/error/code")
+                    .and_then(|c| c.as_str())
+                    .map(str::to_owned)
+            })
+            .is_some_and(|code| code == "dm_opted_out")
 }
 
 async fn storage_notifications(

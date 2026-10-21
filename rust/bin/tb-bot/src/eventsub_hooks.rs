@@ -41,7 +41,9 @@ use tb_raid::{
     RaidBlacklistStore, RaidGreetingRegistration, RaidSignalCorrelationService, RaidSignalOutcome,
     TokenProvider,
 };
-use tb_transport_discord::{BrokerRelay, DiscordBackend, SendAlertEmbed, SendUserDm};
+use tb_transport_discord::{
+    BrokerRelay, DiscordBackend, DiscordError, DmPurpose, SendAlertEmbed, SendUserDm,
+};
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient, RemoveModeratorOutcome};
 
 use crate::auto_raid::OfflineRaidHandler;
@@ -111,9 +113,13 @@ impl VodExportOfflineHandler {
                     let payload = SendUserDm {
                         user_id: VOD_EXPORT_DISCORD_USER_ID,
                         content: vod_export_dm_content(&report.link),
+                        dm_purpose: DmPurpose::Proactive,
                     };
                     match relay.send_user_dm(payload).await {
                         Ok(_) => dm_delivered = true,
+                        Err(DiscordError::DmOptedOut) => tracing::info!(
+                            "VOD-Export: Discord-DM übersprungen, Bot-Nachrichten abbestellt"
+                        ),
                         Err(error) => {
                             tracing::error!(%error, "VOD-Export: Discord-DM fehlgeschlagen")
                         }
