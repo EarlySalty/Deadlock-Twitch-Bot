@@ -95,6 +95,7 @@ const PUBLIC_PATH_PREFIXES: &[&str] = &[
     "/twitch/impressum",
     "/twitch/legal/",
     "/twitch/demo",
+    "/twitch/rundgang",
     "/twitch/raid/callback",
     "/callback/twitch",
     "/callback/discord",

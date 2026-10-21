@@ -35,6 +35,7 @@ import {
   hasDemoRuntimeConfig,
   resolveEffectiveDemoMode,
 } from '@/runtimeConfig';
+import { livePathFromTourPath, onPublicTour } from '@/publicTour';
 import { AlertTriangle } from 'lucide-react';
 import { pageLoaders } from './pageLoaders';
 import { navigationSnapshot, subscribeNavigation } from './navigation';
@@ -317,7 +318,7 @@ function AnalyticsDashboard() {
             isDemoMode={isDemoMode}
           />
 
-          {isDemoMode && (
+          {isDemoMode && !onPublicTour() && (
             <div className="mb-4 rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3 text-sm text-warning/90">
               {t(
                 'Demo-Daten aus einem statischen Snapshot. Profilwechsel und Analysen laufen ausschließlich über den Demo-Namespace.',
@@ -423,7 +424,8 @@ function PricingRoute() {
 
 export default function App() {
   const location = useSyncExternalStore(subscribeNavigation, navigationSnapshot);
-  const path = normalizePathname(window.location.pathname);
+  const rawPath = normalizePathname(window.location.pathname);
+  const path = livePathFromTourPath(rawPath) ?? rawPath;
   if (path === '/twitch/guild-onboarding') {
     return <QueryClientProvider client={queryClient}><LanguageProvider><ErrorBoundary><GuildOnboardingPage /></ErrorBoundary></LanguageProvider></QueryClientProvider>;
   }
@@ -443,8 +445,9 @@ export default function App() {
     path === '/dashboard-v2' ||
     path === '/twitch/dashboard-v2';
   const isCategoryRoute =
-    path === '/twitch/kategorie' ||
-    (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category');
+    !onPublicTour() &&
+    (path === '/twitch/kategorie' ||
+      (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category'));
 
   const activeRoute =
     isInternalHomeRoute ? 'home'
@@ -476,7 +479,7 @@ export default function App() {
         <ErrorBoundary>
         <SessionBootstrap />
         <OnboardingProvider>
-        <Suspense fallback={<DashboardShell activeRoute={activeRoute} showSidebar={!isPricingRoute} demoMode={isAnalyticsRoute && resolveEffectiveDemoMode({ pathname: path, runtimeConfig: dashboardRuntimeConfig })}><RouteSkeleton /></DashboardShell>}>
+        <Suspense fallback={<DashboardShell activeRoute={activeRoute} showSidebar={!isPricingRoute} demoMode={isAnalyticsRoute && resolveEffectiveDemoMode({ pathname: window.location.pathname, runtimeConfig: dashboardRuntimeConfig })}><RouteSkeleton /></DashboardShell>}>
           {isCategoryRoute ? (
             <DashboardShell activeRoute="category"><CategoryCollector /></DashboardShell>
           ) : isSocialMediaManagerRoute ? (

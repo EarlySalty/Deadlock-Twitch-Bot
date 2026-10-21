@@ -627,6 +627,17 @@ fn log_provider_rejection(
     );
 }
 
+fn workspace_header(
+    workspace: Option<String>,
+) -> Result<Option<reqwest::header::HeaderValue>, EditorError> {
+    workspace
+        .map(|value| {
+            reqwest::header::HeaderValue::from_str(&value)
+                .map_err(|_| EditorError::new(ErrorKind::Configuration))
+        })
+        .transpose()
+}
+
 pub async fn complete(
     pool: &PgPool,
     context: &EditorContext,
@@ -662,6 +673,7 @@ async fn complete_with_key(
         .timeout(Duration::from_millis(config.request_timeout_ms))
         .build()
         .map_err(|_| EditorError::new(ErrorKind::Configuration))?;
+    let workspace = workspace_header(crate::keys::anthropic_workspace_id())?;
     let endpoint = format!("{}/v1/messages", config.endpoint.trim_end_matches('/'));
     let deadline = Instant::now() + Duration::from_millis(config.total_deadline_ms);
     for attempt in 0..=config.max_retries {
@@ -697,10 +709,14 @@ async fn complete_with_key(
         }
         let start = Instant::now();
         let remaining = deadline.saturating_duration_since(start);
-        let sent = client
+        let mut builder = client
             .post(&endpoint)
             .header("x-api-key", key)
-            .header("anthropic-version", "2023-06-01")
+            .header("anthropic-version", "2023-06-01");
+        if let Some(workspace) = &workspace {
+            builder = builder.header("anthropic-workspace-id", workspace.clone());
+        }
+        let sent = builder
             .timeout(remaining.min(Duration::from_millis(config.request_timeout_ms)))
             .json(&body)
             .send()

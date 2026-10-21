@@ -3177,5 +3177,23 @@ async fn unified_ai_mode_follows_the_frozen_review_policy_instead_of_legacy_full
     }
 }
 
+#[test]
+fn transcript_end_within_decoder_drift_is_clamped_to_clip() {
+    let raw = |start: f64, end: f64| tb_engagement::transcribe::TranscriptSegment {
+        start_seconds: start,
+        end_seconds: end,
+        text: "Er wollte mich aber auch ne".into(),
+    };
+    let fitted = fit_segments(&[raw(47.84, 49.84), raw(49.84, 51.32)], 51_314, 400)
+        .expect("decoder drift stays within the configured tolerance");
+    assert_eq!(fitted.last().map(|segment| segment.end_ms), Some(51_314));
+    let tail = fit_segments(&[raw(51.32, 51.4)], 51_314, 400).expect("tail inside drift");
+    assert!(tail.is_empty());
+    assert!(matches!(
+        fit_segments(&[raw(50.0, 52.0)], 51_314, 400),
+        Err(AiEditorError::Transcription)
+    ));
+}
+
 #[path = "acceptance_tests.rs"]
 mod acceptance;
