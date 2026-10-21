@@ -18,17 +18,17 @@ WHERE platform = 'youtube' AND produced_video_id IS NULL AND status = 'failed'
   AND external_id IS NULL AND last_error LIKE '%(HTTP 410)%';
 
 WITH legacy AS (
-    SELECT q.id, q.platform, q.scheduled_at, q.status, c.twitch_user_id AS owner
+    SELECT q.id, q.platform, q.scheduled_at, q.status, COALESCE(c.twitch_user_id, '') AS owner
     FROM twitch_clips_upload_queue q
     JOIN twitch_clips_social_media c ON c.id = q.clip_id
     WHERE q.platform IN ('tiktok', 'youtube') AND q.produced_video_id IS NULL
-      AND q.status = 'pending'
+      AND q.status IN ('pending', 'waiting_connection')
 ),
 overdue AS (
     SELECT id, platform, owner, scheduled_at,
            row_number() OVER (PARTITION BY owner, platform ORDER BY scheduled_at NULLS FIRST, id) AS slot
     FROM legacy
-    WHERE scheduled_at IS NULL OR scheduled_at <= NOW()
+    WHERE status = 'pending' AND (scheduled_at IS NULL OR scheduled_at <= NOW())
 ),
 taken AS (
     SELECT DISTINCT owner, platform, (scheduled_at AT TIME ZONE 'UTC')::date AS day

@@ -404,7 +404,7 @@ export function ClipCard({
                 || (clip.upload_states?.tiktok === 'waiting_tiktok_approval'
                   && (!clip.scheduled_at?.tiktok || Date.parse(clip.scheduled_at.tiktok) <= now))
                 ? t('TikTok erneut einplanen')
-                : t('TikTok-Veröffentlichung vorbereiten')}
+                : t('TikTok-Entwurf vorbereiten')}
             </button>
           )}
           {canDecide ? (

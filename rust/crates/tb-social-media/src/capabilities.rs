@@ -22,7 +22,7 @@ fn capabilities_for(platform: &str, instagram_ready: bool) -> PlatformCapabiliti
         "tiktok" => PlatformCapabilities {
             upload: true,
             statistics: false,
-            upload_mode: "direct_post",
+            upload_mode: "draft",
             reason: None,
         },
         "youtube" => PlatformCapabilities {
@@ -83,10 +83,8 @@ pub fn upload_wait_reason_kind(
     };
     let complete = !creds.access_token.trim().is_empty()
         && match platform {
-            "tiktok" | "youtube" => creds
-                .client_id
-                .as_deref()
-                .is_some_and(|id| !id.trim().is_empty()),
+            "tiktok" => has_client_id(creds) && has_scope(creds, "video.upload"),
+            "youtube" => has_client_id(creds),
             "instagram" => creds
                 .platform_user_id
                 .as_deref()
@@ -99,6 +97,22 @@ pub fn upload_wait_reason_kind(
     None
 }
 
+fn has_client_id(creds: &SocialMediaCredentials) -> bool {
+    creds
+        .client_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty())
+}
+
+fn has_scope(creds: &SocialMediaCredentials, scope: &str) -> bool {
+    creds
+        .scopes
+        .as_deref()
+        .unwrap_or("")
+        .split([',', ' '])
+        .any(|granted| granted == scope)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,7 +122,7 @@ mod tests {
         let tiktok = capabilities_for("tiktok", false);
         assert!(tiktok.upload);
         assert!(!tiktok.statistics);
-        assert_eq!(tiktok.upload_mode, "direct_post");
+        assert_eq!(tiktok.upload_mode, "draft");
         assert!(!capabilities_for("instagram", false).upload);
         assert!(capabilities_for("instagram", true).upload);
         assert!(capabilities_for("youtube", false).statistics);
@@ -148,5 +162,28 @@ mod tests {
             upload_wait_reason_kind("unknown", Some(&creds)),
             Some(UploadWaitReason::PlatformUnavailable)
         );
+    }
+
+    #[test]
+    fn tiktok_drafts_need_the_upload_scope() {
+        let mut creds = SocialMediaCredentials {
+            id: 1,
+            platform: "tiktok".into(),
+            streamer_login: None,
+            access_token: "synthetic".into(),
+            refresh_token: None,
+            client_id: Some("client".into()),
+            client_secret: None,
+            expires_at: None,
+            scopes: Some("user.info.basic,video.publish".into()),
+            platform_user_id: None,
+            platform_username: None,
+        };
+        assert_eq!(
+            upload_wait_reason_kind("tiktok", Some(&creds)),
+            Some(UploadWaitReason::ConnectionIncomplete)
+        );
+        creds.scopes = Some("user.info.basic,video.upload".into());
+        assert_eq!(upload_wait_reason_kind("tiktok", Some(&creds)), None);
     }
 }

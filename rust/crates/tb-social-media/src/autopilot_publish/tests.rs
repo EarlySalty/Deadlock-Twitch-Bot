@@ -1757,7 +1757,7 @@ async fn dispatching(pool: &PgPool, fake: &Arc<TikTokFake>) -> PublishExecutor {
 }
 
 #[tokio::test]
-async fn disabled_tiktok_dispatch_holds_with_the_specific_binding_reason() {
+async fn disabled_tiktok_dispatch_holds_at_the_effect_boundary() {
     let pool = pool().await;
     configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
     let fake = TikTokFake::with(&pool, vec![]);
@@ -1911,7 +1911,7 @@ async fn claim_checkpoint_is_fenced_by_generation_and_written_once() {
 }
 
 #[tokio::test]
-async fn rejected_tiktok_choice_is_held_editable_and_dispatched_once_after_rebinding() {
+async fn rejected_tiktok_draft_is_held_and_dispatched_once_after_reapproval() {
     let pool = pool().await;
     configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
     let id = tiktok_ready(&pool, "rejected").await;

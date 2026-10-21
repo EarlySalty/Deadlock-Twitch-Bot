@@ -203,7 +203,6 @@ pub struct PublishVideo {
     pub artifact_state: &'static str,
     pub cleanup_error: Option<String>,
     pub approvals: Vec<Approval>,
-    pub tiktok_consent: &'static str,
     pub event: Option<PublicationEvent>,
     pub test_job_id: Option<i64>,
 }
@@ -328,40 +327,6 @@ pub(crate) struct TikTokAccount {
     pub credential_id: Option<i32>,
     pub platform_user_id: Option<String>,
     pub music_consent: bool,
-}
-
-fn tiktok_consent_state(
-    metadata: &Value,
-    file_path: Option<&str>,
-    account: &TikTokAccount,
-) -> &'static str {
-    let Some(options) = stored_tiktok_options(metadata) else {
-        return "missing";
-    };
-    let (Some(file_path), Some(digest)) = (
-        file_path,
-        metadata
-            .pointer("/publication/hashes/tiktok")
-            .and_then(Value::as_str),
-    ) else {
-        return "stale";
-    };
-    let subject = TikTokSubject {
-        video_id: 0,
-        clip_id: 0,
-        file_path: file_path.to_owned(),
-        approved_video_sha256: digest.to_owned(),
-        caption: crate::ai_editor::metadata::tiktok_caption(metadata),
-        duration_ms: None,
-        credential_id: account.credential_id,
-        platform_user_id: account.platform_user_id.clone(),
-        music_consent: account.music_consent,
-        bound_options: None,
-    };
-    match subject.issue(&options) {
-        None => "bound",
-        Some(_) => "stale",
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -491,8 +456,7 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<PublishSnapshot, Pub
             account_id: accounts.get(platform).cloned().flatten(),
         })
         .collect();
-    let tiktok_account = tiktok_account_on(&mut connection, owner).await?;
-    let videos = videos_on(&mut connection, owner, &tiktok_account).await?;
+    let videos = videos_on(&mut connection, owner).await?;
     let notifications = notifications_on(&mut connection, owner).await?;
     let review_mode = review_mode_on(&mut connection, owner).await?;
     let discord: bool = sqlx::query_scalar(
@@ -524,7 +488,6 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<PublishSnapshot, Pub
 async fn videos_on(
     connection: &mut PgConnection,
     owner: &str,
-    tiktok_account: &TikTokAccount,
 ) -> Result<Vec<PublishVideo>, PublishError> {
     let rows = sqlx::query(
         "WITH listed AS (
@@ -616,7 +579,6 @@ async fn videos_on(
             let file_path: Option<String> = row.try_get("file_path")?;
             let cleanup_error: Option<String> = row.try_get("cleanup_error")?;
             let scheduled_at: Option<DateTime<Utc>> = row.try_get("scheduled_at")?;
-            let metadata: Value = serde_json::from_str(&row.try_get::<String, _>("metadata")?)?;
             Ok(PublishVideo {
                 id,
                 clip_id: row.try_get("clip_id")?,
@@ -643,11 +605,6 @@ async fn videos_on(
                 ),
                 cleanup_error,
                 approvals: approvals.remove(&id).unwrap_or_default(),
-                tiktok_consent: tiktok_consent_state(
-                    &metadata,
-                    file_path.as_deref(),
-                    tiktok_account,
-                ),
                 event: match scheduled_at {
                     Some(scheduled_at) => Some(PublicationEvent {
                         id,

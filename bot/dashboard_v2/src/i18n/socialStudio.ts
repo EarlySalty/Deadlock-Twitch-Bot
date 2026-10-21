@@ -122,7 +122,7 @@ export const SOCIAL_STUDIO_EN: Record<string, string> = {
   'Übertragung': 'Transfer',
   'Veröffentlichung': 'Publication',
   'Gespeicherter Kontostand, keine Live-Prüfung beim Anbieter.': 'Saved account state, not a live provider check.',
-  'TikTok-Veröffentlichung vorbereiten': 'Prepare TikTok publication',
+  'TikTok-Entwurf vorbereiten': 'Prepare TikTok draft',
   '{count} TikTok-Entwurf braucht eine Neuverbindung': '{count} TikTok draft needs a reconnect',
   '{count} TikTok-Entwürfe brauchen eine Neuverbindung': '{count} TikTok drafts need a reconnect',
   'TikTok neu verbinden': 'Reconnect TikTok',

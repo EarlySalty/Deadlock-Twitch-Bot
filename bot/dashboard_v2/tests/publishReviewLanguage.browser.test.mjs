@@ -232,38 +232,19 @@ test('built publication panel preserves state and effects across language change
     } finally { await page.close(); }
   });
 
-  await t.test('TikTok cancellation stays local and approval preserves raw caption, consent and account/hash options', async () => {
+  await t.test('TikTok is approved as a draft without per-version options', async () => {
     const page = await open();
     try {
       const video = page.locator('.publish-video').first();
-      const caption = 'Verbindung #Überraschung';
-      await page.locator('textarea').fill(caption);
       await video.locator('[aria-label="TikTok"] input').evaluate((element) => element.click());
-      await page.evaluate(() => window.publishReviewFixture.setTikTokCancelled(true));
-      await video.locator('.publish-primary').evaluate((element) => element.click());
-      await page.waitForFunction(() => document.querySelector('.publish-review > .publish-error'));
-      const cancelledCalls = await calls(page);
-      assert.equal(cancelledCalls.filter((call) => call.method === 'approve').length, 0);
-      for (const currentLanguage of ['en', 'de']) {
-        await language(page, currentLanguage);
-        assert.equal(await page.locator('.publish-review > .publish-error').textContent(), translate(currentLanguage, 'Bitte prüfe die TikTok-Einstellungen dieser Videoversion.'));
-        assert.equal(await page.locator('textarea').inputValue(), caption);
-        assert.equal(await video.locator('[aria-label="TikTok"] input').isChecked(), true);
-        for (const width of [390, 1440]) {
-          await page.setViewportSize({ width, height: 1000 });
-          await screenshot(page, `caption-${currentLanguage}-${width}`);
-        }
-      }
-      assert.deepEqual(await calls(page), cancelledCalls);
-      await page.evaluate(() => window.publishReviewFixture.setTikTokCancelled(false));
       await video.locator('[aria-label="YouTube"] input').evaluate((element) => element.click());
       await video.locator('.publish-primary').evaluate((element) => element.click());
       await page.waitForFunction(() => document.querySelector('.publish-message'));
       const approval = (await calls(page)).find((call) => call.method === 'approve');
       assert.deepEqual(approval, {
         method: 'approve', owner: 'synthetic-owner', payload: {
-          id: 101, decisions: [
-            { platform: 'tiktok', tiktok_options: { caption, privacy_level: 'SELF_ONLY', allow_comment: false, allow_duet: false, allow_stitch: false, commercial_content: false, brand_organic_toggle: false, brand_content_toggle: false, consent: true, creator_username: 'synthetic-creator', credential_id: 7, platform_user_id: 'synthetic-tiktok', approved_video_sha256: 'synthetic-hash', video_path: 'synthetic-video.mp4' } },
+          id: 2203, decisions: [
+            { platform: 'tiktok' },
             { platform: 'youtube' },
           ]
         }
@@ -271,9 +252,13 @@ test('built publication panel preserves state and effects across language change
       assert.equal(await video.locator('[aria-label="YouTube"] input').isChecked(), false);
       assert.equal(await video.locator('[aria-label="TikTok"] input').isChecked(), false);
       await settled(page);
-      assert.deepEqual((await calls(page)).find((call) => call.method === 'schedule'), { method: 'schedule', owner: 'synthetic-owner', payload: { id: 101, platforms: ['youtube', 'instagram', 'tiktok'] } });
+      assert.deepEqual((await calls(page)).find((call) => call.method === 'schedule'), { method: 'schedule', owner: 'synthetic-owner', payload: { id: 2203, platforms: ['youtube', 'instagram', 'tiktok'] } });
+      for (const width of [390, 1440]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await screenshot(page, `tiktok-draft-${width}`);
+      }
       await video.locator('header button').evaluate((element) => element.click());
-      assert.deepEqual(await page.evaluate(() => window.publishReviewFixture.callbacks), [{ method: 'configureTikTok', id: 101 }, { method: 'configureTikTok', id: 101 }, { method: 'open', id: 101 }]);
+      assert.deepEqual(await page.evaluate(() => window.publishReviewFixture.callbacks), [{ method: 'open', id: 2203 }]);
     } finally { await page.close(); }
   });
 
