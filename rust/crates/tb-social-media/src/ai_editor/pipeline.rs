@@ -562,7 +562,7 @@ async fn transcribe(
         )
     })?;
     let checkpoint = StageCheckpoint::Transcribing {
-        transcript: if segments.is_empty() && !transcript.segments.is_empty() {
+        transcript: if segments.is_empty() {
             String::new()
         } else {
             transcript.text
