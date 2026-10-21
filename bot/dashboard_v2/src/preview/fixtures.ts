@@ -478,7 +478,7 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
       } });
       return new Response(body, { status: 409, headers: { 'Content-Type': 'application/json' } });
     }
-    return json(error, 409);
+    return json(error, tour ? 403 : 409);
   }
   if (SOCIAL_WORKSPACE_PREVIEW && pathname.startsWith('/twitch/social-media/api/ai/')) {
     const owner = url.searchParams.get('twitch_user_id');
@@ -934,7 +934,49 @@ const DONO_GOAL_FIXTURE = {
  * Bestaetigung waere schlimmer als keine: sie zeigte einen Zustand, den es
  * nirgends gibt.
  */
+const AUTOPILOT_SCHEDULE_FIXTURE = {
+  settings: {
+    enabled: true,
+    paused: false,
+    ai_editing_enabled: false,
+    lead_time_hours: 24,
+    timezone: 'Europe/Berlin',
+    schedule_slots: [
+      { weekday: 1, local_time: '18:00' },
+      { weekday: 3, local_time: '18:00' },
+      { weekday: 5, local_time: '17:00' },
+    ],
+    target_platforms: ['youtube', 'tiktok'],
+  },
+  persisted: true,
+  schedule_scope: 'shared',
+  distribution_policy: 'same_clip',
+  next_slot: '2026-04-24T15:00:00Z',
+  next_slots: { youtube: '2026-04-24T15:00:00Z', tiktok: '2026-04-24T15:00:00Z' },
+  jobs: [],
+  review_count: 0,
+  production_hold: null,
+  connected_platforms: ['youtube'],
+  test_run: null,
+};
+
+const AUTOPILOT_POLICY_FIXTURE = {
+  pipeline_mode: 'upload_text',
+  review_policy: 'required',
+  metadata_scope: 'shared',
+  text_defaults: {
+    shared: { title: '', description: '', hashtags: ['deadlock'] },
+    per_platform: {},
+  },
+  schedule_scope: 'shared',
+  platform_schedule_slots: {},
+  distribution_policy: 'same_clip',
+  policy_revision: 1,
+};
+
 export function getPreviewPathFixture(pathname: string): unknown | undefined {
+  if (pathname === '/twitch/social-media/api/autopilot/schedule') return AUTOPILOT_SCHEDULE_FIXTURE;
+  if (pathname === '/twitch/social-media/api/autopilot/policy') return AUTOPILOT_POLICY_FIXTURE;
   if (pathname === '/twitch/api/v2/streamer/community-hints') {
     return { enabled: true, can_disable: true };
   }

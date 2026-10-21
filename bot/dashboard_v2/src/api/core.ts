@@ -125,6 +125,7 @@ async function handleUnauthorizedResponse(
 }
 
 const DEMO_WRITE_BLOCKED_MESSAGE = 'In der Demo kannst du nichts ändern.';
+const DEMO_UNAVAILABLE_MESSAGE = 'In der Demo nicht verfügbar.';
 
 function requestPathname(input: RequestInfo | URL): string {
   const raw = typeof input === 'string' ? input : input.toString();
@@ -168,8 +169,8 @@ export async function fetchJson<T>(
     if (fixture !== undefined) {
       return fixture;
     }
-    if (onTour) {
-      return {} as T;
+    if (onTour && !requestPathname(input).startsWith(`${DEMO_API_BASE}/`)) {
+      throw new ApiHttpError(DEMO_UNAVAILABLE_MESSAGE, 404);
     }
   }
 
@@ -205,9 +206,6 @@ export async function fetchApi<T>(
     const fixture = getPreviewApiFixture(endpoint, params);
     if (fixture !== undefined) {
       return structuredClone(fixture) as T;
-    }
-    if (onTour) {
-      return {} as T;
     }
   }
 

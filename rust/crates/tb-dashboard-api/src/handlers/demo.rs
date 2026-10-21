@@ -85,12 +85,10 @@ pub async fn demo_index_handler() -> Response {
     serve_demo_index("/twitch/demo/dashboard-v2/").await
 }
 
-/// `GET /twitch/rundgang` (+ nested pages) — full dashboard walkthrough.
 pub async fn rundgang_index_handler() -> Response {
     serve_demo_index("/twitch/rundgang/dashboard-v2/").await
 }
 
-/// `GET /twitch/rundgang/dashboard-v2/{path}` — same dist as the analytics demo.
 pub async fn rundgang_assets_handler(
     axum::extract::Path(asset_path): axum::extract::Path<String>,
 ) -> Response {
