@@ -89,6 +89,40 @@ pub async fn rundgang_index_handler() -> Response {
     serve_demo_index("/twitch/rundgang/dashboard-v2/").await
 }
 
+const RUNDGANG_PAGES: &[&str] = &[
+    "dashboard",
+    "analyse",
+    "social-media",
+    "uplink",
+    "verwaltung",
+    "overlay",
+    "titel",
+    "pricing",
+    "feedback",
+    "hilfe",
+    "challenges",
+];
+
+fn is_rundgang_page(path: &str) -> bool {
+    let page = path.trim_matches('/');
+    RUNDGANG_PAGES.contains(&page) || page.starts_with("social-media/")
+}
+
+pub async fn rundgang_page_handler(
+    axum::extract::Path(page_path): axum::extract::Path<String>,
+) -> Response {
+    if !is_rundgang_page(&page_path) {
+        return with_demo_csp(
+            (
+                StatusCode::NOT_FOUND,
+                "Diese Seite gibt es im Rundgang nicht.",
+            )
+                .into_response(),
+        );
+    }
+    rundgang_index_handler().await
+}
+
 pub async fn rundgang_assets_handler(
     axum::extract::Path(asset_path): axum::extract::Path<String>,
 ) -> Response {
@@ -1463,21 +1497,14 @@ pub fn build_demo_router() -> Router {
             get(demo_feedback_counts),
         )
         .route("/twitch/demo/api/v2/challenges/me", get(demo_challenges_me))
-        .route(
-            "/twitch/demo/api/v2/{*path}",
-            get(demo_api_unavailable)
-                .post(demo_write_blocked)
-                .put(demo_write_blocked)
-                .patch(demo_write_blocked)
-                .delete(demo_write_blocked),
-        )
+        .route("/twitch/demo/api/v2/{*path}", get(demo_api_unavailable))
         .route("/twitch/rundgang", get(rundgang_index_handler))
         .route("/twitch/rundgang/", get(rundgang_index_handler))
         .route(
             "/twitch/rundgang/dashboard-v2/{*path}",
             get(rundgang_assets_handler),
         )
-        .route("/twitch/rundgang/{*path}", get(rundgang_index_handler))
+        .route("/twitch/rundgang/{*path}", get(rundgang_page_handler))
         .layer(middleware::from_fn(reject_demo_writes))
 }
 
@@ -2126,6 +2153,44 @@ mod tests {
             "Rundgang-Index muss frame-ancestors-CSP setzen"
         );
         assert!(csp.unwrap().to_str().unwrap().contains("frame-ancestors"));
+    }
+
+    #[test]
+    fn rundgang_bedient_nur_freigegebene_seiten() {
+        for page in ["analyse", "verwaltung/", "/pricing", "social-media/konten"] {
+            assert!(is_rundgang_page(page), "{page} gehört zum Rundgang");
+        }
+        for page in [
+            "guild-onboarding",
+            "kategorie",
+            "admin",
+            "",
+            "analyse/x",
+            "auth/login",
+        ] {
+            assert!(!is_rundgang_page(page), "{page} gehört nicht zum Rundgang");
+        }
+    }
+
+    #[tokio::test]
+    async fn rundgang_unbekannte_seite_liefert_404() {
+        let resp = build_demo_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/twitch/rundgang/guild-onboarding")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        assert_eq!(
+            &bytes[..],
+            "Diese Seite gibt es im Rundgang nicht.".as_bytes()
+        );
     }
 
     #[tokio::test]

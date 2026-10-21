@@ -1,5 +1,4 @@
-import { DEMO_API_BASE, LIVE_API_BASE, dashboardRuntimeConfig } from '../runtimeConfig';
-import { onPublicTour } from '../publicTour';
+import { dashboardRuntimeConfig } from '../runtimeConfig';
 import { getPreviewApiFixture, getPreviewPathFixture } from '../preview/fixtures';
 import {
   PREVIEW_HOME_ROUTE,
@@ -124,53 +123,22 @@ async function handleUnauthorizedResponse(
   throw new ApiHttpError(unauthorized?.error || 'Unauthorized', response.status);
 }
 
-const DEMO_WRITE_BLOCKED_MESSAGE = 'In der Demo kannst du nichts ändern.';
-const DEMO_UNAVAILABLE_MESSAGE = 'In der Demo nicht verfügbar.';
-
-function requestPathname(input: RequestInfo | URL): string {
-  const raw = typeof input === 'string' ? input : input.toString();
-  try {
-    return new URL(raw, typeof window === 'undefined' ? 'https://deutsche-deadlock-community.de' : window.location.origin).pathname;
-  } catch {
-    return raw.split('?')[0];
-  }
-}
-
-function demoFixtureForGet<T>(input: RequestInfo | URL): T | undefined {
-  const pathOnly = requestPathname(input);
-  const pathFixture = getPreviewPathFixture(pathOnly);
-  if (pathFixture !== undefined) {
-    return structuredClone(pathFixture) as T;
-  }
-  for (const prefix of [DEMO_API_BASE, LIVE_API_BASE]) {
-    if (pathOnly === prefix || pathOnly.startsWith(`${prefix}/`)) {
-      const endpoint = pathOnly.slice(prefix.length) || '/';
-      const fixture = getPreviewApiFixture(endpoint);
-      if (fixture !== undefined) {
-        return structuredClone(fixture) as T;
-      }
-    }
-  }
-  return undefined;
-}
-
 export async function fetchJson<T>(
   input: RequestInfo | URL,
   init: RequestInit = {},
   options: FetchJsonOptions = {}
 ): Promise<T> {
-  const method = (init.method ?? 'GET').toUpperCase();
-  const onTour = onPublicTour();
-  if (onTour && method !== 'GET') {
-    throw new ApiHttpError(DEMO_WRITE_BLOCKED_MESSAGE, 403);
-  }
-  if ((isPreviewLocalhost() || onTour) && method === 'GET') {
-    const fixture = demoFixtureForGet<T>(input);
+  // Aufrufe mit absolutem Pfad (Uplink etwa) gehen nicht ueber `fetchApi` und
+  // haetten im Preview sonst keinen Gegenueber. Nur auf dem lokalen
+  // Preview-Host, im Betrieb ist dieser Zweig tot.
+  // Nur lesende Aufrufe: eine Fixture auf ein PUT waere ein erfundener
+  // Schreib-Erfolg, und die Oberflaeche zeigte danach einen Zustand, den es
+  // nirgends gibt.
+  if (isPreviewLocalhost() && (init.method ?? 'GET').toUpperCase() === 'GET') {
+    const pfad = typeof input === 'string' ? input : input.toString();
+    const fixture = getPreviewPathFixture(pfad.split('?')[0]);
     if (fixture !== undefined) {
-      return fixture;
-    }
-    if (onTour && !requestPathname(input).startsWith(`${DEMO_API_BASE}/`)) {
-      throw new ApiHttpError(DEMO_UNAVAILABLE_MESSAGE, 404);
+      return structuredClone(fixture) as T;
     }
   }
 
@@ -201,8 +169,7 @@ export async function fetchApi<T>(
   timeoutMs?: number,
   signal?: AbortSignal
 ): Promise<T> {
-  const onTour = onPublicTour();
-  if (isPreviewLocalhost() || onTour) {
+  if (isPreviewLocalhost()) {
     const fixture = getPreviewApiFixture(endpoint, params);
     if (fixture !== undefined) {
       return structuredClone(fixture) as T;

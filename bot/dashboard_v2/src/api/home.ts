@@ -1,7 +1,5 @@
 import { createPreviewChangelogEntry } from '../preview/fixtures';
 import { PREVIEW_HOME_ROUTE, isPreviewLocalhost, isPreviewModeEnabled } from '../preview/routes';
-import { onPublicTour } from '../publicTour';
-import { ApiHttpError } from './httpError';
 import { buildApiUrl, fetchApi, fetchJson, sanitizeInternalRedirectUrl, withCookieCredentials } from './core';
 
 const INTERNAL_HOME_LOGIN_FALLBACK = isPreviewModeEnabled()
@@ -630,9 +628,6 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
 export async function createInternalHomeChangelogEntry(
   payload: CreateInternalHomeChangelogPayload
 ): Promise<InternalHomeChangelogEntry> {
-  if (onPublicTour()) {
-    throw new ApiHttpError('In der Demo kannst du nichts ändern.', 403);
-  }
   if (isPreviewLocalhost()) {
     return createPreviewChangelogEntry(payload);
   }

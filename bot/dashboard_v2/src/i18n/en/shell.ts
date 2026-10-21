@@ -455,5 +455,6 @@ Object.assign(SHELL_EN, {
   "unter": "under",
   "{days} Tage verbleibend": "{days} days remaining",
   "Das ist eine Demo. Du kannst dich umsehen, nichts wird gespeichert.": "This is a demo. Feel free to look around, nothing gets saved.",
-  "Zum echten Dashboard": "Go to the real dashboard"
+  "Zum echten Dashboard": "Go to the real dashboard",
+  "In der Demo kannst du nichts ändern.": "You can't change anything in the demo."
 });

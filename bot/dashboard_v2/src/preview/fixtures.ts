@@ -926,6 +926,67 @@ const DONO_GOAL_FIXTURE = {
   connected: true,
 };
 
+const COMMAND_NAME_FIXTURES = [
+  ['raid', '!raid', 'raids', 'Raids', 'Startet einen Raid auf den nächsten Partnerkanal.'],
+  ['lurk', '!lurk', 'chat', 'Chat', 'Meldet dich als stillen Zuschauer an.'],
+  ['clip', '!clip', 'chat', 'Chat', 'Schneidet die letzten Sekunden als Clip.'],
+  ['rank', '!rank', 'deadlock', 'Deadlock', 'Zeigt deinen aktuellen Rang.'],
+].map(([command, name, group, groupLabel, summary]) => ({
+  command,
+  default_name: name,
+  default_aliases: [],
+  custom_name: null,
+  effective_name: name,
+  effective_aliases: [],
+  group,
+  group_label: groupLabel,
+  summary,
+}));
+
+const STREAMER_SETTINGS_FIXTURES: Record<string, unknown> = {
+  '/twitch/api/v2/streamer/moderation/settings': {
+    global_ban_enabled: true,
+    scam_pitch_enabled: true,
+    spam_autoban_enabled: true,
+    sus_invite_enabled: false,
+  },
+  '/twitch/api/v2/streamer/scam-guard/settings': {
+    enabled: true,
+    mode: 'timeout',
+    threshold: 0.9,
+    suggestion_floor: 0.7,
+  },
+  '/twitch/api/v2/streamer/sub-reminder-settings': { enabled: true, available: true },
+  '/twitch/api/v2/streamer/greeting-settings': { greeting_reply_enabled: true },
+  '/twitch/api/v2/streamer/silent-settings': { silent_ban: false, silent_raid: true },
+  '/twitch/api/v2/streamer/stat-command-settings': {
+    commands: {
+      rank: true,
+      wins: true,
+      winrate: true,
+      mmr: true,
+      live: true,
+      lastmatch: true,
+      streak: false,
+      mostplayed: true,
+    },
+  },
+  '/twitch/api/v2/streamer/lurker-tax-settings': {
+    lurker_tax_enabled: true,
+    has_moderator_read_chatters: true,
+    reward_present: true,
+  },
+  '/twitch/api/v2/streamer/lurk-command-settings': { lurk_command_enabled: true },
+  '/twitch/api/v2/streamer/command-names': { commands: COMMAND_NAME_FIXTURES },
+  '/twitch/api/v2/streamer/clip-command-settings': {
+    clip_command_enabled: true,
+    clip_command_duration_seconds: 30,
+    clip_command_duration_configured: true,
+  },
+  '/twitch/api/v2/streamer/private-vod-clips': { enabled: false, jobs: [] },
+  '/twitch/api/v2/streamer/title-command-settings': { title_command_enabled: true },
+};
+
 const AUTOPILOT_SCHEDULE_FIXTURE = {
   settings: {
     enabled: true,
@@ -973,6 +1034,7 @@ export function getPreviewPathFixture(pathname: string): unknown | undefined {
     return { enabled: true, can_disable: true };
   }
   if (pathname === '/twitch/api/v2/streamer/dono-goal') return DONO_GOAL_FIXTURE;
+  if (Object.hasOwn(STREAMER_SETTINGS_FIXTURES, pathname)) return STREAMER_SETTINGS_FIXTURES[pathname];
   if (pathname === '/twitch/api/v2/streamer/ad-manager') return AD_MANAGER_FIXTURE;
   if (pathname === '/twitch/api/v2/streamer/ad-manager/history') {
     return {

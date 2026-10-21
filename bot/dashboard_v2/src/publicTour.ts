@@ -39,22 +39,29 @@ export function tourBasePath(pathname: string): string {
   return '/twitch/rundgang';
 }
 
+const TOUR_PAGES = new Set([
+  '/analyse',
+  '/social-media',
+  '/uplink',
+  '/verwaltung',
+  '/overlay',
+  '/titel',
+  '/pricing',
+  '/feedback',
+  '/hilfe',
+  '/challenges',
+]);
+
+function isTourSubpage(rest: string): boolean {
+  return TOUR_PAGES.has(rest) || rest.startsWith('/social-media/');
+}
+
 export function livePathFromTourPath(pathname: string): string | null {
   const normalized = normalizeDashboardPath(pathname);
   for (const prefix of ['/demo/twitch/rundgang', '/twitch/rundgang'] as const) {
-    if (normalized === prefix) {
-      return '/twitch/dashboard';
-    }
-    if (normalized.startsWith(`${prefix}/`)) {
-      const rest = normalized.slice(prefix.length);
-      if (rest.startsWith('/dashboard-v2')) {
-        return null;
-      }
-      if (rest === '/dashboard') {
-        return '/twitch/dashboard';
-      }
-      return `/twitch${rest}`;
-    }
+    if (normalized !== prefix && !normalized.startsWith(`${prefix}/`)) continue;
+    const rest = normalized.slice(prefix.length);
+    return isTourSubpage(rest) ? `/twitch${rest}` : '/twitch/dashboard';
   }
   return null;
 }

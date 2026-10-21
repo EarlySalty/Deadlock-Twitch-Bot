@@ -1,19 +1,25 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { DashboardSidebar, type DashboardRoute } from '@/components/layout/DashboardSidebar';
 import { useT } from '@/context/LanguageContext';
-import { keepLinksInTour } from '@/navigation';
+import { TOUR_BLOCKED_EVENT } from '@/tourGuard';
 import { onPublicTour } from '@/publicTour';
 
 export type { DashboardRoute };
 
 function TourBanner() {
   const t = useT();
+  const [blocked, setBlocked] = useState(false);
   useEffect(() => {
-    document.addEventListener('click', keepLinksInTour, true);
-    document.addEventListener('auxclick', keepLinksInTour, true);
+    let timer: number | undefined;
+    const show = () => {
+      setBlocked(true);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setBlocked(false), 4000);
+    };
+    window.addEventListener(TOUR_BLOCKED_EVENT, show);
     return () => {
-      document.removeEventListener('click', keepLinksInTour, true);
-      document.removeEventListener('auxclick', keepLinksInTour, true);
+      window.removeEventListener(TOUR_BLOCKED_EVENT, show);
+      window.clearTimeout(timer);
     };
   }, []);
   return (
@@ -22,9 +28,15 @@ function TourBanner() {
       className="rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3 text-sm text-warning/90"
     >
       {t('Das ist eine Demo. Du kannst dich umsehen, nichts wird gespeichert.')}{' '}
-      <a className="font-semibold underline decoration-warning/40 underline-offset-2 hover:text-warning" href="/twitch/auth/login?next=%2Ftwitch%2Fdashboard">
+      <a
+        data-tour-exit
+        target="_self"
+        className="font-semibold underline decoration-warning/40 underline-offset-2 hover:text-warning"
+        href="/twitch/dashboard"
+      >
         {t('Zum echten Dashboard')}
       </a>
+      {blocked ? <p className="mt-2 font-semibold text-warning">{t('In der Demo kannst du nichts ändern.')}</p> : null}
     </div>
   );
 }

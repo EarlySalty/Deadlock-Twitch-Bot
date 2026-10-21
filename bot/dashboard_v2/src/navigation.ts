@@ -47,13 +47,6 @@ export function tourLinkHref(href: string, currentHref: string): string | null {
   return livePathFromTourPath(next.pathname) === livePath ? next.href : null;
 }
 
-export function keepLinksInTour(event: globalThis.MouseEvent) {
-  const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
-  if (!(anchor instanceof HTMLAnchorElement)) return;
-  const next = tourLinkHref(anchor.href, window.location.href);
-  if (next) anchor.href = next;
-}
-
 export function navigateDashboard(event: MouseEvent<HTMLAnchorElement>) {
   if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
     || event.currentTarget.target || event.currentTarget.hasAttribute('download') || document.querySelector('[data-unsaved="true"]')) return;

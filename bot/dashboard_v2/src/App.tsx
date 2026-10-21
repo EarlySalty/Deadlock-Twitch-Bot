@@ -445,8 +445,9 @@ export default function App() {
     path === '/dashboard-v2' ||
     path === '/twitch/dashboard-v2';
   const isCategoryRoute =
-    path === '/twitch/kategorie' ||
-    (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category');
+    !onPublicTour() &&
+    (path === '/twitch/kategorie' ||
+      (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category'));
 
   const activeRoute =
     isInternalHomeRoute ? 'home'
@@ -478,7 +479,7 @@ export default function App() {
         <ErrorBoundary>
         <SessionBootstrap />
         <OnboardingProvider>
-        <Suspense fallback={<DashboardShell activeRoute={activeRoute} showSidebar={!isPricingRoute} demoMode={isAnalyticsRoute && resolveEffectiveDemoMode({ pathname: path, runtimeConfig: dashboardRuntimeConfig })}><RouteSkeleton /></DashboardShell>}>
+        <Suspense fallback={<DashboardShell activeRoute={activeRoute} showSidebar={!isPricingRoute} demoMode={isAnalyticsRoute && resolveEffectiveDemoMode({ pathname: window.location.pathname, runtimeConfig: dashboardRuntimeConfig })}><RouteSkeleton /></DashboardShell>}>
           {isCategoryRoute ? (
             <DashboardShell activeRoute="category"><CategoryCollector /></DashboardShell>
           ) : isSocialMediaManagerRoute ? (

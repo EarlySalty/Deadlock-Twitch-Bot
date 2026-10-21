@@ -53,7 +53,7 @@ test('Deadlock weltweit nutzt die bereits veröffentlichte Analyse-Route statt e
   );
   assert.match(
     APP,
-    /const isCategoryRoute =\s*path === '\/twitch\/kategorie' \|\|\s*\(isAnalyticsRoute && new URLSearchParams\(window\.location\.search\)\.get\('view'\) === 'category'\);/,
+    /const isCategoryRoute =\s*!onPublicTour\(\) &&\s*\(path === '\/twitch\/kategorie' \|\|\s*\(isAnalyticsRoute && new URLSearchParams\(window\.location\.search\)\.get\('view'\) === 'category'\)\);/,
     'App.tsx muss die Kategorieansicht unter /analyse?view=category rendern und den Legacy-Pfad intern beibehalten',
   );
   assert.match(APP, /\{isCategoryRoute \? \(/);
@@ -78,8 +78,7 @@ test('die Shell trägt den Marken-Hintergrund, volle Breite, Sidebar-Spalte und 
   assert.doesNotMatch(SHELL, /max-w-\[/);
   assert.match(SHELL, /lg:grid-cols-\[240px_minmax\(0,1fr\)\]/);
   assert.match(SHELL, /<DashboardSidebar activeRoute=\{activeRoute\} \/>/);
-  assert.match(SHELL, /<main[^>]*>/);
-  assert.match(SHELL, /\{children\}/);
+  assert.match(SHELL, /<main[^>]*>\s*\{tourMode \? <TourBanner \/> : null\}\s*\{children\}\s*<\/main>/);
 });
 
 test('Social Media nutzt dieselbe farbige Shell und Navigation wie Home und Uplink', () => {

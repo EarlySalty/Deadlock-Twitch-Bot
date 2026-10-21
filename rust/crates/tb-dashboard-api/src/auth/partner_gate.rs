@@ -175,7 +175,10 @@ pub async fn partner_status_gate(req: Request<Body>, next: Next) -> Response {
     }
 
     // Active-Status prüfen.
-    if state.is_partner_active(twitch_login, twitch_user_id).await {
+    if state
+        .is_partner_active(twitch_login, twitch_user_id)
+        .await
+    {
         return next.run(Request::from_parts(parts, body)).await;
     }
 
@@ -267,16 +270,12 @@ mod tests {
         assert!(path_matches_passive_allowed("/twitch/verwaltung"));
         assert!(path_matches_passive_allowed("/twitch/uplink"));
         assert!(path_matches_passive_allowed("/twitch/uplink/connect/kick"));
-        assert!(path_matches_passive_allowed(
-            "/twitch/uplink/connect/youtube"
-        ));
+        assert!(path_matches_passive_allowed("/twitch/uplink/connect/youtube"));
         assert!(path_matches_passive_allowed("/callback/kick"));
         assert!(path_matches_passive_allowed("/callback/youtube"));
         assert!(path_matches_passive_allowed("/twitch/api/v2/uplink/me"));
         assert!(path_matches_passive_allowed("/twitch/abbo/kündigen"));
-        assert!(path_matches_passive_allowed(
-            "/twitch/api/billing/trial/start"
-        ));
+        assert!(path_matches_passive_allowed("/twitch/api/billing/trial/start"));
         assert!(path_matches_passive_allowed("/twitch/api/v2/auth-status"));
         assert!(!path_matches_passive_allowed("/twitch/api/v2/overview"));
         assert!(!path_matches_passive_allowed("/analyse"));
