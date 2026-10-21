@@ -79,13 +79,17 @@ pub trait TokenLifecycleNotifier: Send + Sync {
     /// (Python `notify_token_error` / `_notify_admin_grace_expired`).
     async fn send_admin_embed(&self, channel_id: i64, title: &str, description: &str) -> bool;
 
-    /// Text-DM an den Streamer (Python `_send_user_dm_token_error`, hier ohne
-    /// Embed/Button). `discord_user_id` ist die numerische Discord-ID als String.
-    async fn send_user_dm(&self, discord_user_id: &str, content: &str) -> bool;
+    async fn send_user_dm(&self, discord_user_id: &str, content: &str, purpose: DmPurpose) -> bool;
 
     /// Streamer-Rolle entziehen (Python `schedule_streamer_role_sync(False)`).
     /// Best-effort; `false` wenn nicht zugestellt.
     async fn revoke_streamer_role(&self, discord_user_id: &str, reason: &str) -> bool;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DmPurpose {
+    Proactive,
+    Security,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,7 +426,10 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         let discord_user_id = self.discord_user_id_for(twitch_user_id, twitch_login).await;
         let user_dm_sent = if let Some(ref did) = discord_user_id {
             let text = user_dm_token_error_text(twitch_login, &self.reauth_url);
-            let sent = self.notifier.send_user_dm(did, &text).await;
+            let sent = self
+                .notifier
+                .send_user_dm(did, &text, DmPurpose::Security)
+                .await;
             if sent {
                 self.set_user_dm_sent(twitch_user_id).await;
             }
@@ -534,7 +541,9 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             if row.reminder_sent.unwrap_or(0) == 0 {
                 if let Some(ref did) = discord_user_id {
                     let text = user_dm_reminder_text(&row.twitch_login, &self.reauth_url);
-                    self.notifier.send_user_dm(did, &text).await;
+                    self.notifier
+                        .send_user_dm(did, &text, DmPurpose::Security)
+                        .await;
                 }
                 let (title, description) = admin_grace_expired_text(
                     &row.twitch_login,
@@ -765,7 +774,9 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         let discord_user_id = self.discord_user_id_for(twitch_user_id, twitch_login).await;
         let user_dm_sent = if let Some(ref did) = discord_user_id {
             let text = user_dm_bot_banned_text(twitch_login, error_message);
-            self.notifier.send_user_dm(did, &text).await
+            self.notifier
+                .send_user_dm(did, &text, DmPurpose::Proactive)
+                .await
         } else {
             false
         };
@@ -1761,7 +1772,7 @@ mod tests {
         admin_embeds: AtomicUsize,
         user_dms: AtomicUsize,
         role_revokes: AtomicUsize,
-        last_dm: std::sync::Mutex<Option<String>>,
+        dm_purposes: std::sync::Mutex<Vec<DmPurpose>>,
     }
 
     #[async_trait::async_trait]
@@ -1770,9 +1781,9 @@ mod tests {
             self.admin_embeds.fetch_add(1, Ordering::SeqCst);
             true
         }
-        async fn send_user_dm(&self, _did: &str, content: &str) -> bool {
+        async fn send_user_dm(&self, _did: &str, _content: &str, purpose: DmPurpose) -> bool {
             self.user_dms.fetch_add(1, Ordering::SeqCst);
-            *self.last_dm.lock().unwrap() = Some(content.to_string());
+            self.dm_purposes.lock().unwrap().push(purpose);
             true
         }
         async fn revoke_streamer_role(&self, _did: &str, _reason: &str) -> bool {
@@ -1826,7 +1837,7 @@ mod tests {
         let (t, d) = admin_token_error_text("foo", "invalid_grant");
         n.send_admin_embed(TOKEN_ERROR_CHANNEL_ID, &t, &d).await;
         let text = user_dm_token_error_text("foo", DEFAULT_REAUTH_URL);
-        n.send_user_dm("123", &text).await;
+        n.send_user_dm("123", &text, DmPurpose::Security).await;
         assert_eq!(n.admin_embeds.load(Ordering::SeqCst), 1);
         assert_eq!(n.user_dms.load(Ordering::SeqCst), 1);
         assert_eq!(n.role_revokes.load(Ordering::SeqCst), 0);
@@ -2098,6 +2109,10 @@ mod tests {
         assert!(out.admin_sent && out.user_dm_sent && !out.already_notified);
         assert_eq!(notifier.admin_embeds.load(Ordering::SeqCst), 1);
         assert_eq!(notifier.user_dms.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *notifier.dm_purposes.lock().unwrap(),
+            vec![DmPurpose::Security]
+        );
 
         // Flags gesetzt.
         let (notified, dm_sent): (Option<i32>, Option<i32>) = sqlx::query_as(
@@ -2521,6 +2536,10 @@ mod tests {
         assert!(outcome.user_dm_sent);
         assert!(!outcome.already_flagged);
         assert_eq!(notifier.user_dms.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *notifier.dm_purposes.lock().unwrap(),
+            vec![DmPurpose::Proactive]
+        );
 
         let (raid_enabled, needs_reauth): (Option<bool>, Option<bool>) = sqlx::query_as(
             "SELECT raid_enabled, needs_reauth FROM twitch_raid_auth WHERE twitch_user_id = '500'",

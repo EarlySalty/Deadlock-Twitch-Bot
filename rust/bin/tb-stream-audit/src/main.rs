@@ -3361,8 +3361,6 @@ async fn offene_hinweise_senden(konfiguration: &Konfiguration) {
     }
 }
 
-/// Schickt eine freie Zeile an den Admin - fuer Meldungen, die kein Bericht
-/// sind, etwa einen endgueltig aufgegebenen Block.
 async fn dm_rohtext(text: &str, schluessel: &str) -> Result<(), String> {
     let Some(token) = melden::broker_token() else {
         return Err("kein Broker-Token".to_owned());
@@ -3382,9 +3380,31 @@ async fn dm_rohtext(text: &str, schluessel: &str) -> Result<(), String> {
         .await
     {
         Ok(antwort) if antwort.status().is_success() => broker_antwort_pruefen(antwort).await,
-        Ok(antwort) => Err(format!("DM abgelehnt: HTTP {}", antwort.status().as_u16())),
+        Ok(antwort) => dm_ablehnung_werten(antwort).await,
         Err(fehler) => Err(format!("DM fehlgeschlagen: {fehler}")),
     }
+}
+
+async fn dm_ablehnung_werten(antwort: reqwest::Response) -> Result<(), String> {
+    let status = antwort.status().as_u16();
+    let roh = antwort.text().await.unwrap_or_default();
+    if ist_dm_abbestellt(status, &roh) {
+        tracing::info!("Hinweis-DM übersprungen: Empfänger hat Bot-Nachrichten abbestellt");
+        return Ok(());
+    }
+    Err(format!("DM abgelehnt: HTTP {status}"))
+}
+
+fn ist_dm_abbestellt(status: u16, roh: &str) -> bool {
+    status == 403
+        && serde_json::from_str::<serde_json::Value>(roh)
+            .ok()
+            .and_then(|json| {
+                json.pointer("/error/code")
+                    .and_then(|c| c.as_str())
+                    .map(str::to_owned)
+            })
+            .is_some_and(|code| code == "dm_opted_out")
 }
 
 async fn dm_senden(_bericht: &Bericht, _schluessel: &str) -> Result<(), String> {

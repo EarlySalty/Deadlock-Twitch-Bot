@@ -509,7 +509,7 @@ async fn ambiguous_write_failures_are_not_reexecuted() {
             "discord/send-dm",
             "POST",
             "/channels/222/messages",
-            json!({"user_id": 5, "content": "test"}),
+            json!({"user_id": 5, "content": "test", "dm_purpose": "security"}),
         ),
         (
             "discord/member/add-role",
@@ -572,6 +572,47 @@ async fn ambiguous_write_failures_are_not_reexecuted() {
         assert_eq!(second.status, 502, "{action}");
         assert_eq!(json_of(&second)["cached"], true, "{action}");
     }
+}
+
+#[tokio::test]
+async fn proactive_dm_without_optout_check_is_blocked_before_discord() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let client = rest(&server);
+    let blocked = client
+        .handle(
+            GUILD,
+            post(
+                "discord/send-dm",
+                Some("optout"),
+                json!({"user_id": 5, "content": "test"}),
+            ),
+        )
+        .await
+        .expect("response");
+    assert_eq!(blocked.status, 503);
+    assert_eq!(json_of(&blocked)["error"]["code"], "dm_gate_unavailable");
+    let invalid = client
+        .handle(
+            GUILD,
+            post(
+                "discord/send-dm",
+                Some("optout-invalid"),
+                json!({"user_id": 5, "content": "test", "dm_purpose": "werbung"}),
+            ),
+        )
+        .await
+        .expect("response");
+    assert_eq!(invalid.status, 400);
 }
 
 #[tokio::test]

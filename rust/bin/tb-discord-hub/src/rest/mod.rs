@@ -58,6 +58,7 @@ pub struct DiscordRest {
     store: IdempotencyStore,
     channel_cache: Mutex<HashMap<u64, (Option<u64>, Instant)>>,
     role_locks: Mutex<RoleLocks>,
+    dm_optout_pool: Option<sqlx::PgPool>,
 }
 
 impl std::fmt::Debug for DiscordRest {
@@ -79,7 +80,13 @@ impl DiscordRest {
             store: IdempotencyStore::new(IdempotencyConfig::default()),
             channel_cache: Mutex::new(HashMap::new()),
             role_locks: Mutex::new(HashMap::new()),
+            dm_optout_pool: None,
         })
+    }
+
+    pub fn with_dm_optout_pool(mut self, pool: Option<sqlx::PgPool>) -> Self {
+        self.dm_optout_pool = pool;
+        self
     }
 }
 
