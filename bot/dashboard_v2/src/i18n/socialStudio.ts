@@ -162,7 +162,7 @@ export const SOCIAL_STUDIO_EN: Record<string, string> = {
   'Keine geeigneten Clips mehr': 'No suitable clips left',
   'Aufbewahrungsfrist endet bald': 'Retention period ending soon',
   'Vorwarnung in Stunden': 'Advance notice in hours',
-  'Benachrichtigungen speichern': 'Save notifications',
+  'Bitte gib für die Vorwarnung 1 bis 168 Stunden an.': 'Please enter 1 to 168 hours for the advance notice.',
   'Deine Hinweise': 'Your notifications',
   'Vollautomatik aktivieren?': 'Enable automatic publication?',
   'Zur manuellen Prüfung wechseln?': 'Switch to manual review?',

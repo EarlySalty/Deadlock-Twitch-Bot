@@ -113,6 +113,17 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
     }
   }
 
+  function savePreferences(next: NotificationPreferences) {
+    if (!Number.isInteger(next.reminder_hours) || next.reminder_hours < 1 || next.reminder_hours > 168) {
+      setError({ key: 'Bitte gib für die Vorwarnung 1 bis 168 Stunden an.' });
+      return;
+    }
+    setPreferences(next);
+    void act(() => client.preferences(twitchUserId, next), { key: 'Benachrichtigungen gespeichert.' }, true).then((saved) => {
+      if (!saved && mounted.current && snapshot) setPreferences(snapshot.settings.notifications);
+    });
+  }
+
   return <section className="publish-review" aria-label={t('Freigabe und Veröffentlichung')} aria-busy={busy} data-unsaved={preferencesDirty || busy ? 'true' : undefined} data-saving={busy ? 'true' : undefined}>
     <StudioSectionHeading title={t(section === 'videos' ? 'Fertige Videos' : section === 'notifications' ? 'Benachrichtigungen & Aufbewahrung' : 'Freigabe & Veröffentlichung')} icon={ShieldCheck}
       description={section === 'notifications' ? undefined : t('Prüfe die fertige Videoversion. Eine Kontoverbindung ist noch keine Freigabe.')} />
@@ -132,18 +143,17 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
       {(section === 'all' || section === 'notifications') && preferences && <div className="publish-preferences">
         {section === 'all' && <h3>{t('Benachrichtigungen & Aufbewahrung')}</h3>}
         <p className="publish-retention">{t('Ungeprüfte Videos bleiben sieben Tage ab dem fertigen Rendern verfügbar. Freigegebene Videos sowie laufende, fehlgeschlagene oder unklare Veröffentlichungen bleiben geschützt.')}</p>
-        <form onSubmit={(event) => { event.preventDefault(); void act(() => client.preferences(twitchUserId, preferences), { key: 'Benachrichtigungen gespeichert.' }, true); }}>
+        <div className="publish-preferences-form">
           <fieldset disabled={busy}><legend>{t('Wo möchtest du Hinweise erhalten?')}</legend>
-            <label><input type="checkbox" role="switch" checked={preferences.dashboard} onChange={(event) => setPreferences({ ...preferences, dashboard: event.target.checked })} />{t('Im Dashboard')}</label>
-            <label><input type="checkbox" role="switch" checked={preferences.discord} disabled={!snapshot.capabilities.discord} onChange={(event) => setPreferences({ ...preferences, discord: event.target.checked })} />{t('Discord, nur nach deiner Auswahl')}</label>
+            <label><input type="checkbox" role="switch" checked={preferences.dashboard} onChange={(event) => savePreferences({ ...preferences, dashboard: event.target.checked })} />{t('Im Dashboard')}</label>
+            <label><input type="checkbox" role="switch" checked={preferences.discord} disabled={!snapshot.capabilities.discord} onChange={(event) => savePreferences({ ...preferences, discord: event.target.checked })} />{t('Discord, nur nach deiner Auswahl')}</label>
             <p className="publish-note">{t('E-Mail ist nicht verfügbar. Freigaben erfolgen ausschließlich im Dashboard.')}</p>
           </fieldset>
           <fieldset disabled={busy}><legend>{t('Welche Hinweise möchtest du?')}</legend>
-            {events.map(({ key, label }) => <label key={key}><input type="checkbox" role="switch" checked={Boolean(preferences[key])} onChange={(event) => setPreferences({ ...preferences, [key]: event.target.checked })} />{t(label)}</label>)}
-            <label>{t('Vorwarnung in Stunden')}<input aria-label={t('Vorwarnung in Stunden')} type="number" min="1" max="168" value={preferences.reminder_hours} onChange={(event) => setPreferences({ ...preferences, reminder_hours: Number(event.target.value) })} /></label>
+            {events.map(({ key, label }) => <label key={key}><input type="checkbox" role="switch" checked={Boolean(preferences[key])} onChange={(event) => savePreferences({ ...preferences, [key]: event.target.checked })} />{t(label)}</label>)}
+            <label>{t('Vorwarnung in Stunden')}<input aria-label={t('Vorwarnung in Stunden')} type="number" min="1" max="168" value={preferences.reminder_hours} onChange={(event) => setPreferences({ ...preferences, reminder_hours: Number(event.target.value) })} onBlur={() => { if (preferencesDirty) savePreferences(preferences); }} onKeyDown={(event) => { if (event.key === 'Enter' && preferencesDirty) savePreferences(preferences); }} /></label>
           </fieldset>
-          <button type="submit" disabled={busy}>{t('Benachrichtigungen speichern')}</button>
-        </form>
+        </div>
       </div>}
       {(section === 'all' || section === 'notifications') && snapshot.notifications.length > 0 && <section className="publish-notifications" aria-label={t('Hinweise')}><h3>{t('Deine Hinweise')}</h3>{snapshot.notifications.map((notification) => <p key={notification.id}>{notification.content}</p>)}</section>}
     </>}
