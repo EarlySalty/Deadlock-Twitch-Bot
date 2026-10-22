@@ -249,6 +249,7 @@ fn failure(error: &AiEditorError, stage: AiStage) -> JobFailure {
         AiEditorError::Consent => JobFailure::ConsentMissing,
         AiEditorError::Budget => JobFailure::BudgetExceeded,
         AiEditorError::Provider => JobFailure::ProviderUnavailable,
+        AiEditorError::ProviderAccess => JobFailure::ProviderAccess,
         AiEditorError::Transcription => JobFailure::TranscriptionFailed,
         AiEditorError::Render => JobFailure::RenderingFailed,
         AiEditorError::Validation => JobFailure::ValidationFailed,

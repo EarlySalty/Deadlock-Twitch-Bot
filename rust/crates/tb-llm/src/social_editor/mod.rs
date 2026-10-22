@@ -121,12 +121,14 @@ pub struct EditorError {
     pub estimated_micro_usd: Option<i64>,
     pub reserved_micro_usd: Option<i64>,
     pub cost_basis: Option<&'static str>,
+    pub access: Option<ProviderAccess>,
 }
 
 impl EditorError {
     fn new(kind: ErrorKind) -> Self {
         Self {
             kind,
+            access: None,
             ledger_id: None,
             request_id: None,
             http_status: None,
@@ -848,11 +850,112 @@ async fn complete_with_key(
                     estimated_micro_usd: failure_estimate,
                     reserved_micro_usd: Some(reservation),
                     cost_basis: Some(failure_cost(rejected, exceeds_reservation)),
+                    access: status.and_then(|status| access_problem(status, &bytes)),
                 })
             }
         }
     }
     Err(EditorError::new(ErrorKind::Transport))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAccess {
+    Ready,
+    KeyMissing,
+    WorkspaceRequired,
+    WorkspaceInvalid,
+    KeyRejected,
+    Unreachable,
+}
+
+impl ProviderAccess {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::KeyMissing => "key_missing",
+            Self::WorkspaceRequired => "workspace_required",
+            Self::WorkspaceInvalid => "workspace_invalid",
+            Self::KeyRejected => "key_rejected",
+            Self::Unreachable => "unreachable",
+        }
+    }
+}
+
+fn access_problem(status: StatusCode, body: &[u8]) -> Option<ProviderAccess> {
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return Some(ProviderAccess::KeyRejected);
+    }
+    if status != StatusCode::BAD_REQUEST {
+        return None;
+    }
+    let message = serde_json::from_slice::<Value>(body).ok()?;
+    let message = message.get("error")?.get("message")?.as_str()?;
+    if message.contains("not scoped to a workspace") {
+        Some(ProviderAccess::WorkspaceRequired)
+    } else if message.contains("anthropic-workspace-id header must be") {
+        Some(ProviderAccess::WorkspaceInvalid)
+    } else {
+        None
+    }
+}
+
+const ACCESS_CACHE_TTL: Duration = Duration::from_secs(300);
+
+static ACCESS_CACHE: LazyLock<Mutex<Option<(Instant, ProviderAccess)>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+pub async fn probe_access(configuration: &EditorConfig) -> ProviderAccess {
+    let cached = ACCESS_CACHE
+        .lock()
+        .ok()
+        .and_then(|guard| *guard)
+        .filter(|(at, _)| at.elapsed() < ACCESS_CACHE_TTL)
+        .map(|(_, access)| access);
+    if let Some(access) = cached {
+        return access;
+    }
+    let access = match crate::keys::anthropic_api_key() {
+        Some(key) => request_access(&configuration.provider, &key).await,
+        None => ProviderAccess::KeyMissing,
+    };
+    if let Ok(mut guard) = ACCESS_CACHE.lock() {
+        *guard = Some((Instant::now(), access));
+    }
+    access
+}
+
+async fn request_access(config: &ProviderConfig, key: &str) -> ProviderAccess {
+    let Ok(client) = Client::builder()
+        .no_proxy()
+        .redirect(Policy::none())
+        .timeout(Duration::from_millis(config.request_timeout_ms))
+        .build()
+    else {
+        return ProviderAccess::Unreachable;
+    };
+    let Ok(workspace) = workspace_header(crate::keys::anthropic_workspace_id()) else {
+        return ProviderAccess::WorkspaceInvalid;
+    };
+    let endpoint = format!(
+        "{}/v1/models?limit=1",
+        config.endpoint.trim_end_matches('/')
+    );
+    let mut builder = client
+        .get(&endpoint)
+        .header("x-api-key", key)
+        .header("anthropic-version", "2023-06-01");
+    if let Some(workspace) = workspace {
+        builder = builder.header("anthropic-workspace-id", workspace);
+    }
+    let Ok(reply) = builder.send().await else {
+        return ProviderAccess::Unreachable;
+    };
+    let status = reply.status();
+    if status.is_success() {
+        return ProviderAccess::Ready;
+    }
+    let body = reply.bytes().await.unwrap_or_default();
+    access_problem(status, &body).unwrap_or(ProviderAccess::Unreachable)
 }
 
 #[cfg(test)]

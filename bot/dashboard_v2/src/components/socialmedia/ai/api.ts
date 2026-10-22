@@ -5,9 +5,14 @@ const AI_PREFIX = '/twitch/social-media/api/ai';
 export type AiJobStatus = 'queued' | 'preparing' | 'transcribing' | 'analyzing' | 'planning' | 'rendering' | 'validating' | 'review' | 'failed' | 'awaiting_confirmation' | 'rejected';
 export type AiCostBasis = 'usage_priced_estimate' | 'provider_billed' | 'unknown';
 
+export type AiProviderAccess = 'ready' | 'key_missing' | 'workspace_required' | 'workspace_invalid' | 'key_rejected' | 'unreachable';
+
+const PROVIDER_ACCESS: readonly AiProviderAccess[] = ['ready', 'key_missing', 'workspace_required', 'workspace_invalid', 'key_rejected', 'unreachable'];
+
 export interface AiConsent {
   external_ai_consent: boolean;
   global_allowed: boolean;
+  provider_access?: AiProviderAccess | null;
 }
 
 export type AiPublishLanguage = 'de' | 'en' | 'auto';
@@ -185,7 +190,8 @@ function decodeProposal(value: unknown): AiRevisionProposal | null {
 
 export function decodeAiConsent(value: unknown): AiConsent {
   const item = record(value);
-  return { external_ai_consent: flag(item.external_ai_consent), global_allowed: flag(item.global_allowed) };
+  const access = PROVIDER_ACCESS.find((value) => value === item.provider_access) ?? null;
+  return { external_ai_consent: flag(item.external_ai_consent), global_allowed: flag(item.global_allowed), provider_access: access };
 }
 
 export function decodeAiJob(value: unknown): AiJobView {

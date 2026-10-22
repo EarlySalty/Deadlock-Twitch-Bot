@@ -263,25 +263,39 @@ async fn channel(
         .map_err(|response| ApiError(Box::new(response)))
 }
 
-async fn consent_view(pool: &PgPool, owner: &str) -> Result<Value, ApiError> {
+async fn consent_view(pool: &PgPool, runtime: &AiRuntime, owner: &str) -> Result<Value, ApiError> {
     let external_ai_consent = store::get_user_consent(pool, owner).await?;
     let global_allowed = tb_llm::social_editor::global_consent(pool)
         .await
         .map_err(AiEditorError::from)?;
-    Ok(json!({ "external_ai_consent": external_ai_consent, "global_allowed": global_allowed }))
+    let provider_access = match runtime.0.as_deref() {
+        Some(runtime) => Some(
+            tb_llm::social_editor::probe_access(&runtime.configuration)
+                .await
+                .as_str(),
+        ),
+        None => None,
+    };
+    Ok(json!({
+        "external_ai_consent": external_ai_consent,
+        "global_allowed": global_allowed,
+        "provider_access": provider_access,
+    }))
 }
 
 pub async fn consent_get(
     State(pool): State<PgPool>,
+    Extension(runtime): Extension<AiRuntime>,
     auth: DashboardAuthLevel,
     Query(query): Query<ChannelQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let owner = channel(&pool, &auth, query.twitch_user_id.as_deref()).await?;
-    Ok(Json(consent_view(&pool, &owner).await?))
+    Ok(Json(consent_view(&pool, &runtime, &owner).await?))
 }
 
 pub async fn consent_put(
     State(pool): State<PgPool>,
+    Extension(runtime): Extension<AiRuntime>,
     auth: DashboardAuthLevel,
     Json(input): Json<ConsentInput>,
 ) -> Result<Json<Value>, ApiError> {
@@ -298,7 +312,7 @@ pub async fn consent_put(
         }
     };
     store::upsert_user_consent(&pool, &owner, input.external_ai_consent, actor).await?;
-    Ok(Json(consent_view(&pool, &owner).await?))
+    Ok(Json(consent_view(&pool, &runtime, &owner).await?))
 }
 
 pub async fn options_get(
