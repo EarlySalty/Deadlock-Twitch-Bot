@@ -137,20 +137,36 @@ impl Analysis {
     pub fn validate(&self, duration: u64, limits: &PlanLimits) -> Result<(), AiEditorError> {
         let valid_text =
             |text: &String| !text.trim().is_empty() && text.len() <= limits.max_text_bytes;
-        if self.highlights.len() > limits.max_highlights
-            || self.highlights.iter().any(|entry| {
-                entry.start_ms < 0
-                    || entry.end_ms <= entry.start_ms
-                    || entry.end_ms as u64 > duration
-                    || !valid_text(&entry.description)
-            })
-            || [&self.uncertainty, &self.analysis_notes]
-                .into_iter()
-                .any(|values| {
-                    values.len() > limits.max_review_reasons || !values.iter().all(valid_text)
-                })
+        if self.highlights.len() > limits.max_highlights {
+            return Err(AiEditorError::plan_rejected(
+                "analysis: too many highlights",
+            ));
+        }
+        if self.highlights.iter().any(|entry| {
+            entry.start_ms < 0 || entry.end_ms <= entry.start_ms || entry.end_ms as u64 > duration
+        }) {
+            return Err(AiEditorError::plan_rejected(
+                "analysis: highlight outside the source",
+            ));
+        }
+        if self
+            .highlights
+            .iter()
+            .any(|entry| !valid_text(&entry.description))
         {
-            return Err(AiEditorError::Plan);
+            return Err(AiEditorError::plan_rejected(
+                "analysis: highlight text empty or too long",
+            ));
+        }
+        if [&self.uncertainty, &self.analysis_notes]
+            .into_iter()
+            .any(|values| {
+                values.len() > limits.max_review_reasons || !values.iter().all(valid_text)
+            })
+        {
+            return Err(AiEditorError::plan_rejected(
+                "analysis: notes or uncertainty over limits",
+            ));
         }
         Ok(())
     }
@@ -165,8 +181,13 @@ impl Planning {
         analysis: &Analysis,
     ) -> Result<super::ValidatedPlan, AiEditorError> {
         analysis.validate(duration, limits)?;
-        if !(60..=140).contains(&self.subtitle_scale_percent) || self.variants.len() > 2 {
-            return Err(AiEditorError::Plan);
+        if !(60..=140).contains(&self.subtitle_scale_percent) {
+            return Err(AiEditorError::plan_rejected(
+                "subtitle_scale_percent outside 60..=140",
+            ));
+        }
+        if self.variants.len() > 2 {
+            return Err(AiEditorError::plan_rejected("more than two variants"));
         }
         for variant in &self.variants {
             variant
@@ -177,37 +198,71 @@ impl Planning {
             .map_err(|_| AiEditorError::Plan)?
             .len()
             > limits.max_plan_bytes
-            || self.platforms.len() != crate::posting_plan::PLATFORMS.len()
-            || self.platforms.iter().any(|(platform, copy)| {
-                !crate::posting_plan::PLATFORMS.contains(&platform.as_str())
-                    || copy.title.trim().is_empty()
-                    || copy.title.chars().count() > copy_limits.max_title_chars
-                    || copy.description.trim().is_empty()
-                    || copy.description.chars().count() > copy_limits.max_description_chars
-                    || copy.hashtags.len() > copy_limits.max_hashtags
-                    || copy.hashtags.iter().any(|tag| {
-                        !tag.starts_with('#')
-                            || tag.chars().count() < 2
-                            || tag.chars().count() > copy_limits.max_hashtag_chars
-                            || tag.chars().any(char::is_whitespace)
-                    })
-            })
         {
-            return Err(AiEditorError::Plan);
+            return Err(AiEditorError::plan_rejected(
+                "plan larger than max_plan_bytes",
+            ));
         }
-        let validated = super::validate_plan(self.plan.clone(), duration, limits)
-            .map_err(|_| AiEditorError::Plan)?;
+        if self.platforms.len() != crate::posting_plan::PLATFORMS.len()
+            || self
+                .platforms
+                .keys()
+                .any(|platform| !crate::posting_plan::PLATFORMS.contains(&platform.as_str()))
+        {
+            return Err(AiEditorError::plan_rejected(
+                "platform copy set does not match",
+            ));
+        }
+        for copy in self.platforms.values() {
+            if let Some(reason) = copy_rejection(copy, copy_limits) {
+                return Err(AiEditorError::plan_rejected(reason));
+            }
+        }
+        let validated =
+            super::validate_plan(self.plan.clone(), duration, limits).map_err(|error| {
+                AiEditorError::plan_rejected(&format!("edit plan: {:?}", error.code))
+            })?;
         if analysis.highlights.iter().any(|highlight| {
             !validated.preserves_highlight(highlight.start_ms as u64, highlight.end_ms as u64)
-        }) || (!analysis.uncertainty.is_empty()
+        }) {
+            return Err(AiEditorError::plan_rejected(
+                "analysis highlight cut out of the plan",
+            ));
+        }
+        if !analysis.uncertainty.is_empty()
             && (!self.plan.significant_uncertainty
                 || analysis
                     .uncertainty
                     .iter()
-                    .any(|reason| !self.plan.review_reasons.contains(reason))))
+                    .any(|reason| !self.plan.review_reasons.contains(reason)))
         {
-            return Err(AiEditorError::Plan);
+            return Err(AiEditorError::plan_rejected(
+                "analysis uncertainty missing in review reasons",
+            ));
         }
         Ok(validated)
     }
+}
+
+fn copy_rejection(copy: &PublicationCopy, limits: &CopyLimits) -> Option<&'static str> {
+    if copy.title.trim().is_empty() || copy.title.chars().count() > limits.max_title_chars {
+        return Some("copy title empty or too long");
+    }
+    if copy.description.trim().is_empty()
+        || copy.description.chars().count() > limits.max_description_chars
+    {
+        return Some("copy description empty or too long");
+    }
+    if copy.hashtags.len() > limits.max_hashtags {
+        return Some("too many hashtags");
+    }
+    if copy.hashtags.iter().any(|tag| {
+        !tag.starts_with('#')
+            || tag.chars().count() < 2
+            || tag.chars().count() > limits.max_hashtag_chars
+            || tag.chars().any(char::is_whitespace)
+    }) {
+        return Some("hashtag format invalid");
+    }
+    None
 }

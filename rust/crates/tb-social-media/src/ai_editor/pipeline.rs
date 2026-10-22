@@ -374,7 +374,8 @@ fn subtitles(
             language: language.clone(),
         })
         .collect::<Vec<_>>();
-    super::rebase_subtitles(plan, &source, &runtime.limits.plan).map_err(|_| AiEditorError::Plan)
+    super::rebase_subtitles(plan, &source, &runtime.limits.plan)
+        .map_err(|error| AiEditorError::plan_rejected(&format!("subtitles: {:?}", error.code)))
 }
 
 pub(super) struct StageContext<'a> {
@@ -756,8 +757,8 @@ async fn plan(
         &request,
     )
     .await?;
-    let mut result: Planning =
-        serde_json::from_value(response.content).map_err(|_| AiEditorError::Plan)?;
+    let mut result: Planning = serde_json::from_value(response.content)
+        .map_err(|error| AiEditorError::plan_rejected(&format!("response shape: {error}")))?;
     validate_variants(&result, &frozen.publication, runtime)?;
     if let Some(base) = &base {
         base.validate(
@@ -786,7 +787,9 @@ async fn plan(
         super::revision::validate_proposal(&mut proposal, base, &result, runtime, estimate)?;
         result.revision_proposal = Some(proposal);
     } else if result.revision_proposal.is_some() {
-        return Err(AiEditorError::Plan);
+        return Err(AiEditorError::plan_rejected(
+            "revision proposal without a revision",
+        ));
     }
     if !analysis.uncertainty.is_empty() {
         result.plan.significant_uncertainty = true;
@@ -881,7 +884,9 @@ fn validate_variants(
     if (!multi_output && !result.variants.is_empty())
         || result.variants.len() >= runtime.limits.revisions.max_variants
     {
-        return Err(AiEditorError::Plan);
+        return Err(AiEditorError::plan_rejected(
+            "variants not allowed or too many",
+        ));
     }
     let mut intervals = vec![&result.plan.kept_intervals];
     for variant in &result.variants {
@@ -892,7 +897,9 @@ fn validate_variants(
                 .iter()
                 .map(|i| (i.start_ms, i.end_ms)))
         }) {
-            return Err(AiEditorError::Plan);
+            return Err(AiEditorError::plan_rejected(
+                "variant duplicates an earlier cut",
+            ));
         }
         intervals.push(&variant.plan.kept_intervals);
     }

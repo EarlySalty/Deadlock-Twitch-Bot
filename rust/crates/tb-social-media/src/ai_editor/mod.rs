@@ -85,6 +85,11 @@ pub enum AiEditorError {
 }
 
 impl AiEditorError {
+    pub(crate) fn plan_rejected(reason: &str) -> Self {
+        tracing::warn!(reason, "AI edit plan rejected");
+        Self::Plan
+    }
+
     pub fn is_source_fetch_failure(&self) -> bool {
         matches!(
             self,
