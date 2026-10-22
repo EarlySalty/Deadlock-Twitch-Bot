@@ -409,6 +409,44 @@ pub async fn activate_ready(pool: &PgPool) -> Result<Vec<CutoverReport>, Migrati
     Ok(reports)
 }
 
+pub async fn cutover_new_owners(pool: &PgPool) -> Result<Vec<CutoverReport>, MigrationError> {
+    if !write_barrier_installed(&mut *pool.acquire().await?).await? {
+        return Err(MigrationError::BarrierMissing);
+    }
+    let planned = dry_run(pool).await?;
+    let fresh = owners_without_cutover(pool, &planned.channels).await?;
+    if fresh.is_empty() {
+        return Ok(Vec::new());
+    }
+    apply(pool).await?;
+    let mut reports = Vec::with_capacity(fresh.len());
+    for owner in fresh {
+        reports.push(activate(pool, &owner).await?);
+    }
+    Ok(reports)
+}
+
+async fn owners_without_cutover(
+    pool: &PgPool,
+    channels: &[ChannelDecision],
+) -> Result<Vec<String>, MigrationError> {
+    let owners: Vec<String> = channels
+        .iter()
+        .map(|channel| channel.twitch_user_id.clone())
+        .collect();
+    if owners.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_scalar(
+        "SELECT owner FROM unnest($1::text[]) AS owner
+         WHERE NOT EXISTS (SELECT 1 FROM social_pipeline_cutover c WHERE c.twitch_user_id = owner)
+         ORDER BY owner",
+    )
+    .bind(&owners)
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn pause(pool: &PgPool, owner: &str) -> Result<CutoverReport, MigrationError> {
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, owner).await?;

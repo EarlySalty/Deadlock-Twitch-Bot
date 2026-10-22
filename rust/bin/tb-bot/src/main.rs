@@ -468,6 +468,50 @@ fn social_cutover_command(
     tb_social_media::pipeline_migration::CutoverCommand::parse(&arguments?)
 }
 
+async fn cutover_new_social_owners(pool: &sqlx::PgPool) -> bool {
+    match tb_social_media::pipeline_migration::cutover_new_owners(pool).await {
+        Ok(reports) if reports.is_empty() => false,
+        Ok(reports) => {
+            for report in &reports {
+                tracing::info!(
+                    owner = %report.twitch_user_id,
+                    outcome = ?report.outcome,
+                    autopilot_enabled = report.autopilot_enabled,
+                    "Neuer Social-Media-Kanal auf den Autopiloten umgestellt"
+                );
+            }
+            true
+        }
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                "Neue Social-Media-Kanäle konnten nicht umgestellt werden"
+            );
+            false
+        }
+    }
+}
+
+async fn social_cutover_heal_loop(pool: sqlx::PgPool) {
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tick.tick().await;
+    loop {
+        tick.tick().await;
+        if !cutover_new_social_owners(&pool).await {
+            continue;
+        }
+        if let Err(error) =
+            tb_social_media::pipeline_migration::clear_legacy_review_jam(&pool).await
+        {
+            tracing::error!(
+                error = %error,
+                "Clips neuer Social-Media-Kanäle konnten nicht in den Bestand zurück"
+            );
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     if print_build_revision() {
@@ -569,6 +613,9 @@ async fn main() {
         }
     } else if !dry_run {
         tracing::warn!("DB-Migrationen laut Betriebskonfiguration deaktiviert");
+    }
+    if social_cutover.is_none() {
+        cutover_new_social_owners(&pool).await;
     }
     if !dry_run {
         match tb_social_media::pipeline_migration::clear_legacy_review_jam(&pool).await {
@@ -1784,6 +1831,10 @@ async fn main() {
             yt_dlp_path(snapshot).to_string_lossy().into_owned(),
         );
         supervisor.spawn("social_clip_prep_worker", async move { prep.run().await });
+        supervisor.spawn(
+            "social_cutover_heal",
+            social_cutover_heal_loop(pool.clone()),
+        );
 
         // Vorschau-Render: erzeugt on-demand das fertige Hochformat-Video eines
         // Clips (Layout, Blur-Rand, Untertitel) fuers Dashboard. Der Bot schreibt
