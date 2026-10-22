@@ -173,8 +173,6 @@ pub(crate) fn draft_uploader(
 pub struct TikTokUploader {
     access_token: String,
     api_base: String,
-    post_options: Option<TikTokPostOptions>,
-    video_processor: crate::video_processor::VideoProcessor,
     http: reqwest::Client,
 }
 
@@ -183,8 +181,6 @@ impl TikTokUploader {
         Self {
             access_token: access_token.into(),
             api_base: DEFAULT_API_BASE.to_string(),
-            post_options: None,
-            video_processor: crate::video_processor::VideoProcessor::default(),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .build()
@@ -194,20 +190,6 @@ impl TikTokUploader {
 
     pub fn with_api_base(mut self, base: impl Into<String>) -> Self {
         self.api_base = base.into();
-        self
-    }
-
-    pub fn with_post_options(mut self, options: TikTokPostOptions) -> Self {
-        self.post_options = Some(options);
-        self
-    }
-
-    #[cfg(test)]
-    fn with_privacy_level(mut self, level: impl Into<String>) -> Self {
-        let mut options = tests::post_options();
-        options.privacy_level = level.into();
-        self.post_options = Some(options);
-        self.video_processor = tests::video_processor();
         self
     }
 
@@ -256,67 +238,16 @@ impl TikTokUploader {
             chunk_size,
             total_chunk_count,
         };
-        let Some(options) = self.post_options.as_ref() else {
-            let body = json!({ "source_info": source_info(video_size, plan) });
-            let (publish_id, upload_url) = self
-                .init_transfer("/post/publish/inbox/video/init/", "TikTok draft init", body)
-                .await?;
-            if let Some(checkpoint) = checkpoint {
-                checkpoint.record_publish_id(&publish_id).await?;
-            }
-            self.upload_chunks(video_path, &upload_url, video_size, plan)
-                .await?;
-            return Ok(publish_id);
-        };
-        let info = self
-            .query_creator_info()
-            .await
-            .map_err(UploadError::not_started)?;
-        let digest = video_digest(video_path)
-            .await
-            .map_err(|error| UploadError::not_started(UploadError::Io(error)))?;
-        if digest != options.approved_video_sha256 {
-            return Err(UploadError::not_started(UploadError::Validation(
-                "Die Videovorschau hat sich seit der Freigabe geändert. Bitte prüfe den Clip erneut.".into(),
-            )));
-        }
-        let duration = self.video_processor.get_video_info(video_path).await
-            .map_err(|_| UploadError::not_started(UploadError::Validation(
-                "Die Videodauer konnte nicht geprüft werden. Bitte erstelle die Vorschau erneut.".into(),
-            )))?.duration;
-        options
-            .validate(&info, duration)
-            .map_err(UploadError::not_started)?;
-        let (publish_id, upload_url) = self.init_upload(options, video_size, plan).await?;
+        let body = json!({ "source_info": source_info(video_size, plan) });
+        let (publish_id, upload_url) = self
+            .init_transfer("/post/publish/inbox/video/init/", "TikTok draft init", body)
+            .await?;
         if let Some(checkpoint) = checkpoint {
             checkpoint.record_publish_id(&publish_id).await?;
         }
         self.upload_chunks(video_path, &upload_url, video_size, plan)
             .await?;
         Ok(publish_id)
-    }
-
-    async fn init_upload(
-        &self,
-        options: &TikTokPostOptions,
-        video_size: u64,
-        plan: ChunkPlan,
-    ) -> Result<(String, String), UploadError> {
-        let body = json!({
-            "post_info": {
-                "title": options.caption,
-                "privacy_level": options.privacy_level,
-                "disable_comment": !options.allow_comment,
-                "disable_duet": !options.allow_duet,
-                "disable_stitch": !options.allow_stitch,
-                "brand_organic_toggle": options.brand_organic_toggle,
-                "brand_content_toggle": options.brand_content_toggle,
-                "video_cover_timestamp_ms": 1000,
-            },
-            "source_info": source_info(video_size, plan),
-        });
-        self.init_transfer("/post/publish/video/init/", "TikTok init upload", body)
-            .await
     }
 
     async fn init_transfer(
@@ -486,10 +417,6 @@ impl PlatformUploader for TikTokUploader {
         "tiktok"
     }
 
-    fn tiktok_post_options(&self) -> Option<&TikTokPostOptions> {
-        self.post_options.as_ref()
-    }
-
     fn validate_video(&self, video_path: &str) -> Result<(), UploadError> {
         validate_local_file(video_path, MAX_FILE_MB)
     }
@@ -592,18 +519,6 @@ mod tests {
         }
     }
 
-    pub(super) fn video_processor() -> crate::video_processor::VideoProcessor {
-        use std::os::unix::fs::PermissionsExt;
-        static PROBE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-        let probe = PROBE.get_or_init(|| {
-            let path = std::env::temp_dir().join(format!("tb_tiktok_probe_{}", std::process::id()));
-            std::fs::write(&path, "#!/bin/sh\nprintf '%s\\n' '{\"streams\":[{\"width\":1080,\"height\":1920,\"duration\":\"15\"}]}'\n").unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-            path
-        });
-        crate::video_processor::VideoProcessor::new("ffmpeg", probe.to_string_lossy())
-    }
-
     fn creator_info_body(options: Value) -> Value {
         json!({
             "data": {
@@ -650,7 +565,6 @@ mod tests {
             fail: false,
         };
         let error = TikTokUploader::new("test-token")
-            .with_privacy_level("SELF_ONLY")
             .upload_video_checkpointed(
                 "/missing/tiktok-test-video.mp4",
                 "Titel",
@@ -674,9 +588,8 @@ mod tests {
             (400, "invalid_params"),
         ] {
             let server = MockServer::start().await;
-            mount_creator_info(&server, json!(["SELF_ONLY", "PUBLIC_TO_EVERYONE"])).await;
             Mock::given(method("POST"))
-                .and(path("/post/publish/video/init/"))
+                .and(path("/post/publish/inbox/video/init/"))
                 .respond_with(
                     ResponseTemplate::new(status).set_body_json(json!({"error": {"code": code}})),
                 )
@@ -688,9 +601,7 @@ mod tests {
                 fail: false,
             };
             let video = temp_video(&format!("tb_tiktok_rejected_{status}.mp4"), 16).await;
-            let uploader = TikTokUploader::new("test-token")
-                .with_privacy_level("SELF_ONLY")
-                .with_api_base(server.uri());
+            let uploader = TikTokUploader::new("test-token").with_api_base(server.uri());
             let error = uploader
                 .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
                 .await
@@ -699,8 +610,7 @@ mod tests {
             assert!(checkpoint.ids.lock().unwrap().is_empty());
             server.verify().await;
             server.reset().await;
-            mount_creator_info(&server, json!(["SELF_ONLY"])).await;
-            Mock::given(method("POST")).and(path("/post/publish/video/init/"))
+            Mock::given(method("POST")).and(path("/post/publish/inbox/video/init/"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"publish_id": "later-operation", "upload_url": format!("{}/upload/", server.uri())}, "error": {"code": "ok"}})))
                 .expect(1).mount(&server).await;
             Mock::given(method("PUT"))
@@ -727,9 +637,8 @@ mod tests {
             (403, "unknown_provider_error"),
         ] {
             let server = MockServer::start().await;
-            mount_creator_info(&server, json!(["SELF_ONLY", "PUBLIC_TO_EVERYONE"])).await;
             Mock::given(method("POST"))
-                .and(path("/post/publish/video/init/"))
+                .and(path("/post/publish/inbox/video/init/"))
                 .respond_with(
                     ResponseTemplate::new(status).set_body_json(json!({"error": {"code": code}})),
                 )
@@ -742,7 +651,6 @@ mod tests {
                 fail: false,
             };
             let error = TikTokUploader::new("test-token")
-                .with_privacy_level("SELF_ONLY")
                 .with_api_base(server.uri())
                 .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
                 .await
@@ -756,9 +664,8 @@ mod tests {
     #[tokio::test]
     async fn tiktok_checkpoint_failure_prevents_video_transfer() {
         let server = MockServer::start().await;
-        mount_creator_info(&server, json!(["SELF_ONLY", "PUBLIC_TO_EVERYONE"])).await;
         Mock::given(method("POST"))
-            .and(path("/post/publish/video/init/"))
+            .and(path("/post/publish/inbox/video/init/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": { "publish_id": "operation-1", "upload_url": format!("{}/upload/", server.uri()) },
                 "error": { "code": "ok" }
@@ -775,7 +682,6 @@ mod tests {
         };
         let video = temp_video("tb_tiktok_checkpoint.mp4", 16).await;
         let result = TikTokUploader::new("test-token")
-            .with_privacy_level("SELF_ONLY")
             .with_api_base(server.uri())
             .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
             .await;
@@ -817,10 +723,9 @@ mod tests {
     #[tokio::test]
     async fn tiktok_init_timeout_is_not_retried() {
         let server = MockServer::start().await;
-        mount_creator_info(&server, json!(["SELF_ONLY", "PUBLIC_TO_EVERYONE"])).await;
         let (requests, observed) = tokio::sync::mpsc::unbounded_channel();
         Mock::given(method("POST"))
-            .and(path("/post/publish/video/init/"))
+            .and(path("/post/publish/inbox/video/init/"))
             .respond_with(move |_: &wiremock::Request| {
                 requests.send(()).unwrap();
                 ResponseTemplate::new(200).set_delay(REQUEST_TIMEOUT * 2)
@@ -833,9 +738,7 @@ mod tests {
             fail: false,
         };
         let video = temp_video("tb_tiktok_init_timeout.mp4", 16).await;
-        let mut uploader = TikTokUploader::new("test-token")
-            .with_privacy_level("SELF_ONLY")
-            .with_api_base(server.uri());
+        let mut uploader = TikTokUploader::new("test-token").with_api_base(server.uri());
         uploader.http = timeout_client();
         let error = fail_at_requests(
             uploader.upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint),
@@ -845,7 +748,7 @@ mod tests {
         .await;
         assert!(matches!(error, UploadError::Request(_)));
         assert!(checkpoint.ids.lock().unwrap().is_empty());
-        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
         server.verify().await;
         tokio::fs::remove_file(video).await.unwrap();
     }
@@ -853,9 +756,8 @@ mod tests {
     #[tokio::test]
     async fn tiktok_chunk_timeout_keeps_checkpoint_and_never_reinitializes() {
         let server = MockServer::start().await;
-        mount_creator_info(&server, json!(["SELF_ONLY", "PUBLIC_TO_EVERYONE"])).await;
         Mock::given(method("POST"))
-            .and(path("/post/publish/video/init/"))
+            .and(path("/post/publish/inbox/video/init/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": { "publish_id": "operation-1", "upload_url": format!("{}/upload/?signature=test-only", server.uri()) },
                 "error": { "code": "ok" }
@@ -875,9 +777,7 @@ mod tests {
             fail: false,
         };
         let video = temp_video("tb_tiktok_chunk_timeout.mp4", 16).await;
-        let mut uploader = TikTokUploader::new("test-token")
-            .with_privacy_level("SELF_ONLY")
-            .with_api_base(server.uri());
+        let mut uploader = TikTokUploader::new("test-token").with_api_base(server.uri());
         uploader.http = timeout_client();
         let error = fail_at_requests(
             uploader.upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint),
@@ -999,21 +899,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn geaendertes_video_wird_vor_dem_init_gestoppt() {
-        let server = MockServer::start().await;
-        mount_creator_info(&server, json!(["SELF_ONLY"])).await;
-        let video = temp_video("tb_tiktok_changed_preview.mp4", 17).await;
-        let result = TikTokUploader::new("tok")
-            .with_privacy_level("SELF_ONLY")
-            .with_api_base(server.uri())
-            .upload_video(&video, "", "", &[])
-            .await;
-        assert!(matches!(result, Err(UploadError::Validation(_))));
-        assert_eq!(server.received_requests().await.unwrap().len(), 1);
-        tokio::fs::remove_file(video).await.unwrap();
-    }
-
-    #[tokio::test]
     async fn entwurf_geht_ohne_freigabe_ins_postfach() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1075,124 +960,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upload_video_creator_info_init_und_put() {
-        let server = MockServer::start().await;
-        mount_creator_info(&server, json!(["PUBLIC_TO_EVERYONE", "SELF_ONLY"])).await;
-        Mock::given(method("POST"))
-            .and(path("/post/publish/video/init/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "data": { "publish_id": "pub-42", "upload_url": format!("{}/upload/", server.uri()) },
-                "error": { "code": "ok", "message": "", "log_id": "l2" }
-            })))
-            .mount(&server)
-            .await;
-        Mock::given(method("PUT"))
-            .and(path("/upload/"))
-            .respond_with(ResponseTemplate::new(201))
-            .mount(&server)
-            .await;
-
-        let video = temp_video("tb_tiktok_flow.mp4", 16).await;
-        let uploader = TikTokUploader::new("tok")
-            .with_api_base(server.uri())
-            .with_privacy_level("SELF_ONLY");
-        let id = uploader
-            .upload_video(
-                &video,
-                "Mein Titel",
-                "Beschreibung",
-                &["deadlock".into(), "haze".into()],
-            )
-            .await
-            .unwrap();
-        assert_eq!(id, "pub-42");
-
-        let requests = server.received_requests().await.unwrap();
-        let init = requests
-            .iter()
-            .find(|r| r.url.path() == "/post/publish/video/init/")
-            .expect("init call fehlt");
-        let body: Value = serde_json::from_slice(&init.body).unwrap();
-        assert_eq!(
-            body["post_info"]["title"],
-            json!("Mein Titel\n\nBeschreibung\n\n#deadlock #haze")
-        );
-        assert_eq!(body["post_info"]["privacy_level"], json!("SELF_ONLY"));
-        assert_eq!(body["post_info"]["disable_comment"], json!(true));
-        assert_eq!(body["post_info"]["disable_duet"], json!(true));
-        assert_eq!(body["post_info"]["disable_stitch"], json!(true));
-        assert_eq!(body["post_info"]["video_cover_timestamp_ms"], json!(1000));
-        assert_eq!(body["source_info"]["source"], json!("FILE_UPLOAD"));
-        assert_eq!(body["source_info"]["video_size"], json!(16));
-        assert_eq!(body["source_info"]["chunk_size"], json!(16));
-        assert_eq!(body["source_info"]["total_chunk_count"], json!(1));
-        assert!(body["source_info"].get("upload_id").is_none());
-
-        let put = requests
-            .iter()
-            .find(|r| r.url.path() == "/upload/")
-            .expect("PUT auf upload_url fehlt");
-        assert_eq!(put.headers.get("content-range").unwrap(), "bytes 0-15/16");
-        assert_eq!(put.headers.get("content-type").unwrap(), "video/mp4");
-        assert_eq!(put.body.len(), 16);
-    }
-
-    #[tokio::test]
-    async fn audit_sperre_wird_nicht_auf_postfach_umgeleitet() {
-        let server = MockServer::start().await;
-        mount_creator_info(&server, json!(["PUBLIC_TO_EVERYONE"])).await;
-        Mock::given(method("POST"))
-            .and(path("/post/publish/video/init/"))
-            .respond_with(ResponseTemplate::new(403).set_body_json(json!({
-                "error": { "code": "unaudited_client_can_only_post_to_private_accounts" }
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let video = temp_video("tb_tiktok_no_fallback.mp4", 16).await;
-        let error = TikTokUploader::new("tok")
-            .with_api_base(server.uri())
-            .with_privacy_level("PUBLIC_TO_EVERYONE")
-            .upload_video(&video, "Titel", "", &[])
-            .await
-            .unwrap_err();
-        assert!(matches!(error, UploadError::Api(_)));
-        let requests = server.received_requests().await.unwrap();
-        assert_eq!(requests.len(), 2);
-        assert!(requests
-            .iter()
-            .all(|request| request.method.as_str() != "PUT"));
-        tokio::fs::remove_file(video).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn privacy_level_nicht_in_optionen_ist_validation() {
-        let server = MockServer::start().await;
-        mount_creator_info(&server, json!(["SELF_ONLY"])).await;
-
-        let video = temp_video("tb_tiktok_privacy.mp4", 16).await;
-        let uploader = TikTokUploader::new("tok")
-            .with_api_base(server.uri())
-            .with_privacy_level("PUBLIC_TO_EVERYONE");
-        let err = uploader
-            .upload_video(&video, "t", "d", &[])
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(err, UploadError::Validation(_)),
-            "erwartet Validation, war {err:?}"
-        );
-        let requests = server.received_requests().await.unwrap();
-        assert!(requests
-            .iter()
-            .all(|r| r.url.path() != "/post/publish/video/init/"));
-    }
-
-    #[tokio::test]
     async fn error_code_bei_200_ist_kein_erfolg() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/post/publish/creator_info/query/"))
+            .and(path("/post/publish/inbox/video/init/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": {},
                 "error": { "code": "spam_risk_too_many_posts", "message": "zu viele Posts", "log_id": "l3" }
@@ -1201,9 +972,7 @@ mod tests {
             .await;
 
         let video = temp_video("tb_tiktok_errorcode.mp4", 16).await;
-        let uploader = TikTokUploader::new("tok")
-            .with_api_base(server.uri())
-            .with_privacy_level("SELF_ONLY");
+        let uploader = TikTokUploader::new("tok").with_api_base(server.uri());
         let err = uploader
             .upload_video(&video, "t", "d", &[])
             .await
@@ -1217,9 +986,8 @@ mod tests {
     #[tokio::test]
     async fn init_fehlercode_bricht_vor_dem_put_ab() {
         let server = MockServer::start().await;
-        mount_creator_info(&server, json!(["SELF_ONLY"])).await;
         Mock::given(method("POST"))
-            .and(path("/post/publish/video/init/"))
+            .and(path("/post/publish/inbox/video/init/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": {},
                 "error": { "code": "invalid_param", "message": "kaputt", "log_id": "l4" }
@@ -1228,9 +996,7 @@ mod tests {
             .await;
 
         let video = temp_video("tb_tiktok_initfehler.mp4", 16).await;
-        let uploader = TikTokUploader::new("tok")
-            .with_api_base(server.uri())
-            .with_privacy_level("SELF_ONLY");
+        let uploader = TikTokUploader::new("tok").with_api_base(server.uri());
         let err = uploader
             .upload_video(&video, "t", "d", &[])
             .await
@@ -1255,14 +1021,14 @@ mod tests {
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/post/publish/creator_info/query/"))
-            .respond_with(ResponseTemplate::new(403).set_body_string("forbidden"))
+            .and(path("/post/publish/inbox/video/init/"))
+            .respond_with(
+                ResponseTemplate::new(403).set_body_json(json!({"error": {"code": "forbidden"}})),
+            )
             .expect(1)
             .mount(&server)
             .await;
-        let uploader = TikTokUploader::new("tok")
-            .with_api_base(server.uri())
-            .with_privacy_level("SELF_ONLY");
+        let uploader = TikTokUploader::new("tok").with_api_base(server.uri());
         assert!(matches!(
             uploader.upload_video(&video, "t", "d", &[]).await,
             Err(UploadError::Api(_))

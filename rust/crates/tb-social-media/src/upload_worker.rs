@@ -197,13 +197,7 @@ impl UploadTask {
             }
         }
         if item.platform == "tiktok" {
-            match crate::tiktok_recovery::reserve_with_options(
-                &self.pool,
-                item.id,
-                uploader.tiktok_post_options(),
-            )
-            .await
-            {
+            match crate::tiktok_recovery::reserve_with_options(&self.pool, item.id, None).await {
                 Ok(true) => {}
                 Ok(false) => return false,
                 Err(error) => {
