@@ -9,13 +9,15 @@ SET status = 'pending', attempts = 0, last_error = NULL, last_attempt_at = NULL,
 WHERE platform = 'tiktok' AND produced_video_id IS NULL AND tiktok_publish_id IS NULL
   AND status = 'failed' AND external_id IS NULL
   AND (last_error LIKE '%unaudited_client%'
-       OR last_error LIKE 'validation failed: Bitte öffne die TikTok-Freigabe%');
+       OR last_error LIKE 'validation failed: Bitte öffne die TikTok-Freigabe%')
+  AND NOT social_pipeline_legacy_closed(social_clip_pipeline_owner(clip_id));
 
 UPDATE twitch_clips_upload_queue
 SET status = 'pending', attempts = 0, last_error = NULL, last_attempt_at = NULL,
     next_retry_at = NULL, outcome_reason = NULL, completed_at = NULL
 WHERE platform = 'youtube' AND produced_video_id IS NULL AND status = 'failed'
-  AND external_id IS NULL AND last_error LIKE '%(HTTP 410)%';
+  AND external_id IS NULL AND last_error LIKE '%(HTTP 410)%'
+  AND NOT social_pipeline_legacy_closed(social_clip_pipeline_owner(clip_id));
 
 WITH legacy AS (
     SELECT q.id, q.platform, q.scheduled_at, q.status, COALESCE(c.twitch_user_id, '') AS owner
