@@ -272,13 +272,37 @@ fn copy_rejection(copy: &PublicationCopy, limits: &CopyLimits) -> Option<&'stati
     if copy.hashtags.len() > limits.max_hashtags {
         return Some("too many hashtags");
     }
-    if copy.hashtags.iter().any(|tag| {
-        !tag.starts_with('#')
-            || tag.chars().count() < 2
-            || tag.chars().count() > limits.max_hashtag_chars
-            || tag.chars().any(char::is_whitespace)
-    }) {
+    if copy
+        .hashtags
+        .iter()
+        .any(|tag| !hashtag_valid(tag, limits.max_hashtag_chars))
+    {
         return Some("hashtag format invalid");
     }
     None
+}
+
+fn hashtag_valid(tag: &str, max_chars: usize) -> bool {
+    let body = super::metadata::normalize_hashtag(tag);
+    let length = body.chars().count() + 1;
+    !body.is_empty()
+        && length <= max_chars
+        && !body
+            .chars()
+            .any(|c| c.is_whitespace() || c == '#' || c == ',')
+}
+
+#[cfg(test)]
+mod hashtag_tests {
+    use super::hashtag_valid;
+
+    #[test]
+    fn accepts_tags_with_and_without_prefix() {
+        assert!(hashtag_valid("#Deadlock", 64));
+        assert!(hashtag_valid("Deadlock", 64));
+        assert!(!hashtag_valid("#", 64));
+        assert!(!hashtag_valid("Dead lock", 64));
+        assert!(!hashtag_valid("Dead#lock", 64));
+        assert!(!hashtag_valid(&"a".repeat(64), 64));
+    }
 }
