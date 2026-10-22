@@ -56,7 +56,7 @@ pub async fn job_usage(
     let row = sqlx::query("SELECT COUNT(*)::bigint AS attempts,
         COUNT(*) FILTER (WHERE attempt_state NOT IN ('succeeded','failed') OR attempt_state IS NULL)::bigint AS unfinished,
         COUNT(*) FILTER (WHERE tokens_in IS NULL OR tokens_in < 0 OR tokens_out IS NULL OR tokens_out < 0)::bigint AS unknown_tokens,
-        COUNT(*) FILTER (WHERE estimated_micro_usd IS NULL OR estimated_micro_usd < 0 OR cost_basis IS NULL OR cost_basis NOT IN ('usage_priced_estimate','provider_rejected_unbilled'))::bigint AS unknown_cost,
+        COUNT(*) FILTER (WHERE estimated_micro_usd IS NULL OR estimated_micro_usd < 0 OR cost_basis IS NULL OR cost_basis NOT IN ('usage_priced_estimate','provider_rejected_unbilled','subscription_included'))::bigint AS unknown_cost,
         COUNT(*) FILTER (WHERE latency_ms IS NULL OR latency_ms < 0)::bigint AS unknown_latency,
         CASE WHEN COUNT(DISTINCT provider) = 1 AND COUNT(provider) = COUNT(*) THEN MIN(provider) END AS provider,
         CASE WHEN COUNT(DISTINCT model) = 1 AND COUNT(model) = COUNT(*) THEN MIN(model) END AS model,

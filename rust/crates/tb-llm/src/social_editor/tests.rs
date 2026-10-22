@@ -302,6 +302,12 @@ impl DisposablePostgres {
             .execute(&pool)
             .await
             .expect("rejected unbilled migration");
+            sqlx::raw_sql(include_str!(
+                "../../../../migrations/20261022190000_social_ai_subscription_included.sql"
+            ))
+            .execute(&pool)
+            .await
+            .expect("subscription included migration");
         }
         static LEDGER_IDENTITY: std::sync::Once = std::sync::Once::new();
         LEDGER_IDENTITY.call_once(|| {
@@ -1237,4 +1243,238 @@ fn credential_fingerprint_changes_with_key_or_workspace() {
         credential_fingerprint(Some("key-a"), Some("wrkspc_1"))
     );
     assert_ne!(base, credential_fingerprint(None, None));
+}
+
+fn relay_reply_validator() -> jsonschema::Validator {
+    schema::compile(&request().json_schema).expect("schema")
+}
+
+#[test]
+fn relay_replies_map_to_fallback_reasons_and_require_the_configured_model() {
+    let validator = relay_reply_validator();
+    let usage = json!({"input_tokens":10,"output_tokens":4,"cache_creation_input_tokens":0,"cache_read_input_tokens":0});
+    let ok = json!({"ok":true,"model":"m","structured_output":{"title":"clip"},"usage":usage,"duration_ms":5});
+    let reply =
+        subscription::interpret(ok.to_string().as_bytes(), &validator, "m").expect("relay success");
+    assert_eq!(reply.content["title"], "clip");
+    assert_eq!(
+        subscription::interpret(ok.to_string().as_bytes(), &validator, "other").err(),
+        Some(subscription::Failure::ModelMismatch)
+    );
+    let invalid = json!({"ok":true,"model":"m","structured_output":{"title":3},"usage":usage});
+    assert_eq!(
+        subscription::interpret(invalid.to_string().as_bytes(), &validator, "m").err(),
+        Some(subscription::Failure::InvalidResponse)
+    );
+    for (kind, expected) in [
+        ("limit", subscription::Failure::Limit),
+        ("timeout", subscription::Failure::Timeout),
+        ("busy", subscription::Failure::Busy),
+        ("invalid_request", subscription::Failure::Rejected),
+        ("cli_error", subscription::Failure::CliError),
+    ] {
+        let failed = json!({"ok":false,"kind":kind,"message":"x"});
+        assert_eq!(
+            subscription::interpret(failed.to_string().as_bytes(), &validator, "m").err(),
+            Some(expected)
+        );
+    }
+}
+
+async fn fake_relay(
+    reply: Value,
+) -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    tokio::task::JoinHandle<Value>,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let dir = tempfile::Builder::new()
+        .prefix("relay-")
+        .tempdir()
+        .expect("relay dir");
+    let socket = dir.path().join("relay.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("relay socket");
+    let handle = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("relay connection");
+        let mut reader = tokio::io::BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.expect("relay request");
+        let mut stream = reader.into_inner();
+        stream
+            .write_all(format!("{reply}\n").as_bytes())
+            .await
+            .expect("relay reply");
+        serde_json::from_str::<Value>(&line).expect("relay request json")
+    });
+    (dir, socket, handle)
+}
+
+async fn consenting_database() -> (DisposablePostgres, EditorContext) {
+    let database = DisposablePostgres::start().await;
+    let context = EditorContext {
+        twitch_user_id: "person".into(),
+        job_id: "job".into(),
+        stage: "caption".into(),
+    };
+    sqlx::query("INSERT INTO public.social_ai_user_consent(twitch_user_id,external_ai_consent) VALUES ($1,true)")
+        .bind(&context.twitch_user_id).execute(&database.pool).await.expect("person consent");
+    sqlx::query("INSERT INTO public.social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb)")
+        .execute(&database.pool).await.expect("global consent");
+    (database, context)
+}
+
+#[tokio::test]
+async fn subscription_success_is_ledgered_as_included_without_api_call() {
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+    let (database, context) = consenting_database().await;
+    let pool = &database.pool;
+    let mut configuration = config();
+    configuration.provider.initial_total_cap_micro_usd = 2_000_000;
+    let mock = MockServer::start().await;
+    configuration.provider.endpoint = mock.uri();
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&mock)
+        .await;
+    let model = configuration.provider.model.clone();
+    let (_dir, socket, relay) = fake_relay(json!({"ok":true,"model":model,"structured_output":{"title":"clip"},"usage":{"input_tokens":120,"output_tokens":30,"cache_creation_input_tokens":5,"cache_read_input_tokens":7},"duration_ms":40})).await;
+    configuration.provider.subscription_relay = Some(SubscriptionRelay {
+        socket,
+        request_timeout_ms: 5_000,
+    });
+    let response = complete_with_fallback(pool, &context, &configuration, &request(), || {
+        Some("fake-key".into())
+    })
+    .await
+    .expect("subscription response");
+    assert_eq!(response.provider, "claude_subscription");
+    assert_eq!(response.charge_micro_usd, 0);
+    assert_eq!(response.cost_basis, "subscription_included");
+    assert_eq!(response.content["title"], "clip");
+    let sent = relay.await.expect("relay task");
+    assert_eq!(sent["model"], json!(configuration.provider.model));
+    assert_eq!(sent["timeout_ms"], 5_000);
+    assert_eq!(sent["content"][1]["type"], "image");
+    let row = sqlx::query("SELECT provider,attempt_state,reserved_micro_usd,estimated_micro_usd,cost_basis,tokens_in,tokens_out,cache_creation_input_tokens,cache_read_input_tokens,error_code FROM public.llm_usage WHERE id=$1")
+        .bind(response.ledger_id).fetch_one(pool).await.expect("subscription ledger row");
+    assert_eq!(row.get::<String, _>("provider"), "claude_subscription");
+    assert_eq!(row.get::<String, _>("attempt_state"), "succeeded");
+    assert_eq!(row.get::<i64, _>("reserved_micro_usd"), 0);
+    assert_eq!(row.get::<Option<i64>, _>("estimated_micro_usd"), Some(0));
+    assert_eq!(row.get::<String, _>("cost_basis"), "subscription_included");
+    assert_eq!(row.get::<Option<i64>, _>("tokens_in"), Some(120));
+    assert_eq!(row.get::<Option<i64>, _>("tokens_out"), Some(30));
+    assert_eq!(
+        row.get::<Option<i64>, _>("cache_creation_input_tokens"),
+        Some(5)
+    );
+    assert_eq!(
+        row.get::<Option<i64>, _>("cache_read_input_tokens"),
+        Some(7)
+    );
+    assert_eq!(row.get::<Option<String>, _>("error_code"), None);
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM public.llm_usage")
+        .fetch_one(pool)
+        .await
+        .expect("row count");
+    assert_eq!(rows, 1);
+}
+
+#[tokio::test]
+async fn subscription_limit_falls_back_to_the_api_path() {
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+    let (database, context) = consenting_database().await;
+    let pool = &database.pool;
+    let mut configuration = config();
+    configuration.provider.initial_total_cap_micro_usd = 2_000_000;
+    let mock = MockServer::start().await;
+    configuration.provider.endpoint = mock.uri();
+    let api_reply = json!({"model":configuration.provider.model,"stop_reason":"end_turn","content":[{"type":"text","text":"{\"title\":\"api\"}"}],"usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}});
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(api_reply))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let (_dir, socket, relay) =
+        fake_relay(json!({"ok":false,"kind":"limit","message":"usage_limit"})).await;
+    configuration.provider.subscription_relay = Some(SubscriptionRelay {
+        socket,
+        request_timeout_ms: 5_000,
+    });
+    let response = complete_with_fallback(pool, &context, &configuration, &request(), || {
+        Some("fake-key".into())
+    })
+    .await
+    .expect("api fallback response");
+    relay.await.expect("relay task");
+    assert_eq!(response.provider, "anthropic");
+    assert_eq!(response.content["title"], "api");
+    let failed = sqlx::query("SELECT attempt_state,error_code,reserved_micro_usd,cost_basis FROM public.llm_usage WHERE provider='claude_subscription'")
+        .fetch_one(pool).await.expect("failed subscription row");
+    assert_eq!(failed.get::<String, _>("attempt_state"), "failed");
+    assert_eq!(
+        failed.get::<Option<String>, _>("error_code").as_deref(),
+        Some("Subscription/limit")
+    );
+    assert_eq!(failed.get::<i64, _>("reserved_micro_usd"), 0);
+    assert_eq!(
+        failed.get::<String, _>("cost_basis"),
+        "subscription_included"
+    );
+    let api_state: String =
+        sqlx::query_scalar("SELECT attempt_state FROM public.llm_usage WHERE id=$1")
+            .bind(response.ledger_id)
+            .fetch_one(pool)
+            .await
+            .expect("api row");
+    assert_eq!(api_state, "succeeded");
+    assert_eq!(mock.received_requests().await.expect("requests").len(), 1);
+}
+
+#[tokio::test]
+async fn unreachable_relay_falls_back_to_the_api_path() {
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+    let (database, context) = consenting_database().await;
+    let pool = &database.pool;
+    let mut configuration = config();
+    configuration.provider.initial_total_cap_micro_usd = 2_000_000;
+    let mock = MockServer::start().await;
+    configuration.provider.endpoint = mock.uri();
+    let api_reply = json!({"model":configuration.provider.model,"stop_reason":"end_turn","content":[{"type":"text","text":"{\"title\":\"api\"}"}],"usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}});
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(api_reply))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let dir = tempfile::Builder::new()
+        .prefix("relay-")
+        .tempdir()
+        .expect("relay dir");
+    configuration.provider.subscription_relay = Some(SubscriptionRelay {
+        socket: dir.path().join("missing.sock"),
+        request_timeout_ms: 5_000,
+    });
+    let response = complete_with_fallback(pool, &context, &configuration, &request(), || {
+        Some("fake-key".into())
+    })
+    .await
+    .expect("api fallback response");
+    assert_eq!(response.provider, "anthropic");
+    let code: Option<String> = sqlx::query_scalar(
+        "SELECT error_code FROM public.llm_usage WHERE provider='claude_subscription'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("failed subscription row");
+    assert_eq!(code.as_deref(), Some("Subscription/unreachable"));
 }

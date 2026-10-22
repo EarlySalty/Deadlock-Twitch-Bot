@@ -5,10 +5,12 @@ mod config;
 pub mod fixture;
 mod read_side;
 mod schema;
+mod subscription;
 mod usage;
 
 pub use config::{
-    EditorConfig, Effort, Pricing, ProviderConfig, ProviderKind, SocialAiSection, TrustedPricing,
+    EditorConfig, Effort, Pricing, ProviderConfig, ProviderKind, SocialAiSection,
+    SubscriptionRelay, TrustedPricing,
 };
 pub use read_side::{consent_allowed, global_consent, job_usage, JobUsage};
 pub use usage::Usage;
@@ -219,7 +221,7 @@ pub fn check_schema(schema: &Value) -> Result<(), EditorError> {
     schema::conformant_wire(schema).map(|_| ())
 }
 
-fn build_body(config: &ProviderConfig, request: &EditorRequest) -> Result<Value, EditorError> {
+fn content_blocks(request: &EditorRequest) -> Vec<Value> {
     let mut blocks = Vec::with_capacity(request.frames.len() * 2 + 1);
     for frame in &request.frames {
         blocks.push(json!({"type":"text","text":format!("Frame bei {} ms", frame.timestamp_ms)}));
@@ -228,6 +230,11 @@ fn build_body(config: &ProviderConfig, request: &EditorRequest) -> Result<Value,
         }}));
     }
     blocks.push(json!({"type":"text","text":request.text}));
+    blocks
+}
+
+fn build_body(config: &ProviderConfig, request: &EditorRequest) -> Result<Value, EditorError> {
+    let blocks = content_blocks(request);
     let effort = serde_json::to_value(config.effort)
         .map_err(|_| EditorError::new(ErrorKind::Configuration))?;
     let wire = schema::conformant_wire(&request.json_schema)?;
@@ -333,13 +340,18 @@ async fn check_consent(pool: &PgPool, twitch_user_id: &str) -> Result<(), Editor
     check_consent_on(&mut connection, twitch_user_id).await
 }
 
+struct AttemptEntry {
+    provider: &'static str,
+    reservation: i64,
+    estimated: Option<i64>,
+    cost_basis: &'static str,
+}
+
 async fn begin_attempt(
     pool: &PgPool,
     config: &ProviderConfig,
     context: &EditorContext,
 ) -> Result<ReservedAttempt, EditorError> {
-    let (project, service) =
-        crate::ledger::identity().ok_or_else(|| EditorError::new(ErrorKind::Ledger))?;
     let reservation = config
         .pricing
         .reservation(
@@ -347,6 +359,24 @@ async fn begin_attempt(
             u64::from(config.max_output_tokens),
         )
         .ok_or_else(|| EditorError::new(ErrorKind::Configuration))?;
+    let entry = AttemptEntry {
+        provider: PROVIDER,
+        reservation,
+        estimated: None,
+        cost_basis: "reserved_upper_bound",
+    };
+    begin_entry(pool, config, context, &entry).await
+}
+
+async fn begin_entry(
+    pool: &PgPool,
+    config: &ProviderConfig,
+    context: &EditorContext,
+    entry: &AttemptEntry,
+) -> Result<ReservedAttempt, EditorError> {
+    let (project, service) =
+        crate::ledger::identity().ok_or_else(|| EditorError::new(ErrorKind::Ledger))?;
+    let reservation = entry.reservation;
     let mut tx: Transaction<'_, Postgres> = pool
         .begin()
         .await
@@ -358,7 +388,7 @@ async fn begin_attempt(
         .map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     check_consent_on(&mut tx, &context.twitch_user_id).await?;
     let started: Vec<i64> = sqlx::query_scalar("SELECT id FROM public.llm_usage WHERE purpose=$1 AND provider=$2 AND attempt_state='started'")
-        .bind(PURPOSE).bind(PROVIDER).fetch_all(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
+        .bind(PURPOSE).bind(entry.provider).fetch_all(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     let options = pool.connect_options();
     {
         let active = ACTIVE_ATTEMPTS
@@ -381,10 +411,11 @@ async fn begin_attempt(
         return Err(EditorError::new(ErrorKind::Budget));
     }
     admin_limits::admit_on(&mut tx, context, reservation).await?;
-    let id: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage (ts,source,purpose,model,tokens_in,tokens_out,total,success,project,service,provider,attempt_state,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,cost_basis) VALUES ($1,$2,$3,$4,NULL,NULL,NULL,0,$5,$6,$7,'started',$8,$9,$10,$11,'reserved_upper_bound') RETURNING id")
+    let id: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage (ts,source,purpose,model,tokens_in,tokens_out,total,success,project,service,provider,attempt_state,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ($1,$2,$3,$4,NULL,NULL,NULL,0,$5,$6,$7,'started',$8,$9,$10,$11,$12,$13) RETURNING id")
         .bind(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false))
-        .bind(crate::ledger::SOURCE).bind(PURPOSE).bind(&config.model).bind(project).bind(service).bind(PROVIDER)
+        .bind(crate::ledger::SOURCE).bind(PURPOSE).bind(&config.model).bind(project).bind(service).bind(entry.provider)
         .bind(&context.twitch_user_id).bind(&context.job_id).bind(&context.stage).bind(reservation)
+        .bind(entry.estimated).bind(entry.cost_basis)
         .fetch_one(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     let attempt = ReservedAttempt::register(id, options)?;
     tx.commit()
@@ -646,8 +677,48 @@ pub async fn complete(
     configuration: &EditorConfig,
     request: &EditorRequest,
 ) -> Result<EditorResponse, EditorError> {
-    let key =
-        crate::keys::anthropic_api_key().ok_or_else(|| EditorError::new(ErrorKind::Unavailable))?;
+    complete_with_fallback(
+        pool,
+        context,
+        configuration,
+        request,
+        crate::keys::anthropic_api_key,
+    )
+    .await
+}
+
+async fn complete_with_fallback(
+    pool: &PgPool,
+    context: &EditorContext,
+    configuration: &EditorConfig,
+    request: &EditorRequest,
+    key: impl FnOnce() -> Option<String>,
+) -> Result<EditorResponse, EditorError> {
+    let reason = match &configuration.provider.subscription_relay {
+        Some(relay) => {
+            match subscription::attempt(pool, context, configuration, request, relay).await {
+                Ok(response) => {
+                    tracing::info!(
+                        path = "subscription",
+                        stage = %context.stage,
+                        ledger_id = response.ledger_id,
+                        "Social AI request served"
+                    );
+                    return Ok(response);
+                }
+                Err(subscription::Outcome::Stop(error)) => return Err(error),
+                Err(subscription::Outcome::Fallback(reason)) => reason,
+            }
+        }
+        None => "not_configured",
+    };
+    tracing::info!(
+        path = "api_fallback",
+        reason,
+        stage = %context.stage,
+        "Social AI request routed to the API"
+    );
+    let key = key().ok_or_else(|| EditorError::new(ErrorKind::Unavailable))?;
     complete_with_key(pool, context, configuration, request, &key).await
 }
 
