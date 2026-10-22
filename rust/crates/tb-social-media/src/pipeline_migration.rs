@@ -409,24 +409,38 @@ pub async fn activate_ready(pool: &PgPool) -> Result<Vec<CutoverReport>, Migrati
     Ok(reports)
 }
 
-pub async fn cutover_new_owners(pool: &PgPool) -> Result<Vec<CutoverReport>, MigrationError> {
+pub type OwnerCutover = (String, Result<CutoverReport, MigrationError>);
+
+pub async fn cutover_new_owners(pool: &PgPool) -> Result<Vec<OwnerCutover>, MigrationError> {
     if !write_barrier_installed(&mut *pool.acquire().await?).await? {
         return Err(MigrationError::BarrierMissing);
     }
     let planned = dry_run(pool).await?;
-    let fresh = owners_without_cutover(pool, &planned.channels).await?;
-    if fresh.is_empty() {
-        return Ok(Vec::new());
+    let candidates = owners_to_adopt(pool, &planned.channels).await?;
+    let mut results = Vec::with_capacity(candidates.len());
+    for owner in candidates {
+        let result = adopt_owner(pool, &owner).await;
+        results.push((owner, result));
     }
-    apply(pool).await?;
-    let mut reports = Vec::with_capacity(fresh.len());
-    for owner in fresh {
-        reports.push(activate(pool, &owner).await?);
-    }
-    Ok(reports)
+    Ok(results)
 }
 
-async fn owners_without_cutover(
+async fn adopt_owner(pool: &PgPool, owner: &str) -> Result<CutoverReport, MigrationError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL TimeZone = 'UTC'")
+        .execute(&mut *tx)
+        .await?;
+    autopilot_settings::lock_owner(&mut tx, owner).await?;
+    let report = match cutover_state(&mut tx, owner).await?.as_deref() {
+        None | Some("shadow") => activate_on(&mut tx, owner).await?,
+        Some("unified" | "paused") => outcome(owner, CutoverOutcome::AlreadyClosed, 0),
+        Some(_) => outcome(owner, CutoverOutcome::NotShadow, 0),
+    };
+    tx.commit().await?;
+    Ok(report)
+}
+
+async fn owners_to_adopt(
     pool: &PgPool,
     channels: &[ChannelDecision],
 ) -> Result<Vec<String>, MigrationError> {
@@ -439,7 +453,10 @@ async fn owners_without_cutover(
     }
     Ok(sqlx::query_scalar(
         "SELECT owner FROM unnest($1::text[]) AS owner
-         WHERE NOT EXISTS (SELECT 1 FROM social_pipeline_cutover c WHERE c.twitch_user_id = owner)
+         WHERE NOT EXISTS (
+             SELECT 1 FROM social_pipeline_cutover c
+             WHERE c.twitch_user_id = owner AND c.state <> 'shadow'
+         )
          ORDER BY owner",
     )
     .bind(&owners)

@@ -470,22 +470,50 @@ fn social_cutover_command(
 
 async fn cutover_new_social_owners(pool: &sqlx::PgPool) -> bool {
     match tb_social_media::pipeline_migration::cutover_new_owners(pool).await {
-        Ok(reports) if reports.is_empty() => false,
-        Ok(reports) => {
-            for report in &reports {
-                tracing::info!(
-                    owner = %report.twitch_user_id,
-                    outcome = ?report.outcome,
-                    autopilot_enabled = report.autopilot_enabled,
-                    "Neuer Social-Media-Kanal auf den Autopiloten umgestellt"
-                );
-            }
-            true
-        }
+        Ok(results) => results.iter().fold(false, |activated, (owner, result)| {
+            log_owner_cutover(owner, result) || activated
+        }),
         Err(error) => {
             tracing::error!(
                 error = %error,
                 "Neue Social-Media-Kanäle konnten nicht umgestellt werden"
+            );
+            false
+        }
+    }
+}
+
+fn log_owner_cutover(
+    owner: &str,
+    result: &Result<
+        tb_social_media::pipeline_migration::CutoverReport,
+        tb_social_media::pipeline_migration::MigrationError,
+    >,
+) -> bool {
+    use tb_social_media::pipeline_migration::CutoverOutcome;
+    match result {
+        Ok(report) if report.outcome == CutoverOutcome::Activated => {
+            tracing::info!(
+                owner,
+                autopilot_enabled = report.autopilot_enabled,
+                "Neuer Social-Media-Kanal auf den Autopiloten umgestellt"
+            );
+            true
+        }
+        Ok(report) => {
+            tracing::warn!(
+                owner,
+                outcome = ?report.outcome,
+                unresolved = report.unresolved,
+                "Social-Media-Kanal noch nicht umgestellt, nächster Versuch folgt"
+            );
+            false
+        }
+        Err(error) => {
+            tracing::error!(
+                owner,
+                error = %error,
+                "Social-Media-Kanal konnte nicht umgestellt werden"
             );
             false
         }

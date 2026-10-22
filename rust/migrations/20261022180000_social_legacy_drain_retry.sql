@@ -61,41 +61,39 @@ BEGIN
 END;
 $$;
 
-UPDATE twitch_clips_upload_queue
-SET status = 'pending', attempts = 0, last_error = NULL, last_attempt_at = NULL,
-    next_retry_at = NULL, outcome_reason = NULL, completed_at = NULL, scheduled_at = NULL
-WHERE platform = 'tiktok' AND produced_video_id IS NULL AND tiktok_publish_id IS NULL
-  AND status = 'failed' AND external_id IS NULL
-  AND (last_error LIKE '%unaudited_client%'
-       OR last_error LIKE 'validation failed: Bitte öffne die TikTok-Freigabe%')
-  AND social_pipeline_legacy_closed(social_clip_pipeline_owner(clip_id))
-  AND social_legacy_retry_allowed(clip_id, platform);
-
-UPDATE twitch_clips_upload_queue
-SET status = 'pending', attempts = 0, last_error = NULL, last_attempt_at = NULL,
-    next_retry_at = NULL, outcome_reason = NULL, completed_at = NULL, scheduled_at = NULL
-WHERE platform = 'youtube' AND produced_video_id IS NULL AND status = 'failed'
-  AND external_id IS NULL AND last_error LIKE '%(HTTP 410)%'
-  AND social_pipeline_legacy_closed(social_clip_pipeline_owner(clip_id))
-  AND social_legacy_retry_allowed(clip_id, platform);
-
-WITH legacy AS (
-    SELECT q.id, q.platform, q.scheduled_at, q.status, COALESCE(c.twitch_user_id, '') AS owner
+WITH retryable AS (
+    SELECT DISTINCT ON (q.clip_id, q.platform)
+           q.id, q.platform, COALESCE(c.twitch_user_id, '') AS owner
     FROM twitch_clips_upload_queue q
     JOIN twitch_clips_social_media c ON c.id = q.clip_id
-    WHERE q.platform IN ('tiktok', 'youtube') AND q.produced_video_id IS NULL
-      AND q.status IN ('pending', 'waiting_connection')
+    WHERE q.produced_video_id IS NULL AND q.status = 'failed' AND q.external_id IS NULL
+      AND (
+          (q.platform = 'tiktok' AND q.tiktok_publish_id IS NULL
+           AND (q.last_error LIKE '%unaudited_client%'
+                OR q.last_error LIKE 'validation failed: Bitte öffne die TikTok-Freigabe%'))
+          OR (q.platform = 'youtube' AND q.last_error LIKE '%(HTTP 410)%')
+      )
+      AND social_pipeline_legacy_closed(social_clip_pipeline_owner(q.clip_id))
+      AND social_legacy_retry_allowed(q.clip_id, q.platform)
+      AND NOT EXISTS (
+          SELECT 1 FROM twitch_clips_upload_queue o
+          WHERE o.clip_id = q.clip_id AND o.platform = q.platform
+            AND social_publication_open(o.status)
+      )
+    ORDER BY q.clip_id, q.platform, q.id DESC
 ),
 reopened AS (
     SELECT id, platform, owner,
            row_number() OVER (PARTITION BY owner, platform ORDER BY id) AS slot
-    FROM legacy
-    WHERE status = 'pending' AND scheduled_at IS NULL
+    FROM retryable
 ),
 taken AS (
-    SELECT DISTINCT owner, platform, (scheduled_at AT TIME ZONE 'UTC')::date AS day
-    FROM legacy
-    WHERE scheduled_at IS NOT NULL
+    SELECT DISTINCT COALESCE(c.twitch_user_id, '') AS owner, q.platform,
+           (q.scheduled_at AT TIME ZONE 'UTC')::date AS day
+    FROM twitch_clips_upload_queue q
+    JOIN twitch_clips_social_media c ON c.id = q.clip_id
+    WHERE q.platform IN ('tiktok', 'youtube') AND q.produced_video_id IS NULL
+      AND q.status IN ('pending', 'waiting_connection') AND q.scheduled_at IS NOT NULL
 ),
 free AS (
     SELECT owner, platform, day,
@@ -112,7 +110,9 @@ free AS (
     )
 )
 UPDATE twitch_clips_upload_queue q
-SET scheduled_at = (free.day + TIME '16:00') AT TIME ZONE 'UTC'
+SET status = 'pending', attempts = 0, last_error = NULL, last_attempt_at = NULL,
+    next_retry_at = NULL, outcome_reason = NULL, completed_at = NULL,
+    scheduled_at = (free.day + TIME '16:00') AT TIME ZONE 'UTC'
 FROM reopened
 JOIN free ON free.owner = reopened.owner AND free.platform = reopened.platform
          AND free.slot = reopened.slot
