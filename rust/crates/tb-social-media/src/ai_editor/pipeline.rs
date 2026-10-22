@@ -725,7 +725,7 @@ async fn plan(
     };
     if multi_output {
         schema["properties"]["variants"]["maxItems"] =
-            json!(runtime.limits.revisions.max_variants - 1);
+            json!(runtime.limits.revisions.max_variants.saturating_sub(1));
     } else {
         super::stage_contract::drop_variants(&mut schema);
     }
