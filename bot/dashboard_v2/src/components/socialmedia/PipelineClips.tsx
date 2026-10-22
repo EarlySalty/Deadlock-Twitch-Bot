@@ -11,7 +11,7 @@ import { ClipReviewDetail } from './autopilot/publish-review/PublishReviewPanel'
 import { scheduleQueueApi, type QueueJob, type ReviewDecision } from './autopilot/schedule-queue/api';
 import { ReviewJobActions } from './autopilot/schedule-queue/ReviewJobActions';
 import './autopilot/schedule-queue/schedule-queue.css';
-import { QUEUE_FILTERS, filterSources, legacyUncertainPlatforms, partialResult, publishedPlatforms, sourceStage, type EligibilityFilter, type QueueStage } from './queuePresentation';
+import { QUEUE_FILTERS, draftPlatforms, draftSentAt, filterSources, legacyUncertainPlatforms, onlyDrafts, partialResult, publishedPlatforms, sourceStage, type EligibilityFilter, type QueueStage } from './queuePresentation';
 import { clipDuration, clipThumbnail, insideWindow, localTimestamp, sourceMetadata } from './autopilot/import-pool/presentation';
 import type { PoolPreferences } from './autopilot/import-pool/types';
 import { HOLD_REASONS } from './reviewReasons';
@@ -284,13 +284,18 @@ function PipelineClip({
   const archived = stage === 'archive';
   const noFile = dbId === null;
   const published = publishedPlatforms(source);
+  const drafts = draftPlatforms(source);
+  const draftOnly = onlyDrafts(source);
+  const draftAt = draftSentAt(source);
   const notes = [
     eligibilityNote(source, t),
     source.legacy_reserved && t('Für bestehende Verarbeitung reserviert'),
     outsideWindow && stage === 'new' && t('Außerhalb des gespeicherten Zeitraums'),
     source.processed_at && `${t('Verarbeitet am')}: ${localTimestamp(source.processed_at, timezone, locale)}`,
-    source.published_at && `${t('Veröffentlicht am')}: ${localTimestamp(source.published_at, timezone, locale)}`,
+    source.published_at && !draftOnly && `${t('Veröffentlicht am')}: ${localTimestamp(source.published_at, timezone, locale)}`,
     published.length > 0 && `${t('Gepostet auf')}: ${published.map((item) => PLATFORM_LABELS[item] ?? item).join(', ')}`,
+    drafts.length > 0 && draftAt && `${t('Als Entwurf an TikTok gesendet am')}: ${localTimestamp(draftAt, timezone, locale)}`,
+    drafts.length > 0 && t('Noch nicht öffentlich. Veröffentliche den Entwurf in der TikTok-App.'),
     noFile && t('Verlauf erhalten. Eine Quelldatei für die Verarbeitung ist nicht nachgewiesen.'),
     ...legacyUncertainPlatforms(source).map((platform) => t('Ob der Upload auf {platform} angekommen ist, ist unklar. Er wird nicht automatisch wiederholt, damit nichts doppelt erscheint. Bitte prüfe dein Konto.', { platform: PLATFORM_LABELS[platform] ?? platform })),
   ].filter((note): note is string => Boolean(note));
@@ -338,8 +343,8 @@ function PipelineClip({
         </p>
         <div className="import-pool-clip-foot">
           <span className="pipeline-clips-badges">
-            <span className="import-pool-chip" data-tone={STAGE_TONES[stage]}>
-              {t(QUEUE_FILTERS.find((item) => item.id === stage)?.label ?? 'Neu')}
+            <span className="import-pool-chip" data-tone={draftOnly ? 'warning' : STAGE_TONES[stage]}>
+              {draftOnly ? t('Entwurf in TikTok') : t(QUEUE_FILTERS.find((item) => item.id === stage)?.label ?? 'Neu')}
             </span>
             {partialResult(source) && (
               <span className="import-pool-chip" data-tone="warning">{t('Teilweise veröffentlicht')}</span>

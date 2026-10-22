@@ -110,15 +110,40 @@ const ACTIVE_DESTINATIONS = ['pending', 'processing', 'waiting_connection', 'wai
 const DONE_DESTINATIONS = ['completed', 'inbox'];
 const FAILED_DESTINATIONS = ['failed', 'autopilot_failed', 'autopilot_uncertain'];
 
+function isDraftDestination(destination: PipelineSource['destinations'][number]): boolean {
+  return destination.platform === 'tiktok' && (destination.status === 'inbox' || destination.outcome_reason === 'tiktok_draft');
+}
+
+export function draftPlatforms(source: PipelineSource): string[] {
+  const published = publishedPlatforms(source);
+  return [...new Set(source.destinations
+    .filter((destination) => DONE_DESTINATIONS.includes(destination.status ?? '') && isDraftDestination(destination))
+    .map((destination) => destination.platform))]
+    .filter((platform) => !published.includes(platform));
+}
+
+export function draftSentAt(source: PipelineSource): string | null {
+  return source.destinations
+    .filter((destination) => DONE_DESTINATIONS.includes(destination.status ?? '') && isDraftDestination(destination))
+    .map((destination) => destination.completed_at)
+    .filter((at): at is string => Boolean(at))
+    .sort()
+    .at(-1) ?? null;
+}
+
 export function publishedPlatforms(source: PipelineSource): string[] {
   return [...new Set([
-    ...source.destinations.filter((destination) => DONE_DESTINATIONS.includes(destination.status ?? '')).map((destination) => destination.platform),
+    ...source.destinations.filter((destination) => DONE_DESTINATIONS.includes(destination.status ?? '') && !isDraftDestination(destination)).map((destination) => destination.platform),
     ...source.legacy_publications.map((publication) => publication.platform),
   ])];
 }
 
+export function onlyDrafts(source: PipelineSource): boolean {
+  return publishedPlatforms(source).length === 0 && draftPlatforms(source).length > 0;
+}
+
 export function failedPlatforms(source: PipelineSource): string[] {
-  const done = publishedPlatforms(source);
+  const done = [...publishedPlatforms(source), ...draftPlatforms(source)];
   return [...new Set(source.destinations
     .filter((destination) => FAILED_DESTINATIONS.includes(destination.status ?? '') && !done.includes(destination.platform))
     .map((destination) => destination.platform))];
@@ -167,8 +192,8 @@ export function sourceStage(source: PipelineSource): Exclude<QueueStage, 'all'> 
   if (sourcePlanned(source)) return 'planned';
   if (sourcePreparing(source)) return 'preparing';
   if (sourceInReview(source)) return 'review';
-  if (failedPlatforms(source).length > 0 || (publishedPlatforms(source).length === 0 && source.jobs.some((job) => job.status === 'failed' || (job.status === 'review' && !sourceHasReviewVideo(source))))) return 'failed';
-  if (publishedPlatforms(source).length > 0 || source.published_at) return 'posted';
+  if (failedPlatforms(source).length > 0 || (publishedPlatforms(source).length === 0 && draftPlatforms(source).length === 0 && source.jobs.some((job) => job.status === 'failed' || (job.status === 'review' && !sourceHasReviewVideo(source))))) return 'failed';
+  if (publishedPlatforms(source).length > 0 || draftPlatforms(source).length > 0 || source.published_at) return 'posted';
   return 'new';
 }
 
