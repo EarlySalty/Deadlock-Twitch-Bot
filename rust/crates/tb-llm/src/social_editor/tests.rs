@@ -1383,6 +1383,80 @@ async fn subscription_success_is_ledgered_as_included_without_api_call() {
 }
 
 #[tokio::test]
+async fn abandoned_subscription_attempt_does_not_disable_the_subscription_path() {
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+    let (database, context) = consenting_database().await;
+    let pool = &database.pool;
+    let mut configuration = config();
+    configuration.provider.initial_total_cap_micro_usd = 2_000_000;
+    let mock = MockServer::start().await;
+    configuration.provider.endpoint = mock.uri();
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&mock)
+        .await;
+    let stale = (Utc::now() - chrono::Duration::minutes(30))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+    let abandoned: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage (ts,purpose,provider,model,attempt_state,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ($1,'social_editor','claude_subscription','model','started',0,0,'subscription_included') RETURNING id")
+        .bind(&stale).fetch_one(pool).await.expect("abandoned row");
+    let model = configuration.provider.model.clone();
+    let (_dir, socket, relay) = fake_relay(json!({"ok":true,"model":model,"structured_output":{"title":"clip"},"usage":{"input_tokens":10,"output_tokens":5},"duration_ms":40})).await;
+    configuration.provider.subscription_relay = Some(SubscriptionRelay {
+        socket,
+        request_timeout_ms: 5_000,
+    });
+    let response = complete_with_fallback(pool, &context, &configuration, &request(), || {
+        Some("fake-key".into())
+    })
+    .await
+    .expect("subscription response after abandoned attempt");
+    relay.await.expect("relay task");
+    assert_eq!(response.provider, "claude_subscription");
+    let closed = sqlx::query("SELECT attempt_state,error_code FROM public.llm_usage WHERE id=$1")
+        .bind(abandoned)
+        .fetch_one(pool)
+        .await
+        .expect("closed row");
+    assert_eq!(closed.get::<String, _>("attempt_state"), "failed");
+    assert_eq!(
+        closed.get::<Option<String>, _>("error_code").as_deref(),
+        Some("Subscription/abandoned")
+    );
+}
+
+#[tokio::test]
+async fn fresh_unregistered_subscription_attempt_is_not_closed_early() {
+    let (database, context) = consenting_database().await;
+    let pool = &database.pool;
+    let mut configuration = config();
+    configuration.provider.initial_total_cap_micro_usd = 2_000_000;
+    let fresh = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+    let open: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage (ts,purpose,provider,model,attempt_state,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ($1,'social_editor','claude_subscription','model','started',0,0,'subscription_included') RETURNING id")
+        .bind(&fresh).fetch_one(pool).await.expect("fresh row");
+    sqlx::query("INSERT INTO public.llm_usage (ts,purpose,provider,model,attempt_state) VALUES ('test','social_editor','claude_subscription','model','legacy')")
+        .execute(pool).await.expect("non timestamp row");
+    let relay = SubscriptionRelay {
+        socket: std::path::PathBuf::from("/nonexistent/relay.sock"),
+        request_timeout_ms: 5_000,
+    };
+    configuration.provider.subscription_relay = Some(relay.clone());
+    let outcome =
+        super::subscription::attempt(pool, &context, &configuration, &request(), &relay).await;
+    assert!(matches!(
+        outcome,
+        Err(super::subscription::Outcome::Fallback("ledger"))
+    ));
+    let state: String =
+        sqlx::query_scalar("SELECT attempt_state FROM public.llm_usage WHERE id=$1")
+            .bind(open)
+            .fetch_one(pool)
+            .await
+            .expect("fresh row state");
+    assert_eq!(state, "started");
+}
+
+#[tokio::test]
 async fn subscription_limit_falls_back_to_the_api_path() {
     use wiremock::{
         matchers::{method, path},

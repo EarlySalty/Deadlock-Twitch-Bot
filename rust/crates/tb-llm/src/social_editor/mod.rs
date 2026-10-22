@@ -345,6 +345,7 @@ struct AttemptEntry {
     reservation: i64,
     estimated: Option<i64>,
     cost_basis: &'static str,
+    abandon_after_ms: Option<u64>,
 }
 
 async fn begin_attempt(
@@ -364,8 +365,32 @@ async fn begin_attempt(
         reservation,
         estimated: None,
         cost_basis: "reserved_upper_bound",
+        abandon_after_ms: None,
     };
     begin_entry(pool, config, context, &entry).await
+}
+
+async fn close_abandoned_on(
+    tx: &mut Transaction<'_, Postgres>,
+    provider: &str,
+    after_ms: u64,
+) -> Result<(), EditorError> {
+    let closed = sqlx::query("UPDATE public.llm_usage SET success=0,attempt_state='failed',error_code='Subscription/abandoned',finished_at=now() WHERE purpose=$1 AND provider=$2 AND attempt_state='started' AND reserved_micro_usd=0 AND (CASE WHEN ts ~ '^\\d{4}-\\d{2}-\\d{2}T' THEN ts::timestamptz END) < now() - make_interval(secs => $3)")
+        .bind(PURPOSE)
+        .bind(provider)
+        .bind(after_ms as f64 / 1000.0)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| EditorError::new(ErrorKind::Ledger))?
+        .rows_affected();
+    if closed > 0 {
+        tracing::warn!(
+            provider,
+            closed,
+            "Closed abandoned zero-cost Social AI attempts"
+        );
+    }
+    Ok(())
 }
 
 async fn begin_entry(
@@ -387,6 +412,9 @@ async fn begin_entry(
         .await
         .map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     check_consent_on(&mut tx, &context.twitch_user_id).await?;
+    if let Some(after_ms) = entry.abandon_after_ms {
+        close_abandoned_on(&mut tx, entry.provider, after_ms).await?;
+    }
     let started: Vec<i64> = sqlx::query_scalar("SELECT id FROM public.llm_usage WHERE purpose=$1 AND provider=$2 AND attempt_state='started'")
         .bind(PURPOSE).bind(entry.provider).fetch_all(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     let options = pool.connect_options();

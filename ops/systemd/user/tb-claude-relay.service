@@ -1,6 +1,5 @@
 [Unit]
 Description=Claude subscription relay for the Social AI editor
-After=default.target
 
 [Service]
 Type=simple

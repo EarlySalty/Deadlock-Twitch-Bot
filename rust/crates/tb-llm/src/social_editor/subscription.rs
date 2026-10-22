@@ -134,6 +134,15 @@ pub(super) fn interpret(
     })
 }
 
+const CLIENT_TIMEOUT_MARGIN_MS: u64 = 15_000;
+const ABANDON_GRACE_MS: u64 = 60_000;
+
+fn client_timeout_ms(relay: &SubscriptionRelay) -> u64 {
+    relay
+        .request_timeout_ms
+        .saturating_add(CLIENT_TIMEOUT_MARGIN_MS)
+}
+
 async fn call(
     relay: &SubscriptionRelay,
     line: &[u8],
@@ -141,7 +150,7 @@ async fn call(
     model: &str,
 ) -> Result<Reply, Failure> {
     let body = tokio::time::timeout(
-        Duration::from_millis(relay.request_timeout_ms),
+        Duration::from_millis(client_timeout_ms(relay)),
         exchange(&relay.socket, line),
     )
     .await
@@ -208,11 +217,15 @@ pub(super) async fn attempt(
         reservation: 0,
         estimated: Some(0),
         cost_basis: SUBSCRIPTION_INCLUDED,
+        abandon_after_ms: Some(client_timeout_ms(relay).saturating_add(ABANDON_GRACE_MS)),
     };
     let reserved = match begin_entry(pool, config, context, &entry).await {
         Ok(reserved) => reserved,
         Err(error) if stops(error.kind) => return Err(Outcome::Stop(error)),
-        Err(_) => return Err(Outcome::Fallback("ledger")),
+        Err(error) => {
+            tracing::warn!(stage = %context.stage, kind = ?error.kind, "Social AI subscription ledger unavailable");
+            return Err(Outcome::Fallback("ledger"));
+        }
     };
     let id = reserved.id;
     let start = Instant::now();
