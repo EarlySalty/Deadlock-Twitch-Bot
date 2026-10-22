@@ -153,6 +153,23 @@ fn resolve(root: &Path, path: &Path) -> PathBuf {
     }
 }
 
+fn stable_root(canonical: PathBuf) -> PathBuf {
+    let Some(releases) = canonical.parent() else {
+        return canonical;
+    };
+    if releases.file_name().is_none_or(|name| name != "releases") {
+        return canonical;
+    }
+    let Some(current) = releases.parent().map(|base| base.join("current")) else {
+        return canonical;
+    };
+    if current.canonicalize().ok().as_deref() == Some(canonical.as_path()) {
+        current
+    } else {
+        canonical
+    }
+}
+
 fn packaged_root() -> Result<PathBuf, super::AiEditorError> {
     let executable = std::env::current_exe().map_err(|_| super::AiEditorError::Configuration)?;
     executable
@@ -228,9 +245,11 @@ impl MediaRuntime {
         package_root: &Path,
         configuration: MediaConfiguration,
     ) -> Result<Self, super::AiEditorError> {
-        let root = package_root
-            .canonicalize()
-            .map_err(|_| super::AiEditorError::Configuration)?;
+        let root = stable_root(
+            package_root
+                .canonicalize()
+                .map_err(|_| super::AiEditorError::Configuration)?,
+        );
         validate_media(
             &configuration.source_root,
             &configuration.work_root,

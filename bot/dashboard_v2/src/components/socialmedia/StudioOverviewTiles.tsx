@@ -21,7 +21,7 @@ interface RecentItem { key: string; title: string; at: string | null; platforms:
 
 function recentPublications(publish: PublishSnapshot | undefined, clips: SocialClipMitPosting[] | undefined, t: Translate): RecentItem[] {
   const produced = (publish?.videos ?? []).flatMap(video => {
-    const platforms = video.event?.destinations.filter(destination => destination.state === 'published').map(destination => destination.platform) ?? [];
+    const platforms = video.event?.destinations.filter(destination => destination.state === 'published' && destination.reason !== 'tiktok_draft').map(destination => destination.platform) ?? [];
     return platforms.length === 0 ? [] : [{ key: `video-${video.id}`, title: clipName(clips, video.clip_id, t('Video {id}', { id: video.id })), at: video.event?.completed_at ?? video.event?.executed_at ?? null, platforms }];
   });
   const legacy = (clips ?? []).filter(clip => clip.status === 'published_all').map(clip => ({
