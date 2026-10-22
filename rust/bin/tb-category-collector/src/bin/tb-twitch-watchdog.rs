@@ -560,7 +560,7 @@ async fn send_to_broker(
         .build()?
         .post(broker)
         .header("X-Internal-Token", credential.token.as_str())
-        .json(&json!({"user_id":credential.user_id,"content":content,"idempotency_key":key}))
+        .json(&json!({"user_id":credential.user_id,"content":content,"idempotency_key":key,"dm_purpose":"security"}))
         .send()
         .await?;
     let status = response.status();

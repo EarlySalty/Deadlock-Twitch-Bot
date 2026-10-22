@@ -33,6 +33,41 @@ async fn shutdown_signal() {
     tracing::info!("Beende Discord-Hub");
 }
 
+const CENTRAL_DSN_ENV: &str = "TB_DISCORD_HUB_CENTRAL_DSN";
+
+async fn dm_optout_pool() -> Option<sqlx::PgPool> {
+    let Ok(dsn) = std::env::var(CENTRAL_DSN_ENV) else {
+        tracing::warn!("{CENTRAL_DSN_ENV} fehlt: proaktive Hub-DMs bleiben gesperrt");
+        return None;
+    };
+    let options = match dsn.parse::<sqlx::postgres::PgConnectOptions>() {
+        Ok(options) => options
+            .application_name("tb-discord-hub-dm-optout")
+            .options([
+                ("default_transaction_read_only", "on"),
+                ("statement_timeout", "5000"),
+            ]),
+        Err(_) => {
+            tracing::error!("{CENTRAL_DSN_ENV} ist ungültig: proaktive Hub-DMs bleiben gesperrt");
+            return None;
+        }
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(std::time::Duration::from_secs(3))
+        .connect_lazy_with(options);
+    match sqlx::query("SELECT 1 FROM core.dm_optout LIMIT 0")
+        .execute(&pool)
+        .await
+    {
+        Ok(_) => tracing::info!("DM-Opt-out-Datenbank bereit"),
+        Err(error) => {
+            tracing::warn!(%error, "DM-Opt-out-Datenbank nicht lesbar: proaktive Hub-DMs bleiben gesperrt")
+        }
+    }
+    Some(pool)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), String> {
     if print_build_revision() {
@@ -97,7 +132,7 @@ async fn main() -> Result<(), String> {
         Some(bot_token) => Some(Arc::new(
             DiscordRest::new(bot_token)
                 .map_err(|e| format!("Discord-REST: {e}"))?
-                .with_dm_optout_pool(pool.clone()),
+                .with_dm_optout_pool(dm_optout_pool().await),
         )),
         None => {
             tracing::warn!("DISCORD_DEADLOCK_TWITCH_BOT fehlt: nur Weiterleitung an den Broker");
