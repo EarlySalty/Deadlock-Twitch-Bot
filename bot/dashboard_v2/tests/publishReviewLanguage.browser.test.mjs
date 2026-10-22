@@ -139,6 +139,29 @@ test('built publication panel preserves state and effects across language change
     return page;
   }
 
+  await t.test('notification switches and reminder hours save without a save button', async () => {
+    const page = await open();
+    try {
+      const preferenceCalls = async () => (await calls(page)).filter((call) => call.method === 'preferences');
+      assert.equal(await page.locator('.publish-preferences button[type="submit"]').count(), 0);
+      const dashboard = page.locator('.publish-preferences input[role="switch"]').first();
+      const before = await dashboard.isChecked();
+      await dashboard.evaluate((element) => element.click());
+      await page.waitForFunction(() => window.publishReviewFixture.calls.some((call) => call.method === 'preferences'));
+      await settled(page);
+      assert.equal((await preferenceCalls()).at(-1).payload.dashboard, !before);
+      assert.equal(await dashboard.isChecked(), !before);
+      await page.locator('.publish-preferences input[type="number"]').fill('36');
+      await page.locator('.publish-preferences input[type="number"]').press('Enter');
+      await page.waitForFunction(() => window.publishReviewFixture.calls.filter((call) => call.method === 'preferences').length === 2);
+      await settled(page);
+      assert.equal((await preferenceCalls()).at(-1).payload.reminder_hours, 36);
+      assert.equal(await page.locator('.publish-review').getAttribute('data-unsaved'), null);
+      await page.locator('.publish-preferences').scrollIntoViewIfNeeded();
+      await screenshot(page, 'preferences-autosave');
+    } finally { await page.close(); }
+  });
+
   await t.test('locale changes preserve dirty preferences, selected destinations and explicit pending choice without loads', async () => {
     const page = await open();
     try {
@@ -186,7 +209,7 @@ test('built publication panel preserves state and effects across language change
       assert.deepEqual((await calls(page)).filter((call) => call.method === 'transition'), [{ method: 'transition', owner: 'synthetic-owner', payload: { mode: 'full_auto', confirmed: true, pending: 'transfer_eligible' } }]);
       assert.equal(await page.locator('.publish-preferences input[type="number"]').inputValue(), '36');
       assert.equal(await video.locator('[aria-label="YouTube"] input').isChecked(), true);
-      await page.locator('.publish-preferences button[type="submit"]').evaluate((element) => element.click());
+      await page.locator('.publish-preferences input[type="number"]').press('Enter');
       await settled(page);
       assert.equal((await calls(page)).find((call) => call.method === 'preferences').payload.reminder_hours, 36);
       assert.equal(await page.locator('.publish-review').getAttribute('data-unsaved'), null);

@@ -66,11 +66,19 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
   const [preferences, setPreferences] = useState<NotificationPreferences | null>(null);
   const mounted = useRef(false);
   const saving = useRef(false);
+  const pendingPreferences = useRef<NotificationPreferences | null>(null);
   const [retry, setRetry] = useState(0);
   const preferencesDirty = preferences !== null && snapshot !== null && JSON.stringify(preferences) !== JSON.stringify(snapshot.settings.notifications);
   const visibleVideos = snapshot ? snapshot.videos.filter((video) => videoId === undefined || video.id === videoId) : [];
   const dirtyRef = useRef(preferencesDirty);
   useEffect(() => { dirtyRef.current = preferencesDirty; });
+
+  useEffect(() => {
+    if (busy || !pendingPreferences.current) return;
+    const next = pendingPreferences.current;
+    pendingPreferences.current = null;
+    savePreferences(next);
+  });
 
   useEffect(() => {
     mounted.current = true;
@@ -114,13 +122,15 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
   }
 
   function savePreferences(next: NotificationPreferences) {
-    if (!Number.isInteger(next.reminder_hours) || next.reminder_hours < 1 || next.reminder_hours > 168) {
-      setError({ key: 'Bitte gib für die Vorwarnung 1 bis 168 Stunden an.' });
-      return;
-    }
-    setPreferences(next);
-    void act(() => client.preferences(twitchUserId, next), { key: 'Benachrichtigungen gespeichert.' }, true).then((saved) => {
-      if (!saved && mounted.current && snapshot) setPreferences(snapshot.settings.notifications);
+    if (!snapshot) return;
+    const stored = snapshot.settings.notifications;
+    const hoursValid = validReminderHours(next.reminder_hours);
+    const payload = hoursValid ? next : { ...next, reminder_hours: stored.reminder_hours };
+    setPreferences(payload);
+    if (saving.current) { pendingPreferences.current = payload; return; }
+    void act(() => client.preferences(twitchUserId, payload), { key: 'Benachrichtigungen gespeichert.' }, true).then((saved) => {
+      if (!saved && mounted.current && !pendingPreferences.current) setPreferences(stored);
+      if (!hoursValid && mounted.current) setError({ key: 'Bitte gib für die Vorwarnung 1 bis 168 Stunden an.' });
     });
   }
 
@@ -144,12 +154,12 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
         {section === 'all' && <h3>{t('Benachrichtigungen & Aufbewahrung')}</h3>}
         <p className="publish-retention">{t('Ungeprüfte Videos bleiben sieben Tage ab dem fertigen Rendern verfügbar. Freigegebene Videos sowie laufende, fehlgeschlagene oder unklare Veröffentlichungen bleiben geschützt.')}</p>
         <div className="publish-preferences-form">
-          <fieldset disabled={busy}><legend>{t('Wo möchtest du Hinweise erhalten?')}</legend>
+          <fieldset><legend>{t('Wo möchtest du Hinweise erhalten?')}</legend>
             <label><input type="checkbox" role="switch" checked={preferences.dashboard} onChange={(event) => savePreferences({ ...preferences, dashboard: event.target.checked })} />{t('Im Dashboard')}</label>
             <label><input type="checkbox" role="switch" checked={preferences.discord} disabled={!snapshot.capabilities.discord} onChange={(event) => savePreferences({ ...preferences, discord: event.target.checked })} />{t('Discord, nur nach deiner Auswahl')}</label>
             <p className="publish-note">{t('E-Mail ist nicht verfügbar. Freigaben erfolgen ausschließlich im Dashboard.')}</p>
           </fieldset>
-          <fieldset disabled={busy}><legend>{t('Welche Hinweise möchtest du?')}</legend>
+          <fieldset><legend>{t('Welche Hinweise möchtest du?')}</legend>
             {events.map(({ key, label }) => <label key={key}><input type="checkbox" role="switch" checked={Boolean(preferences[key])} onChange={(event) => savePreferences({ ...preferences, [key]: event.target.checked })} />{t(label)}</label>)}
             <label>{t('Vorwarnung in Stunden')}<input aria-label={t('Vorwarnung in Stunden')} type="number" min="1" max="168" value={preferences.reminder_hours} onChange={(event) => setPreferences({ ...preferences, reminder_hours: Number(event.target.value) })} onBlur={() => { if (preferencesDirty) savePreferences(preferences); }} onKeyDown={(event) => { if (event.key === 'Enter' && preferencesDirty) savePreferences(preferences); }} /></label>
           </fieldset>
@@ -165,6 +175,10 @@ const reviewModeLabels: Record<ReviewMode, { title: string; text: string }> = {
   full_auto: { title: 'Fertige Videos ohne Prüfung veröffentlichen', text: 'Automatische Videos werden ohne regelmäßige Freigabe veröffentlicht. Qualitätsbedenken bleiben zur Prüfung.' },
   veto_until_deadline: { title: 'Einspruch bis zum Termin', text: 'Fertige Videos gehen zum geplanten Termin raus, solange du vorher nicht widersprichst.' },
 };
+
+function validReminderHours(hours: number) {
+  return Number.isInteger(hours) && hours >= 1 && hours <= 168;
+}
 
 function reviewMode(snapshot: PublishSnapshot): ReviewMode {
   return snapshot.settings.review_mode ?? (snapshot.settings.publish_mode === 'full_auto' ? 'full_auto' : 'review');
