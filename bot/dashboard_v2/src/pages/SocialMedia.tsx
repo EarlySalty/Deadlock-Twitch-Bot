@@ -358,7 +358,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         autopilot={twitchUserId ? <StudioAutopilotSwitches owner={twitchUserId} settings={scheduleQuery.data?.settings} failed={scheduleQuery.isError} api={scheduleApi} onSaved={() => setReloadKey((key) => key + 1)} /> : undefined} />
       <StudioStatusBar poolFailed={postingPlanQuery.isError} data={overviewData} pool={postingPlanQuery.isError ? undefined : postingPlanQuery.data?.pool} onNavigate={openView} />
 
-      <nav className="studio-tabs" role="tablist" aria-label={t('Social Studio')}>
+      <nav className="studio-tabs" role="tablist" aria-label={t('Social-Media-Studio')}>
         {SOCIAL_MEDIA_TABS.map(({ id, label }, index) => {
           const Icon = TAB_ICONS[id];
           return (

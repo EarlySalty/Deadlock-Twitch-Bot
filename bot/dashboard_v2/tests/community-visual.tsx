@@ -17,8 +17,8 @@ const fixture: CommunityData = {
     { channel_id: '1289721245281292292', name: 'Volle Test-Lobby', member_count: 6, user_limit: 6, mode: 'street_brawl', intent: 'casual', rank_average: null, rank_samples: 0, requester_present: false, is_streamer_vc: false, joinable: false, slots_free: 0 },
   ] },
 };
-function Fixture() {
-  const [now, setNow] = useState(Date.now());
+export function Fixture() {
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   return <main className="mx-auto max-w-[1440px] space-y-5 p-4 sm:p-8"><p className="text-sm text-warning">SYNTHETISCHE TESTDATEN · keine echten Personen, keine Live-Lobbys</p><h1 className="text-3xl font-semibold text-white">Zusammen spielen & streamen</h1><CommunityView data={fixture} now={now} onRefresh={() => {}} /></main>;
 }

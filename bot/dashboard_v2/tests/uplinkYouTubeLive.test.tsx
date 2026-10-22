@@ -7,11 +7,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 (globalThis as { React?: typeof React }).React = React;
 
+import { entwurfAus, naechsterEntwurf, speichernErlaubt } from '../src/components/uplink/youTubeLiveEntwurf';
 import {
   UplinkYouTubeLive,
-  entwurfAus,
-  naechsterEntwurf,
-  speichernErlaubt,
   type UplinkYouTubeLiveProps,
   type YouTubeLiveEntwurf,
   type YouTubeLiveEinstellungen,

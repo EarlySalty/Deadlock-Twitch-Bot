@@ -1,8 +1,8 @@
 export const SOCIAL_STUDIO_EN: Record<string, string> = {
-  '{count} Produktion prüfen': 'Review {count} production',
+  '{count} offene Prüfung': '{count} open review',
   '{count} fertiges Video prüfen': 'Review {count} produced video',
   '{count} Clip freigeben': 'Approve {count} clip',
-  '{count} Produktionen prüfen': 'Review {count} productions',
+  '{count} offene Prüfungen': '{count} open reviews',
   '{count} fertige Videos prüfen': 'Review {count} produced videos',
   'Verbindung läuft bald ab': 'Connection expires soon',
   'Im Clip-Vorrat erfasst': 'Captured in clip supply',

@@ -14,7 +14,7 @@ export const SOCIAL_EN: Record<string, string> = {
   '{count} in Produktion': '{count} in production',
   'Keine Produktion aktiv': 'No production running',
   'Prüfungen offen': 'Pending reviews',
-  '{productions} Produktionen & Videos · {clips} Clip-Freigaben': '{productions} productions & videos · {clips} clip approvals',
+  '{reviews} Videos & Aufträge · {clips} Clip-Freigaben': '{reviews} videos & jobs · {clips} clip approvals',
   'Alle verbunden': 'All connected',
   '{count} brauchen Aufmerksamkeit': '{count} need attention',
   'Ohne Termin': 'Not scheduled',

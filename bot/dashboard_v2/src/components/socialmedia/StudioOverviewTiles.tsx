@@ -107,7 +107,7 @@ function CostTile({ owner, streamer, isAdmin, statisticsPlatforms }: { owner?: s
   return <Tile icon={Coins} title={t('KI-Kosten & Nutzung')}
     footer={<button type="button" className="studio-overview-link" disabled={!streamer} onClick={() => setOpen(true)}>{t('Details')}<ArrowRight className="h-4 w-4" aria-hidden /></button>}>
     {owner ? <CostSummary owner={owner} /> : <p className="studio-overview-empty">{t('Bitte einen Kanal auswählen.')}</p>}
-    {open && <WorkspaceDialog eyebrow={t('Performance')} title={t('Auswertung')} onClose={() => setOpen(false)}>
+    {open && <WorkspaceDialog eyebrow={t('Kennzahlen')} title={t('Auswertung')} onClose={() => setOpen(false)}>
       <Suspense fallback={<p role="status">{t('Wird geladen')}</p>}>
         <AnalyticsTab streamer={streamer} twitchUserId={owner} isAdmin={isAdmin} statisticsPlatforms={statisticsPlatforms} />
       </Suspense>
