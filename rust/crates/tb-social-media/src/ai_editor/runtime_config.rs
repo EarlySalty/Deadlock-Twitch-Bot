@@ -449,7 +449,10 @@ impl SttRuntimeConfig {
 
     pub fn job_config(&self) -> Result<SttJobConfig, super::AiEditorError> {
         Ok(SttJobConfig {
-            binary: self.binary.clone(),
+            binary: self
+                .binary
+                .canonicalize()
+                .map_err(|_| super::AiEditorError::Configuration)?,
             model_directory: self
                 .settings
                 .model_directory
