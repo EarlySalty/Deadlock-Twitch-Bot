@@ -201,17 +201,53 @@ pub fn validate_plan(
     })
 }
 
+fn forbidden_decision_char(ch: char) -> bool {
+    ch.is_control()
+        || matches!(
+            ch,
+            '[' | ']' | '{' | '}' | '<' | '>' | ';' | '`' | '$' | '\\' | '/'
+        )
+}
+
+pub(crate) fn clean_decision_text(text: &mut String, max_bytes: usize) {
+    let replaced: String = text
+        .chars()
+        .map(|ch| if forbidden_decision_char(ch) { ' ' } else { ch })
+        .collect();
+    let mut cleaned = replaced
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_start_matches(|ch: char| ch == '-' || ch.is_whitespace())
+        .to_string();
+    if cleaned.len() > max_bytes {
+        let mut end = max_bytes;
+        while !cleaned.is_char_boundary(end) {
+            end -= 1;
+        }
+        cleaned.truncate(end);
+        cleaned.truncate(cleaned.trim_end().len());
+    }
+    *text = cleaned;
+}
+
+pub(crate) fn clean_plan_texts(plan: &mut EditPlan, max_bytes: usize) {
+    for interval in &mut plan.kept_intervals {
+        clean_decision_text(&mut interval.reason, max_bytes);
+    }
+    for highlight in &mut plan.observed_highlights {
+        clean_decision_text(&mut highlight.observation, max_bytes);
+    }
+    for reason in &mut plan.review_reasons {
+        clean_decision_text(reason, max_bytes);
+    }
+}
+
 fn valid_decision_text(text: &str, max_bytes: usize) -> Result<(), EditorError> {
     let text = text.trim();
     if text.is_empty()
         || text.len() > max_bytes
-        || text.chars().any(|ch| {
-            ch.is_control()
-                || matches!(
-                    ch,
-                    '[' | ']' | '{' | '}' | '<' | '>' | ';' | '`' | '$' | '\\' | '/'
-                )
-        })
+        || text.chars().any(forbidden_decision_char)
         || text.starts_with('-')
         || text.to_ascii_lowercase().contains("ffmpeg")
     {
@@ -522,6 +558,32 @@ mod tests {
                 .err()
                 .map(|e| e.code),
             Some(ErrorCode::HighlightRemoved)
+        );
+    }
+
+    #[test]
+    fn cleans_ordinary_model_punctuation_but_still_rejects_commands() {
+        let mut cleaned = plan();
+        cleaned.kept_intervals[0].reason = "- Kill/Tod; Teamfight [Mitte] über Älä".into();
+        cleaned.review_reasons = vec!["Unklar/ob Tod".into()];
+        clean_plan_texts(&mut cleaned, limits().max_text_bytes);
+        assert_eq!(
+            cleaned.kept_intervals[0].reason,
+            "Kill Tod Teamfight Mitte über Älä"
+        );
+        assert_eq!(cleaned.review_reasons, vec!["Unklar ob Tod".to_string()]);
+        assert!(validate_plan(cleaned, 10_000, &limits()).is_ok());
+        let mut long = "ä".repeat(200);
+        clean_decision_text(&mut long, 121);
+        assert_eq!(long.len(), 120);
+        let mut command = plan();
+        command.kept_intervals[0].reason = "ffmpeg -i input".into();
+        clean_plan_texts(&mut command, limits().max_text_bytes);
+        assert_eq!(
+            validate_plan(command, 10_000, &limits())
+                .err()
+                .map(|e| e.code),
+            Some(ErrorCode::InvalidDecisionText)
         );
     }
 

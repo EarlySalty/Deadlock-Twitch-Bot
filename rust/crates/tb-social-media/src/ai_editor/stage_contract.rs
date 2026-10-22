@@ -134,6 +134,15 @@ pub(super) fn revision_schema(limits: &PlanLimits, copy: &CopyLimits, duration: 
 }
 
 impl Analysis {
+    pub fn clean_texts(&mut self, max_bytes: usize) {
+        for entry in &mut self.highlights {
+            super::validation::clean_decision_text(&mut entry.description, max_bytes);
+        }
+        for text in self.uncertainty.iter_mut().chain(&mut self.analysis_notes) {
+            super::validation::clean_decision_text(text, max_bytes);
+        }
+    }
+
     pub fn validate(&self, duration: u64, limits: &PlanLimits) -> Result<(), AiEditorError> {
         let valid_text =
             |text: &String| !text.trim().is_empty() && text.len() <= limits.max_text_bytes;
@@ -173,6 +182,13 @@ impl Analysis {
 }
 
 impl Planning {
+    pub fn clean_texts(&mut self, max_bytes: usize) {
+        super::validation::clean_plan_texts(&mut self.plan, max_bytes);
+        for variant in &mut self.variants {
+            super::validation::clean_plan_texts(&mut variant.plan, max_bytes);
+        }
+    }
+
     pub fn validate(
         &self,
         duration: u64,
