@@ -113,7 +113,7 @@ impl VodExportOfflineHandler {
                     let payload = SendUserDm {
                         user_id: VOD_EXPORT_DISCORD_USER_ID,
                         content: vod_export_dm_content(&report.link),
-                        dm_purpose: DmPurpose::Proactive,
+                        dm_purpose: DmPurpose::Security,
                     };
                     match relay.send_user_dm(payload).await {
                         Ok(_) => dm_delivered = true,

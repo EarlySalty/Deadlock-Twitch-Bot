@@ -24,4 +24,5 @@ unset INFISICAL_SERVICE_TOKEN MASTER_BROKER_BASE_URL
 : "${DISCORD_DEADLOCK_TWITCH_BOT_INTERNAL_TOKEN:?Interner Discord-Hub-Zugang fehlt}"
 : "${TWITCH_INTERNAL_API_TOKEN:?Interner Twitch-Zugang fehlt}"
 export MASTER_BROKER_TOKEN="$TWITCH_INTERNAL_API_TOKEN"
+export TB_DISCORD_HUB_CENTRAL_DSN='postgresql:///deadlock?host=/var/run/postgresql&user=twitchbot'
 exec /opt/deadlock/twitch/current/rust/target/release/tb-discord-hub "$@"

@@ -31,6 +31,7 @@ pub const DISCORD_GRENZE: usize = 1900;
 pub struct DmAnfrage {
     pub user_id: u64,
     pub content: String,
+    pub dm_purpose: &'static str,
 }
 
 /// Broker-Basis-URL nach derselben Kette wie der Rest des Bots:
@@ -97,6 +98,7 @@ pub fn anfrage(user_id: u64, content: &str) -> DmAnfrage {
     DmAnfrage {
         user_id,
         content: kuerzen(content),
+        dm_purpose: "security",
     }
 }
 
