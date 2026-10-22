@@ -111,6 +111,15 @@ pub(super) fn planning_schema(
     )
 }
 
+pub(super) fn drop_variants(schema: &mut Value) {
+    if let Some(properties) = schema["properties"].as_object_mut() {
+        properties.remove("variants");
+    }
+    if let Some(required) = schema["required"].as_array_mut() {
+        required.retain(|name| name != "variants");
+    }
+}
+
 pub(super) fn revision_schema(limits: &PlanLimits, copy: &CopyLimits, duration: u64) -> Value {
     let mut schema = planning_schema(limits, copy, duration);
     schema["properties"]["revision_proposal"] = object(json!({

@@ -723,11 +723,12 @@ async fn plan(
             frozen.media.duration_ms,
         )
     };
-    schema["properties"]["variants"]["maxItems"] = json!(if multi_output {
-        runtime.limits.revisions.max_variants - 1
+    if multi_output {
+        schema["properties"]["variants"]["maxItems"] =
+            json!(runtime.limits.revisions.max_variants - 1);
     } else {
-        0
-    });
+        super::stage_contract::drop_variants(&mut schema);
+    }
     let personal = match super::learning::personal_hints(ctx.pool, ctx.owner).await {
         Ok(hints) => hints,
         Err(error) => {
