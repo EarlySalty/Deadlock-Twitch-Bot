@@ -73,7 +73,7 @@ export function aiPreviewJob(scenario: AiPreviewScenario): AiJobView | null {
 }
 
 export function aiPreviewConsent(scenario: AiPreviewScenario): AiConsent {
-  return { external_ai_consent: scenario !== 'consent-off' && scenario !== 'global-off' && scenario !== 'race', global_allowed: scenario !== 'global-off' };
+  return { external_ai_consent: scenario !== 'consent-off' && scenario !== 'global-off' && scenario !== 'race', global_allowed: scenario !== 'global-off', provider_access: scenario === 'failed' ? 'workspace_required' : 'ready' };
 }
 
 function response(body: unknown, status = 200): Response {

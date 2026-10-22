@@ -1188,3 +1188,53 @@ async fn consent_budget_and_native_mock_contract() {
         2
     );
 }
+
+fn provider_error(message: &str) -> Vec<u8> {
+    serde_json::to_vec(
+        &json!({"type": "error", "error": {"type": "invalid_request_error", "message": message}}),
+    )
+    .expect("error body")
+}
+
+#[test]
+fn access_problem_maps_provider_rejections() {
+    let unscoped = provider_error(
+        "API key is not scoped to a workspace. Please provide the anthropic-workspace-id header.",
+    );
+    let invalid = provider_error("The anthropic-workspace-id header must be a valid workspace ID.");
+    let other = provider_error("max_tokens: field required");
+    assert_eq!(
+        access_problem(StatusCode::BAD_REQUEST, &unscoped),
+        Some(ProviderAccess::WorkspaceRequired)
+    );
+    assert_eq!(
+        access_problem(StatusCode::BAD_REQUEST, &invalid),
+        Some(ProviderAccess::WorkspaceInvalid)
+    );
+    assert_eq!(access_problem(StatusCode::BAD_REQUEST, &other), None);
+    assert_eq!(access_problem(StatusCode::BAD_REQUEST, b"not json"), None);
+    assert_eq!(
+        access_problem(StatusCode::UNAUTHORIZED, b""),
+        Some(ProviderAccess::KeyRejected)
+    );
+    assert_eq!(
+        access_problem(StatusCode::FORBIDDEN, b""),
+        Some(ProviderAccess::KeyRejected)
+    );
+    assert_eq!(
+        access_problem(StatusCode::INTERNAL_SERVER_ERROR, &unscoped),
+        None
+    );
+}
+
+#[test]
+fn credential_fingerprint_changes_with_key_or_workspace() {
+    let base = credential_fingerprint(Some("key-a"), None);
+    assert_eq!(base, credential_fingerprint(Some("key-a"), None));
+    assert_ne!(base, credential_fingerprint(Some("key-b"), None));
+    assert_ne!(
+        base,
+        credential_fingerprint(Some("key-a"), Some("wrkspc_1"))
+    );
+    assert_ne!(base, credential_fingerprint(None, None));
+}

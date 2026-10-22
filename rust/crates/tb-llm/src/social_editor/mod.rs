@@ -901,30 +901,51 @@ fn access_problem(status: StatusCode, body: &[u8]) -> Option<ProviderAccess> {
 
 const ACCESS_CACHE_TTL: Duration = Duration::from_secs(300);
 
-static ACCESS_CACHE: LazyLock<Mutex<Option<(Instant, ProviderAccess)>>> =
-    LazyLock::new(|| Mutex::new(None));
+static ACCESS_CACHE: LazyLock<tokio::sync::Mutex<Option<CachedAccess>>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(None));
+
+#[derive(Clone, Copy)]
+struct CachedAccess {
+    at: Instant,
+    credentials: u64,
+    access: ProviderAccess,
+}
+
+fn credential_fingerprint(key: Option<&str>, workspace: Option<&str>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    workspace.hash(&mut hasher);
+    hasher.finish()
+}
 
 pub async fn probe_access(configuration: &EditorConfig) -> ProviderAccess {
-    let cached = ACCESS_CACHE
-        .lock()
-        .ok()
-        .and_then(|guard| *guard)
-        .filter(|(at, _)| at.elapsed() < ACCESS_CACHE_TTL)
-        .map(|(_, access)| access);
-    if let Some(access) = cached {
-        return access;
+    let key = crate::keys::anthropic_api_key();
+    let workspace = crate::keys::anthropic_workspace_id();
+    let credentials = credential_fingerprint(key.as_deref(), workspace.as_deref());
+    let mut cache = ACCESS_CACHE.lock().await;
+    if let Some(entry) = *cache {
+        if entry.credentials == credentials && entry.at.elapsed() < ACCESS_CACHE_TTL {
+            return entry.access;
+        }
     }
-    let access = match crate::keys::anthropic_api_key() {
-        Some(key) => request_access(&configuration.provider, &key).await,
+    let access = match key {
+        Some(key) => request_access(&configuration.provider, &key, workspace).await,
         None => ProviderAccess::KeyMissing,
     };
-    if let Ok(mut guard) = ACCESS_CACHE.lock() {
-        *guard = Some((Instant::now(), access));
-    }
+    *cache = Some(CachedAccess {
+        at: Instant::now(),
+        credentials,
+        access,
+    });
     access
 }
 
-async fn request_access(config: &ProviderConfig, key: &str) -> ProviderAccess {
+async fn request_access(
+    config: &ProviderConfig,
+    key: &str,
+    workspace: Option<String>,
+) -> ProviderAccess {
     let Ok(client) = Client::builder()
         .no_proxy()
         .redirect(Policy::none())
@@ -933,7 +954,7 @@ async fn request_access(config: &ProviderConfig, key: &str) -> ProviderAccess {
     else {
         return ProviderAccess::Unreachable;
     };
-    let Ok(workspace) = workspace_header(crate::keys::anthropic_workspace_id()) else {
+    let Ok(workspace) = workspace_header(workspace) else {
         return ProviderAccess::WorkspaceInvalid;
     };
     let endpoint = format!(
