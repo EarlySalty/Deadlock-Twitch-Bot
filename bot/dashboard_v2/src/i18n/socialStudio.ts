@@ -178,6 +178,8 @@ export const SOCIAL_STUDIO_EN: Record<string, string> = {
   'Video #{id}': 'Video #{id}',
   'Version {version}, Variante {variant}': 'Version {version}, variant {variant}',
   'Vorschau Video #{id}': 'Preview video #{id}',
+  'Fertiges Video ansehen': 'Watch finished video',
+  'Vorschau schließen': 'Close preview',
   'KI-bearbeitet': 'AI-edited',
   'Statisch bearbeitet': 'Statically edited',
   'Video prüfen': 'Review video',

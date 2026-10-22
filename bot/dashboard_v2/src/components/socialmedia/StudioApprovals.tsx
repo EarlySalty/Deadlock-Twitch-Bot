@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { CalendarPlus, CheckCircle2, Film, FlaskConical, MessageSquareText, Sparkles, Trash2 } from 'lucide-react';
+import { CalendarPlus, CheckCircle2, Film, FlaskConical, MessageSquareText, Play, Sparkles, Trash2, X } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import type { SocialClipMitPosting } from '@/api/socialMedia';
 import type { PublishPlatform, PublishReviewClient, PublishSnapshot, PublishVideo } from './autopilot/publish-review/api';
@@ -52,11 +52,16 @@ function ApprovalEntry({ video, snapshot, clips, owner, client, timezone, onNavi
   const clip = clips?.find(item => item.clip_db_id === video.clip_id);
   const title = clip?.generated_title?.trim() || clip?.title || t('Video {id}', { id: video.id });
   const planned = video.event?.scheduled_at;
+  const src = useProducedVideoUrl(owner, video.id, client);
+  const [watching, setWatching] = useState(false);
+  const poster = clip?.thumbnail_url ?? undefined;
   return <article className="studio-approval" aria-label={title}>
-    <div className="studio-approval-media">
-      {clip?.thumbnail_url ? <img src={clip.thumbnail_url} alt="" loading="lazy" />
-        : owner ? <ApprovalVideo owner={owner} videoId={video.id} client={client} /> : <Film className="h-5 w-5" aria-hidden />}
-    </div>
+    {src ? <button type="button" className="studio-approval-media studio-approval-play" aria-expanded={watching}
+      aria-label={t(watching ? 'Vorschau schließen' : 'Fertiges Video ansehen')} onClick={() => setWatching(open => !open)}>
+      {poster ? <img src={poster} alt="" loading="lazy" /> : <video src={src} preload="metadata" muted playsInline aria-hidden />}
+      <span className="studio-approval-play-icon" aria-hidden>{watching ? <X className="h-5 w-5" /> : <Play className="h-5 w-5" />}</span>
+    </button>
+      : <div className="studio-approval-media">{poster ? <img src={poster} alt="" loading="lazy" /> : <Film className="h-5 w-5" aria-hidden />}</div>}
     <div className="studio-approval-body">
       <strong title={title}>{title}</strong>
       <span>{planned ? `${t('Geplant für {date}', { date: formatTerminInZone(planned, locale, timezone) })} · ${timezone}` : t('Termin wird nach der Freigabe vergeben')}</span>
@@ -65,18 +70,21 @@ function ApprovalEntry({ video, snapshot, clips, owner, client, timezone, onNavi
     </div>
     {owner ? <ApprovalActions video={video} snapshot={snapshot} owner={owner} client={client} onNavigate={onNavigate} testRunApi={testRunApi} onTestRunChanged={onTestRunChanged} />
       : <div className="studio-approval-actions"><button type="button" className="studio-button" onClick={() => onNavigate('clips', 'review')}>{t('Prüfen')}</button></div>}
+    {watching && src && <div className="studio-approval-player">
+      <video src={src} poster={poster} controls autoPlay playsInline preload="auto" aria-label={t('Vorschau Video #{id}', { id: video.id })} />
+    </div>}
   </article>;
 }
 
-function ApprovalVideo({ owner, videoId, client }: { owner: string; videoId: number; client?: PublishReviewClient }) {
-  const { t } = useLanguage();
-  const [src, setSrc] = useState<string | null>(() => client?.videoUrl?.(owner, videoId) ?? null);
+function useProducedVideoUrl(owner: string | undefined, videoId: number, client?: PublishReviewClient): string | null {
+  const [src, setSrc] = useState<string | null>(() => (owner ? client?.videoUrl?.(owner, videoId) ?? null : null));
   useEffect(() => {
+    if (!owner) return;
     let active = true;
     void resolveClient(client).then(api => { if (active) setSrc(api.videoUrl?.(owner, videoId) ?? null); });
     return () => { active = false; };
   }, [client, owner, videoId]);
-  return src ? <video src={src} preload="metadata" muted playsInline aria-label={t('Vorschau Video #{id}', { id: videoId })} /> : <Film className="h-5 w-5" aria-hidden />;
+  return src;
 }
 
 function ApprovalActions({ video, snapshot, owner, client, onNavigate, testRunApi, onTestRunChanged }: {

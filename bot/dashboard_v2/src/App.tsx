@@ -38,6 +38,7 @@ import {
 import { livePathFromTourPath, onPublicTour } from '@/publicTour';
 import { AlertTriangle } from 'lucide-react';
 import { pageLoaders } from './pageLoaders';
+import { isStaleChunkError, reloadOnceForStaleChunk } from './staleChunk';
 import { navigationSnapshot, subscribeNavigation } from './navigation';
 import { useDashboardProfile } from './hooks/useDashboardProfile';
 
@@ -83,6 +84,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
+    if (isStaleChunkError(error) && reloadOnceForStaleChunk()) return;
     console.error('Dashboard Error:', error, info.componentStack);
   }
 
