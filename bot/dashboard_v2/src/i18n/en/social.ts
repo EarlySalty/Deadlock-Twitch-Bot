@@ -113,6 +113,8 @@ export const SOCIAL_EN: Record<string, string> = {
   'Eingabe- und Ausgabetokens': 'Input and output tokens',
   'Geschätzte Anbieter-Kosten': 'Estimated provider costs',
   '{cost} US-Dollar (Schätzung aus Tokenverbrauch)': '{cost} US dollars (estimated from token usage)',
+  'Im Claude-Abo enthalten': 'Included in the Claude plan',
+  'Keine, im Claude-Abo enthalten': 'None, included in the Claude plan',
   'Vom Anbieter abgerechnete Kosten': 'Costs billed by the provider',
   '{cost} US-Dollar': '{cost} US dollars',
   'Wähle einen Clip aus deinem Kanal': 'Choose a clip from your channel',
