@@ -202,6 +202,7 @@ const EN: Record<string, string> = {
   // -- Seitenrahmen / App ------------------------------------------------
   'Dashboard-Fehler': 'Dashboard error',
   'Ein unerwarteter Fehler ist aufgetreten.': 'An unexpected error occurred.',
+  'Es gibt eine neue Version des Dashboards. Bitte lade die Seite neu.': 'A new version of the dashboard is available. Please reload the page.',
   'Erneut versuchen': 'Try again',
   'Demo-Daten': 'Demo data',
   'Nicht authentifiziert': 'Not authenticated',

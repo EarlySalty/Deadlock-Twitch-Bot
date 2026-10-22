@@ -93,6 +93,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
       return (
         <ErrorFallback
           message={this.state.error?.message ?? null}
+          staleVersion={isStaleChunkError(this.state.error)}
           onRetry={() => window.location.reload()}
         />
       );
@@ -106,7 +107,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
  * benutzen kann. Der Provider liegt darueber, die Sprache gilt also auch im
  * Fehlerfall.
  */
-function ErrorFallback({ message, onRetry }: { message: string | null; onRetry: () => void }) {
+function ErrorFallback({ message, staleVersion, onRetry }: { message: string | null; staleVersion: boolean; onRetry: () => void }) {
   const t = useT();
   return (
     <div className="min-h-screen bg-bg flex items-center justify-center p-8">
@@ -114,7 +115,7 @@ function ErrorFallback({ message, onRetry }: { message: string | null; onRetry: 
         <AlertTriangle className="w-12 h-12 text-warning mx-auto mb-4" />
         <h2 className="text-xl font-bold text-white mb-2">{t('Dashboard-Fehler')}</h2>
         <p className="text-text-secondary mb-4">
-          {message || t('Ein unerwarteter Fehler ist aufgetreten.')}
+          {staleVersion ? t('Es gibt eine neue Version des Dashboards. Bitte lade die Seite neu.') : message || t('Ein unerwarteter Fehler ist aufgetreten.')}
         </p>
         <button
           onClick={onRetry}

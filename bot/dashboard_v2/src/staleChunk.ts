@@ -13,8 +13,9 @@ export function isStaleChunkError(error: unknown): boolean {
   return CHUNK_ERROR_PATTERNS.some(pattern => message.includes(pattern));
 }
 
-export function reloadOnceForStaleChunk(storage: Storage = window.sessionStorage, now = Date.now()): boolean {
+export function reloadOnceForStaleChunk(now = Date.now()): boolean {
   try {
+    const storage = window.sessionStorage;
     const last = Number(storage.getItem(RELOAD_KEY) ?? 0);
     if (now - last < RELOAD_COOLDOWN_MS) return false;
     storage.setItem(RELOAD_KEY, String(now));
@@ -23,10 +24,4 @@ export function reloadOnceForStaleChunk(storage: Storage = window.sessionStorage
   }
   window.location.reload();
   return true;
-}
-
-export function installStaleChunkReload(target: Window = window): void {
-  target.addEventListener('vite:preloadError', event => {
-    if (reloadOnceForStaleChunk()) event.preventDefault();
-  });
 }

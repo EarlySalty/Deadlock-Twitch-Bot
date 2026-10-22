@@ -79,7 +79,10 @@ function ApprovalEntry({ video, snapshot, clips, owner, client, timezone, onNavi
 function useProducedVideoUrl(owner: string | undefined, videoId: number, client?: PublishReviewClient): string | null {
   const [src, setSrc] = useState<string | null>(() => (owner ? client?.videoUrl?.(owner, videoId) ?? null : null));
   useEffect(() => {
-    if (!owner) return;
+    if (!owner) {
+      setSrc(null);
+      return;
+    }
     let active = true;
     void resolveClient(client).then(api => { if (active) setSrc(api.videoUrl?.(owner, videoId) ?? null); });
     return () => { active = false; };
