@@ -3,6 +3,7 @@ pub mod learning;
 mod media;
 pub mod metadata;
 mod model;
+mod observation;
 pub mod options;
 mod pipeline;
 pub mod revision;

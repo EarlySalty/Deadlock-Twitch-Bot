@@ -655,9 +655,24 @@ async fn analyze(
     }
     let (transcript, language, segments) = transcription(ctx.checkpoints)?;
     let evidence = brain_context(ctx, runtime, transcript).await;
+    let observation = super::observation::watch(
+        super::observation::ObservationOwner {
+            pool: ctx.pool,
+            twitch_user_id: ctx.owner,
+            job_namespace: ctx.identity.namespace(),
+        },
+        &frozen.source,
+        runtime,
+    )
+    .await;
+    let task = if observation.is_some() {
+        "Analyze why this clip was clipped. video_observation is a full watch of the video with audio by a video model and is the primary temporal evidence; sampled frames and transcript confirm it. Many clips are already one complete highlight: keeping the full clip is a valid result, and the highlight may continue after the streamer dies (death cam). Only mark dead time that adds nothing to setup, highlight or reaction. Return explicit uncertainty and only timestamps within the measured source."
+    } else {
+        "Analyze observed highlights conservatively. Sampled frames are not complete temporal gameplay evidence. Many clips are already one complete highlight: keeping the full clip is a valid result, and the highlight may continue after the streamer dies (death cam). Return explicit uncertainty and only timestamps within the measured source."
+    };
     let request = EditorRequest {
         system: frozen.system(&[SkillId::DeadlockUnderstanding, SkillId::HighlightAnalysis])?,
-        text: json!({ "task": "Analyze observed highlights conservatively. Sampled frames are not complete temporal gameplay evidence. Return explicit uncertainty and only timestamps within the measured source.", "source": { "duration_ms": frozen.media.duration_ms, "width": frozen.media.width, "height": frozen.media.height, "has_audio": frozen.media.has_audio, "title": frozen.source.title }, "transcript": transcript, "language": language, "segments": segments, "brain": evidence, "user_correction":feedback.as_ref().map(|request| &request.feedback) }).to_string(),
+        text: json!({ "task": task, "video_observation": observation, "source": { "duration_ms": frozen.media.duration_ms, "width": frozen.media.width, "height": frozen.media.height, "has_audio": frozen.media.has_audio, "title": frozen.source.title }, "transcript": transcript, "language": language, "segments": segments, "brain": evidence, "user_correction":feedback.as_ref().map(|request| &request.feedback) }).to_string(),
         frames,
         json_schema: analysis_schema(&runtime.limits.plan, frozen.media.duration_ms),
     };

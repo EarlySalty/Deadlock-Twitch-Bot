@@ -5,7 +5,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tb_config::{stt::SttConfig, BotConfigSnapshot};
-use tb_llm::social_editor::{EditorConfig, SocialAiSection};
+use tb_llm::{
+    social_editor::{EditorConfig, SocialAiSection},
+    video_observer::VideoObserverConfig,
+};
 
 use super::{brain::BrainRetrieveConfig, stt::SttJobConfig, PlanLimits, ResourceLimits};
 
@@ -30,6 +33,8 @@ pub struct RuntimeConfig {
     pub brain: Option<BrainRuntimeConfig>,
     #[serde(default)]
     pub revisions: RevisionLimits,
+    #[serde(default)]
+    pub video_observer: Option<VideoObserverConfig>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -388,6 +393,9 @@ impl RuntimeConfig {
                 .brain
                 .as_ref()
                 .is_some_and(|brain| !brain.retrieval().validate())
+            || self.video_observer.as_ref().is_some_and(|observer| {
+                !observer.valid() || observer.total_deadline_ms >= self.job_deadline_ms
+            })
         {
             return Err(super::AiEditorError::Configuration);
         }
