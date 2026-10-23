@@ -243,7 +243,10 @@ pub async fn link_complete_handler(
     )
     .await
     {
-        Ok(true) => redirect_status(&next_path, Some("Discord-Account verknüpft."), None),
+        Ok(true) => {
+            sync_streamer_role_now(&twitch_login, &discord_id, display, has_roles).await;
+            redirect_status(&next_path, Some("Discord-Account verknüpft."), None)
+        }
         Ok(false) => redirect_status(&next_path, None, Some("Streamer nicht gefunden.")),
         Err(error) => {
             tracing::error!(%error, "discord link completion failed");
@@ -338,6 +341,56 @@ pub(crate) async fn broker_post(path: &str, token: &str, payload: &Value) -> Opt
         Err(error) => {
             tracing::warn!(%error, path, "discord broker JSON nicht lesbar");
             None
+        }
+    }
+}
+
+async fn sync_streamer_role_now(
+    twitch_login: &str,
+    discord_id: &str,
+    display: Option<&str>,
+    has_roles: bool,
+) {
+    let Some(token) = crate::uplink_config::platform_value("TWITCH_INTERNAL_API_TOKEN")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        tracing::warn!("discord link: Rollenabgleich übersprungen, interner Token fehlt");
+        return;
+    };
+    let url = format!(
+        "{}{}/streamers/{}/discord-profile",
+        crate::handlers::admin_streamers::worker_internal_base_url(),
+        tb_http_core::INTERNAL_API_BASE_PATH,
+        url::form_urlencoded::byte_serialize(twitch_login.as_bytes()).collect::<String>(),
+    );
+    let payload = json!({
+        "discord_user_id": discord_id,
+        "discord_display_name": display,
+        "mark_member": has_roles,
+    });
+    let result = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|error| error.to_string());
+    let response = match result {
+        Ok(client) => client
+            .post(&url)
+            .header(tb_http_core::INTERNAL_TOKEN_HEADER, token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|error| error.to_string()),
+        Err(error) => Err(error),
+    };
+    match response {
+        Ok(response) if response.status().is_success() => {}
+        Ok(response) => {
+            tracing::warn!(status = %response.status(), login = %twitch_login, "discord link: Rollenabgleich abgelehnt")
+        }
+        Err(error) => {
+            tracing::warn!(%error, login = %twitch_login, "discord link: Rollenabgleich nicht erreichbar")
         }
     }
 }
