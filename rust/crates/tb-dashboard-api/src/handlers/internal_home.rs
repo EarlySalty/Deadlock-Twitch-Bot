@@ -1212,7 +1212,7 @@ async fn reauth_offered(pool: &PgPool, resolved_user_id: &str) -> bool {
     let sql = r#"
         SELECT COALESCE((SELECT login_count FROM twitch_dashboard_logins
                          WHERE twitch_user_id = $1), 0) > $2
-            OR COALESCE((SELECT MIN(created_at) FROM twitch_raid_auth
+            OR COALESCE((SELECT MIN(created_at::timestamptz) FROM twitch_raid_auth
                          WHERE TRIM(COALESCE(twitch_user_id, '')) = $1)
                         < NOW() - make_interval(days => $3), TRUE)
     "#;
