@@ -2061,11 +2061,7 @@ select.studio-select {
 .studio-tile-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
 .studio-tile-item-title { overflow: hidden; min-width: 0; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .studio-tile-item-meta { display: inline-flex; flex: none; align-items: center; gap: 4px; font-size: 12px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
-.studio-tile-popover h3 { margin-bottom: 12px; font-size: 15px; font-weight: 600; }
-.studio-tile-reasons { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.studio-tile-reasons li { display: grid; gap: 2px; padding-bottom: 10px; border-bottom: 1px solid var(--color-border); font-size: 13px; }
-.studio-tile-reasons li:last-child { padding-bottom: 0; border-bottom: 0; }
-.studio-tile-reasons span { color: var(--color-text-secondary); }
+.studio-tile-item-reason { overflow: hidden; min-width: 0; font-size: 13px; color: var(--color-text-secondary); text-overflow: ellipsis; white-space: nowrap; }
 
 .social-studio .studio-import-filter-button { min-height: 40px; border-color: var(--color-primary); color: var(--color-primary); font-weight: 600; }
 .social-studio .studio-import-filter-button:hover { background: var(--color-primary-soft); }

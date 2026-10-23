@@ -489,10 +489,10 @@ test('archivierte Clips erscheinen nur unter Archiv, nicht unter Aussortiert / F
   assert.equal(sourceMatchesStage(failed, 'archive'), false);
 });
 
-test('Von KI aussortiert zählt nur automatische Ablehnungen, keine Handaktionen', async () => {
-  const { discardedItems } = await import('../src/components/socialmedia/discardedItems');
+test('Fehler-Kachel zählt nur automatische Fehler, keine Handaktionen', async () => {
+  const { failedItems } = await import('../src/components/socialmedia/failedItems');
   const job = (id: number, status: string, review_reasons: string[]) => ({ id, clip_id: id, clip_title: `Clip ${id}`, status, review_reasons, last_error: null });
-  const schedule = { jobs: [job(1, 'failed', []), job(2, 'cancelled', ['unsuitable_clip']), job(3, 'cancelled', ['external_ai_consent_required']), job(4, 'cancelled', [])] } as unknown as Parameters<typeof discardedItems>[0];
+  const schedule = { jobs: [job(1, 'failed', []), job(2, 'cancelled', ['unsuitable_clip']), job(3, 'cancelled', ['external_ai_consent_required']), job(4, 'cancelled', [])] } as unknown as Parameters<typeof failedItems>[0];
   const video = (id: number, status: string, review_reasons: string[], destinations: unknown[] = []) => ({ id, clip_id: id, status, review_reasons, event: { destinations } });
   const publish = { videos: [
     video(10, 'rejected', []),
@@ -500,9 +500,9 @@ test('Von KI aussortiert zählt nur automatische Ablehnungen, keine Handaktionen
     video(12, 'failed', []),
     video(13, 'approved', [], [{ platform: 'youtube', state: 'discarded', reason: null }, { platform: 'tiktok', state: 'discarded', reason: 'tiktok_rejected' }, { platform: 'instagram', state: 'failed', reason: null }]),
     video(14, 'rejected', [], [{ platform: 'youtube', state: 'discarded', reason: 'revision_replaced' }, { platform: 'tiktok', state: 'discarded', reason: 'not_approved_at_execution' }]),
-  ] } as unknown as Parameters<typeof discardedItems>[1];
+  ] } as unknown as Parameters<typeof failedItems>[1];
   const clips = [{ clip_db_id: 99, clip_id: 'x', title: 'Hand', discarded_at: '2026-10-01T10:00:00Z' }] as unknown as SocialClipMitPosting[];
-  const keys = discardedItems(schedule, publish, clips, key => key).map(item => item.key);
+  const keys = failedItems(schedule, publish, clips, key => key).map(item => item.key);
   assert.deepEqual(keys, ['job-1', 'video-12', 'destination-13-tiktok', 'destination-13-instagram']);
 });
 
