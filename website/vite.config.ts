@@ -56,6 +56,7 @@ export default defineConfig({
         main: path.resolve(__dirname, 'index.html'),
         streamerV1: path.resolve(__dirname, 'v1/index.html'),
         streamerV3: path.resolve(__dirname, 'v3/index.html'),
+        streamerV4: path.resolve(__dirname, 'v4/index.html'),
         affiliateProgram: path.resolve(__dirname, 'vertriebler/index.html'),
         affiliatePortal: path.resolve(__dirname, 'affiliate-portal/index.html'),
         onboarding: path.resolve(__dirname, 'onboarding/index.html'),
