@@ -244,7 +244,12 @@ pub async fn link_complete_handler(
     .await
     {
         Ok(true) => {
-            sync_streamer_role_now(&twitch_login, &discord_id, display, has_roles).await;
+            let login = twitch_login.clone();
+            let id = discord_id.clone();
+            let name = display.map(str::to_string);
+            tokio::spawn(async move {
+                sync_streamer_role_now(&login, &id, name.as_deref(), has_roles).await;
+            });
             redirect_status(&next_path, Some("Discord-Account verknüpft."), None)
         }
         Ok(false) => redirect_status(&next_path, None, Some("Streamer nicht gefunden.")),
@@ -371,6 +376,7 @@ async fn sync_streamer_role_now(
     });
     let result = reqwest::Client::builder()
         .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|error| error.to_string());
