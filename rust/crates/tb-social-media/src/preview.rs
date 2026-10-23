@@ -76,7 +76,7 @@ async fn render_inputs_on(
     Ok(serde_json::json!({
         "clip_url": row["clip_url"], "local_file_path": row["local_file_path"],
         "streamer_login": row["streamer_login"], "clip_title": row["clip_title"],
-        "custom_title": row["custom_title"], "layout": layout.map(|value| value.to_override_json()),
+        "custom_title": row["custom_title"], "layout": layout.map(|value| value.to_override_json()), "render": "unbranded",
         "source": source,
     })
     .to_string())

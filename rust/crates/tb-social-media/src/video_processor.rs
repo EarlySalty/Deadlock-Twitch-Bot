@@ -21,7 +21,6 @@ const AUDIO_BITRATE: &str = "192k";
 const AUDIO_SAMPLE_RATE: &str = "48000";
 const MAX_FPS: &str = "60";
 const BRAND_GOLD: &str = "0xC5A059";
-const LOGO: &[u8] = include_bytes!("../assets/ddc-logo.png");
 const FONT: &[u8] = include_bytes!("../assets/DejaVuSans-Bold.ttf");
 
 struct BrandedRenderDirectory(PathBuf);
@@ -393,17 +392,13 @@ impl VideoProcessor {
         let assets = &owned_assets.0;
         let render_temp = assets.join("render.mp4");
         let result = async {
-            tokio::fs::write(assets.join("ddc-logo.png"), LOGO).await?;
             tokio::fs::write(assets.join("DejaVuSans-Bold.ttf"), FONT).await?;
             tokio::fs::write(assets.join("overlay.ass"), ass).await?;
             let base_filter = match plan_vertical_render(layout) {
                 VerticalRender::Compose { filter, .. } => filter,
                 VerticalRender::BlurPad => build_fallback_filter(),
             };
-            let filter = format!(
-                "{};[1:v]scale=120:120[logo];[vout][logo]overlay=48:300:shortest=1[branded];[branded]ass=overlay.ass:fontsdir=.[final]",
-                base_filter
-            );
+            let filter = format!("{};[vout]ass=overlay.ass:fontsdir=.[final]", base_filter);
             let mut cmd = if let Some(limits) = limits {
                 bounded_ffmpeg_command(&self.ffmpeg, limits.max_output_bytes)
             } else {
@@ -414,23 +409,35 @@ impl VideoProcessor {
                 .args(["-hide_banner", "-loglevel", "error"]);
             if let Some(limits) = limits {
                 cmd.args(["-filter_threads", &limits.encoder_threads.to_string()])
-                    .args(["-filter_complex_threads", &limits.encoder_threads.to_string()])
+                    .args([
+                        "-filter_complex_threads",
+                        &limits.encoder_threads.to_string(),
+                    ])
                     .args(["-threads", &limits.encoder_threads.to_string()]);
             }
             cmd.arg("-i").arg(&input);
             if let Some(limits) = limits {
                 cmd.args(["-threads", &limits.encoder_threads.to_string()]);
             }
-            cmd.args(["-loop", "1", "-i", "ddc-logo.png", "-filter_complex", &filter,
-                    "-map", "[final]", "-map", "0:a?", "-t"])
-                .arg(max_duration.max(1).to_string());
+            cmd.args([
+                "-filter_complex",
+                &filter,
+                "-map",
+                "[final]",
+                "-map",
+                "0:a?",
+                "-t",
+            ])
+            .arg(max_duration.max(1).to_string());
             encode_options(&mut cmd);
             if let Some(limits) = limits {
                 cmd.args(["-threads:v", &limits.encoder_threads.to_string()]);
             }
             let result = cmd.arg("-y").arg(&render_temp).output().await?;
             if !result.status.success() {
-                return Err(VideoProcessorError::Ffmpeg(String::from_utf8_lossy(&result.stderr).trim().to_string()));
+                return Err(VideoProcessorError::Ffmpeg(
+                    String::from_utf8_lossy(&result.stderr).trim().to_string(),
+                ));
             }
             ensure_output(&render_temp.to_string_lossy())?;
             if let Some(limits) = limits {
