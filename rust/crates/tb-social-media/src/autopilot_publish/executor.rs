@@ -802,7 +802,8 @@ impl PublishExecutor {
                 )
                 .await
             }
-            Err(UploadError::Validation(_)) | Err(UploadError::NotImplemented(_)) => {
+            Err(error @ (UploadError::Validation(_) | UploadError::NotImplemented(_))) => {
+                tracing::warn!(%error, queue = claim.queue_id, platform = %claim.platform, "Auto-Pilot upload rejected");
                 self.settle(
                     &claim,
                     queue_status::FAILED,
