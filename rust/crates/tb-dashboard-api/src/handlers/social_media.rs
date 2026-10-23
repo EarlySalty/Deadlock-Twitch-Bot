@@ -56,7 +56,8 @@ use tb_social_media::layout::{
 };
 use tb_social_media::oauth::{OAuthError, OAuthManager};
 use tb_social_media::partner_access::{
-    is_partner_id_granted, list_partner_access, set_partner_access,
+    has_access_request, is_partner_id_granted, list_access_requests, list_partner_access,
+    remove_access_request, request_access, set_partner_access,
 };
 use tb_social_media::posting_plan::{
     berechne_vorrat, ensure_streamer_rows, load_categories, load_platform_schedules,
@@ -677,7 +678,17 @@ pub async fn my_access_handler(auth: DashboardAuthLevel, State(pool): State<PgPo
         } => {
             let login = twitch_login.to_lowercase();
             let allowed = is_partner_id_granted(&pool, twitch_user_id).await;
-            Json(json!({ "allowed": allowed, "streamer": login, "isAdmin": false })).into_response()
+            let requested = !allowed
+                && has_access_request(&pool, twitch_user_id)
+                    .await
+                    .unwrap_or(false);
+            Json(json!({
+                "allowed": allowed,
+                "streamer": login,
+                "isAdmin": false,
+                "requested": requested,
+            }))
+            .into_response()
         }
         DashboardAuthLevel::None => unauthorized(),
     }
@@ -4088,6 +4099,68 @@ pub async fn partner_access_put_handler(
             )
                 .into_response()
         }
+    }
+}
+
+fn access_db_error(context: &str, e: sqlx::Error) -> Response {
+    tracing::error!(error = %e, context, "social access request: DB-Fehler");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": "db_error" })),
+    )
+        .into_response()
+}
+
+pub async fn access_request_post_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+) -> Response {
+    let DashboardAuthLevel::Partner {
+        twitch_login,
+        twitch_user_id,
+        ..
+    } = &auth
+    else {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "partner_session_required" })),
+        )
+            .into_response();
+    };
+    if is_partner_id_granted(&pool, twitch_user_id).await {
+        return Json(json!({ "allowed": true, "requested": false })).into_response();
+    }
+    match request_access(&pool, twitch_user_id, &twitch_login.to_lowercase()).await {
+        Ok(_) => Json(json!({ "allowed": false, "requested": true })).into_response(),
+        Err(e) => access_db_error("request", e),
+    }
+}
+
+pub async fn access_requests_get_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    match list_access_requests(&pool).await {
+        Ok(items) => Json(json!({ "items": items })).into_response(),
+        Err(e) => access_db_error("list", e),
+    }
+}
+
+pub async fn access_request_delete_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(twitch_user_id): Path<String>,
+) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    match remove_access_request(&pool, &twitch_user_id).await {
+        Ok(true) => Json(json!({ "ok": true })).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, Json(json!({ "error": "not_found" }))).into_response(),
+        Err(e) => access_db_error("reject", e),
     }
 }
 

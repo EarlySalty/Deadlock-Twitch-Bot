@@ -635,4 +635,12 @@ export const SOCIAL_EN: Record<string, string> = {
   'Auto-Posting': 'Auto-posting',
   'Gemeinsames Konto': 'Shared account',
   'Neu verbinden bis {datum}': 'Reconnect by {datum}',
+  'Zugang anfragen': 'Request access',
+  'Anfrage gesendet': 'Request sent',
+  'Deine Anfrage ist eingegangen. Sobald EarlySalty sie freigibt, kannst du hier loslegen.': 'Your request has been received. As soon as EarlySalty approves it, you can get started here.',
+  'Social Media wird für deinen Kanal erst nach Freigabe aktiv. Frag den Zugang hier an, EarlySalty schaltet dich dann frei.': 'Social Media becomes active for your channel after approval. Request access here and EarlySalty will unlock it for you.',
+  'Die Anfrage hat nicht geklappt. Versuch es gleich noch einmal.': 'The request failed. Please try again in a moment.',
+  'Social-Media-Anfragen': 'Social Media requests',
+  'Freischalten gibt dem Streamer Zugang zum Social-Media-Manager und entfernt die Anfrage aus der Liste.': 'Approving gives the streamer access to the Social Media Manager and removes the request from the list.',
+  'Die Anfragen sind gerade nicht erreichbar.': 'Requests are currently unavailable.',
 };

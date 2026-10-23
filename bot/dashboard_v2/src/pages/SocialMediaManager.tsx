@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Clapperboard, Loader2, ShieldAlert } from 'lucide-react';
+import { Clapperboard, Loader2 } from 'lucide-react';
 import { SocialMedia } from '@/pages/SocialMedia';
 import { AiEditorPanel } from '@/components/socialmedia/ai/AiEditorPanel';
 import { PlanProvider } from '@/context/PlanContext';
@@ -18,6 +18,7 @@ import { ZUGRIFF_LABELS } from '@/components/socialmedia/labels';
 import { resolveSocialMediaChannel } from '@/utils/socialMediaChannel';
 import { socialWorkspaceDepartureAllowed } from '@/components/socialmedia/studioNavigation';
 import { PREVIEW_SOCIAL_ROUTE } from '@/preview/routes';
+import { AdminSocialMediaAccessRequests, SocialMediaAccessRequestCard } from '@/components/socialmedia/SocialMediaAccessRequests';
 
 const SocialMediaPage = import.meta.env.MODE === 'preview'
   ? lazy(() => import('@/preview/SocialWorkspaces'))
@@ -62,6 +63,7 @@ export function SocialMediaManager() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media-access-list'] });
       queryClient.invalidateQueries({ queryKey: ['social-media-access'] });
+      queryClient.invalidateQueries({ queryKey: ['social-media-access-requests'] });
     },
   });
 
@@ -177,6 +179,8 @@ export function SocialMediaManager() {
         </div>}
       </header>
 
+      {authStatus?.isAdmin && <AdminSocialMediaAccessRequests />}
+
       <PlanProvider
           plan={authStatus?.plan ?? null}
           isAdmin={authStatus?.isAdmin ?? false}
@@ -196,15 +200,7 @@ export function SocialMediaManager() {
           ) : access?.allowed ? (
             <SocialMediaPage key={authStatus?.twitchUserId ?? ''} twitchUserId={authStatus?.twitchUserId ?? undefined} streamer={access.streamer ?? authStatus?.twitchLogin ?? ''} isAdmin={false} aiEditor={AiEditorPanel} />
           ) : (
-            <div className="panel-card rounded-2xl p-8 text-center">
-              <ShieldAlert className="w-12 h-12 text-warning mx-auto mb-4" />
-              <h2 className="text-xl font-bold text-white mb-2">{t('Noch nicht freigeschaltet')}</h2>
-              <p className="text-text-secondary">
-                {t(
-                  'Social Media wird für deinen Kanal erst nach Freigabe aktiv. Melde dich bei EarlySalty, wenn du deine Clips hier aufbereiten möchtest.',
-                )}
-              </p>
-            </div>
+            <SocialMediaAccessRequestCard requested={Boolean(access?.requested)} />
           )}
           </Suspense>
         </PlanProvider>

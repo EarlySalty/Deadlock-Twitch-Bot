@@ -147,6 +147,13 @@ export interface SocialMediaAccess {
   allowed: boolean;
   streamer: string | null;
   isAdmin: boolean;
+  requested?: boolean;
+}
+
+export interface SocialMediaAccessRequest {
+  twitch_user_id: string;
+  twitch_login: string;
+  requested_at: string;
 }
 
 /** Ein Eintrag der Freigabe-Liste (Admin-Sicht). */
@@ -174,6 +181,19 @@ export async function setPartnerAccess(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ twitch_user_id: twitchUserId, granted }),
   });
+}
+
+export async function requestSocialMediaAccess(): Promise<void> {
+  await fetchJson('/twitch/social-media/api/access/request', { method: 'POST' });
+}
+
+export async function fetchAccessRequests(): Promise<SocialMediaAccessRequest[]> {
+  const data = await fetchJson<{ items: SocialMediaAccessRequest[] }>('/twitch/social-media/api/access/requests');
+  return data.items ?? [];
+}
+
+export async function rejectAccessRequest(twitchUserId: string): Promise<void> {
+  await fetchJson(`/twitch/social-media/api/access/requests/${encodeURIComponent(twitchUserId)}`, { method: 'DELETE' });
 }
 
 export async function fetchStreamerLayout(twitchUserId: string | undefined): Promise<StreamerLayoutResponse> {
