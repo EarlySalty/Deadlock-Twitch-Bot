@@ -104,13 +104,14 @@ pub async fn observe(
         return Err(ObserverError::Configuration);
     }
     let bytes = read_video(video, config.max_video_bytes).await?;
-    let _browser = BROWSER.lock().await;
-    tokio::time::timeout(
-        Duration::from_millis(config.total_deadline_ms),
-        run(config, bytes, prompt),
-    )
+    let config = config.clone();
+    let prompt = prompt.to_owned();
+    tokio::spawn(async move {
+        let _browser = BROWSER.lock().await;
+        run(&config, bytes, &prompt).await
+    })
     .await
-    .map_err(|_| ObserverError::Timeout)?
+    .map_err(|_| ObserverError::Unavailable)?
 }
 
 async fn read_video(path: &Path, max_bytes: u64) -> Result<Vec<u8>, ObserverError> {
@@ -130,6 +131,7 @@ async fn run(
     bytes: Vec<u8>,
     prompt: &str,
 ) -> Result<String, ObserverError> {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(config.total_deadline_ms);
     let session = steel::SteelSession::attach(&config.steel_endpoint, config.step()).await?;
     let result = async {
         let path = session
@@ -140,7 +142,7 @@ async fn run(
             )
             .await?;
         let mut browser = cdp::Cdp::connect(&session.websocket_url(), config.step()).await?;
-        gemini::ask(&mut browser, config, &path, prompt).await
+        gemini::ask(&mut browser, config, &path, prompt, deadline).await
     }
     .await;
     session.clear_files().await;

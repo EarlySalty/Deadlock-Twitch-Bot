@@ -21,6 +21,13 @@ pub(super) async fn watch(
     runtime: &EditorRuntime,
 ) -> Option<String> {
     let config = runtime.limits.video_observer.as_ref()?;
+    match stored_answer(owner.pool, source, config).await {
+        Ok(Some(answer)) => return Some(answer),
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(job = %owner.job_namespace, %error, "stored video observation unreadable")
+        }
+    }
     let started = Instant::now();
     let result = observe(config, source, runtime).await;
     let elapsed_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
@@ -49,6 +56,23 @@ async fn observe(
     .map_err(|_| ObserverError::Source)?;
     let prompt = format!("{PROMPT}\n\nClip title: {}", source.title);
     video_observer::observe(config, &path, &prompt).await
+}
+
+async fn stored_answer(
+    pool: &PgPool,
+    source: &SourceIdentity,
+    config: &VideoObserverConfig,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT answer FROM public.social_ai_video_observations \
+         WHERE source_sha256 = $1 AND observer = $2 AND prompt_version = $3 AND outcome = 'answered' \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&source.sha256)
+    .bind(config.label())
+    .bind(PROMPT_VERSION)
+    .fetch_optional(pool)
+    .await
 }
 
 async fn record(
@@ -115,7 +139,7 @@ mod tests {
     async fn observations_are_stored_with_their_clip() {
         let db = postgres::TestPostgres::start().await;
         sqlx::raw_sql(include_str!(
-            "../../../../migrations/20261023200000_social_ai_video_observations.sql"
+            "../../../../migrations/20261024090000_social_ai_video_observations.sql"
         ))
         .execute(&db.pool)
         .await
@@ -151,6 +175,13 @@ mod tests {
         )
         .await
         .expect("failed row");
+        assert_eq!(
+            stored_answer(&db.pool, &source, &config())
+                .await
+                .expect("stored answer")
+                .as_deref(),
+            Some("keep in full")
+        );
         let rows: Vec<(String, Option<String>, Option<String>, String)> = sqlx::query_as(
             "SELECT outcome, answer, failure_code, observer FROM public.social_ai_video_observations WHERE twitch_clip_id = 'ParryParty' ORDER BY id",
         )

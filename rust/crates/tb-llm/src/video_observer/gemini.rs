@@ -27,9 +27,12 @@ pub(super) async fn ask(
     config: &VideoObserverConfig,
     path: &str,
     prompt: &str,
+    deadline: Instant,
 ) -> Result<String, ObserverError> {
     let target = cdp.open_page(&config.chat_url).await?;
-    let result = conversation(cdp, config, path, prompt).await;
+    let result = tokio::time::timeout_at(deadline, conversation(cdp, config, path, prompt))
+        .await
+        .unwrap_or(Err(ObserverError::Timeout));
     cdp.close_page(&target).await;
     result
 }
@@ -54,7 +57,7 @@ async fn wait_ready(cdp: &mut Cdp, config: &VideoObserverConfig) -> Result<(), O
         match cdp.eval(READY).await?.as_str() {
             Some("ready") => return Ok(()),
             Some("login") => return Err(ObserverError::NotLoggedIn),
-            _ if Instant::now() >= deadline => return Err(ObserverError::NotLoggedIn),
+            _ if Instant::now() >= deadline => return Err(ObserverError::Timeout),
             _ => sleep(POLL).await,
         }
     }
