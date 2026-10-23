@@ -20,7 +20,7 @@ uuid = { workspace = true }
 tb-observability = { workspace = true }
 fireworks-model-selection = { path = "../fireworks-model-selection" }
 uplink-infisical-transport = { path = "../../vendor/uplink-infisical-transport" }
-toml = "0.8"
+toml = "1.1"
 fs2 = "0.4"
 zeroize = { version = "1", features = ["serde"] }
 serde = { workspace = true }
