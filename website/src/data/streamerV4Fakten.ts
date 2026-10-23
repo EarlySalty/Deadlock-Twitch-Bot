@@ -12,13 +12,13 @@ export const HAEUFIGE_FRAGEN: Frage[] = [
     id: "kosten",
     frage: "Was kostet die Teilnahme am Partner-Netzwerk?",
     antwort:
-      "Nichts. Netzwerk Free kostet 0 €, ohne Abo und ohne Laufzeit. Auto-Raid in beide Richtungen, Chat-Schutz, alle Befehle, Overlay, Sendeplan und Go-Live im Community-Discord sind dauerhaft enthalten. Kostenpflichtig sind nur die freiwilligen Zusatzstufen: Netzwerk Plus für 4,99 € im Monat oder 49,90 € im Jahr und Studio für 12 €, 15 € oder 20 € im Monat. Alle Beträge sind Endpreise.",
+      "Nichts. Netzwerk Free kostet 0 €, ohne Abo und ohne Laufzeit. Auto-Raid in beide Richtungen, Chat-Schutz, alle Befehle, Overlay, Sendeplan und Go-Live im Community-Discord sind dauerhaft enthalten. Kostenpflichtig ist nur die freiwillige Zusatzstufe Netzwerk Plus für 4,99 € im Monat oder 49,90 € im Jahr. Alle Beträge sind Endpreise.",
   },
   {
     id: "testphase",
     frage: "Gibt es eine kostenlose Testphase oder eine Demo?",
     antwort:
-      "Ja, beides. Das Netzwerk selbst ist dauerhaft kostenlos und braucht deshalb keine Testphase. Netzwerk Plus kannst du im Monatsabo 30 Tage kostenlos testen. Kündigst du vor Ablauf, wird nichts berechnet. Ohne Anmeldung zeigt dir das Demo-Dashboard alle Auswertungen mit Beispieldaten.",
+      "Ja, beides. Das Netzwerk selbst ist dauerhaft kostenlos und braucht deshalb keine Testphase. Netzwerk Plus kannst du im Monatsabo 30 Tage kostenlos testen, einmal pro Kanal. Kündigst du vor Ablauf, wird nichts berechnet. Ohne Anmeldung zeigt dir das Demo-Dashboard alle Auswertungen mit Beispieldaten.",
   },
   {
     id: "kuendigung",
@@ -36,7 +36,7 @@ export const HAEUFIGE_FRAGEN: Frage[] = [
     id: "schnittstellen",
     frage: "Welche Integrationen und Schnittstellen gibt es?",
     antwort:
-      "Der Bot arbeitet mit Twitch (Raids, Live-Erkennung, Moderation, Clips) und Discord (Go-Live-Ankündigungen, Community). In den Studio-Stufen kommen YouTube, TikTok und Instagram für die Clip-Verteilung dazu. Für Entwickler gibt es drei öffentliche, rein lesende JSON-Endpunkte ohne Schlüssel: Live-Partner, Netzwerk-Kennzahlen und zuletzt gebannte Spam-Konten. Eine schreibende Entwickler-API bieten wir nicht an.",
+      "Der Bot arbeitet mit Twitch (Raids, Live-Erkennung, Moderation, Clips) und Discord (Go-Live-Ankündigungen, Community). Für Entwickler gibt es öffentliche, rein lesende JSON-Endpunkte ohne Schlüssel, zum Beispiel für Live-Partner, Netzwerk-Kennzahlen und zuletzt gebannte Spam-Konten. Eine schreibende Entwickler-API bieten wir nicht an.",
   },
   {
     id: "zielgruppe",

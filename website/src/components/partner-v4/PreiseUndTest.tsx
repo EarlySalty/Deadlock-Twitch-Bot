@@ -36,22 +36,11 @@ const stufen: Stufe[] = [
     id: "plus",
     name: "Netzwerk Plus",
     preis: "4,99 € im Monat",
-    zusatz: "Oder 49,90 € im Jahr. Im Monatsabo 30 Tage kostenlos testen.",
+    zusatz: "Oder 49,90 € im Jahr. Im Monatsabo 30 Tage kostenlos testen, einmal pro Kanal.",
     punkte: [
       "Voller Verlauf, Vergleiche, KI-Auswertung",
       "Lurker-Erinnerung und Raid-Vorrang",
       "Community-Hinweise im Chat abschaltbar",
-    ],
-  },
-  {
-    id: "studio",
-    name: "Studio",
-    preis: "ab 12 € im Monat",
-    zusatz: "Studio 12 €, Studio KI 15 €, Studio Schnitt 20 €.",
-    punkte: [
-      "Clips auf YouTube, TikTok und Instagram",
-      "Auto-Pilot mit Freigabe oder Einspruch",
-      "Je nach Version KI-Titel oder KI-Schnitt",
     ],
   },
 ];
@@ -68,7 +57,7 @@ export function PreiseUndTest() {
           )}
         />
 
-        <div className="mt-14 grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="mt-14 grid grid-cols-1 md:grid-cols-2 gap-6">
           {stufen.map((stufe, index) => (
             <ScrollReveal key={stufe.id} delay={index * 0.08}>
               <div

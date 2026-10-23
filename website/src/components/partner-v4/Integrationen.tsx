@@ -1,6 +1,6 @@
 import { landingText } from "@/lib/landingLocale";
 import type { ComponentType } from "react";
-import { Braces, Clapperboard, MessagesSquare, Radio } from "lucide-react";
+import { Braces, MessagesSquare, Radio } from "lucide-react";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import { PUBLIC_API_BASE } from "@/data/streamerV4Fakten";
@@ -25,12 +25,6 @@ const plattformen: Plattform[] = [
     name: "Discord",
     text: "Go-Live-Ankündigungen im Community-Discord und der Austausch mit den anderen Streamern im Netz.",
   },
-  {
-    id: "clips",
-    icon: Clapperboard,
-    name: "YouTube, TikTok, Instagram",
-    text: "In den Studio-Stufen verteilt der Bot deine Clips auf diese Plattformen, mit Freigabe oder Einspruch vor dem Termin.",
-  },
 ];
 
 const endpunkte = [
@@ -51,7 +45,7 @@ export function Integrationen() {
           )}
         />
 
-        <div className="mt-14 grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="mt-14 grid grid-cols-1 md:grid-cols-2 gap-6">
           {plattformen.map((plattform, index) => {
             const Icon = plattform.icon;
             return (
@@ -82,7 +76,7 @@ export function Integrationen() {
             </div>
             <p className="mt-3 text-sm leading-relaxed text-[var(--color-text-secondary)]">
               {landingText(
-                "Drei Endpunkte, rein lesend, JSON, ohne Schlüssel und ohne Anmeldung. Eine schreibende Entwickler-API bieten wir nicht an.",
+                "Rein lesend, JSON, ohne Schlüssel und ohne Anmeldung. Eine Auswahl, eine schreibende Entwickler-API bieten wir nicht an.",
               )}
             </p>
             <ul className="mt-5 space-y-3">
