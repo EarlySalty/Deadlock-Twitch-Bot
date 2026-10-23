@@ -711,6 +711,11 @@ async fn plan(
     if revision.is_some() {
         skill_ids.push(SkillId::FeedbackLearning);
     }
+    let multi_output = frozen
+        .publication
+        .get("multi_output_enabled")
+        .and_then(Value::as_bool)
+        == Some(true);
     let mut schema = if revision.is_some() {
         super::stage_contract::revision_schema(
             &runtime.limits.plan,
@@ -724,7 +729,12 @@ async fn plan(
             frozen.media.duration_ms,
         )
     };
-    super::stage_contract::drop_variants(&mut schema);
+    if multi_output {
+        schema["properties"]["variants"]["maxItems"] =
+            json!(runtime.limits.revisions.max_variants.saturating_sub(1));
+    } else {
+        super::stage_contract::drop_variants(&mut schema);
+    }
     let personal = match super::learning::personal_hints(ctx.pool, ctx.owner).await {
         Ok(hints) => hints,
         Err(error) => {
@@ -735,7 +745,7 @@ async fn plan(
     let request = EditorRequest {
         system: frozen.system(&skill_ids)?,
         text: planning_text(
-            json!({ "task": "The clip is published unchanged: full length, native framing, original audio, no cuts, no hook, no overlays. Return exactly one kept interval from 0 to source_duration_ms and set hook to null. Describe the moment truthfully from the analysis and segments, and write the publication copy. Publication copy follows the requested language and template, not subtitle language. Flag real uncertainty about the content for review; never flag cutting, layout or framing.", "source_duration_ms": frozen.media.duration_ms, "analysis": analysis, "language": language, "segments": segments, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base)) }),
+            json!({ "task": "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. Publication copy follows the requested language and template, not subtitle language.", "source_duration_ms": frozen.media.duration_ms, "analysis": analysis, "language": language, "segments": segments, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base)) }),
             &personal,
         ),
         frames: vec![],
@@ -787,7 +797,6 @@ async fn plan(
             "revision proposal without a revision",
         ));
     }
-    result.keep_full_source(frozen.media.duration_ms);
     if !analysis.uncertainty.is_empty() {
         result.plan.significant_uncertainty = true;
         for reason in &analysis.uncertainty {
@@ -1383,9 +1392,30 @@ async fn render_one(
         )
         .await
         .map_err(|_| AiEditorError::Render)?;
-        let rendered = super::render_prepared(&prepared, &runtime.limits.resources)
-            .await
-            .map_err(|_| AiEditorError::Render)?;
+        let layout = frozen
+            .layout
+            .as_ref()
+            .map(|value| StreamerLayout::from_stored_value(value, None, None))
+            .transpose()
+            .map_err(|_| AiEditorError::Source)?;
+        let mapped = subtitles(ctx.checkpoints, &validated, runtime)?;
+        let cam_height = layout
+            .as_ref()
+            .filter(|layout| layout.cam_enabled)
+            .map(|layout| layout.cam_position.h)
+            .unwrap_or(0);
+        let ass = super::validation::build_scaled_subtitle_ass(
+            &validated,
+            &mapped,
+            &frozen.source.title,
+            &frozen.source.login,
+            cam_height,
+            result.subtitle_scale_percent,
+        )?;
+        let rendered =
+            super::render_prepared(&prepared, layout.as_ref(), &ass, &runtime.limits.resources)
+                .await
+                .map_err(|_| AiEditorError::Render)?;
         let rendering_ms =
             i64::try_from(started.elapsed().as_millis()).map_err(|_| AiEditorError::Render)?;
         ctx.lease
@@ -1530,6 +1560,33 @@ async fn validate_one(
                 .into(),
         );
     }
+    let layout = frozen
+        .layout
+        .as_ref()
+        .map(|value| StreamerLayout::from_stored_value(value, None, None))
+        .transpose()
+        .map_err(|_| AiEditorError::Source)?;
+    let cam_height = layout
+        .as_ref()
+        .filter(|layout| layout.cam_enabled)
+        .map(|layout| layout.cam_position.h)
+        .unwrap_or(0);
+    let ass = super::validation::build_scaled_subtitle_ass(
+        &validated,
+        &mapped,
+        &frozen.source.title,
+        &frozen.source.login,
+        cam_height,
+        planning.subtitle_scale_percent,
+    )?;
+    reasons.extend(super::validation::subtitle_bounds_reasons(
+        &ass,
+        validated.output_duration_ms(),
+    ));
+    reasons.extend(super::media::framing_reasons(
+        layout.as_ref(),
+        &frozen.media,
+    ));
     reasons.sort();
     reasons.dedup();
     let needs_review =
@@ -1542,7 +1599,7 @@ async fn validate_one(
         produced_video::complete_render(ctx.pool, ctx.owner, video.id, &RenderedVideo {
             file_path: output.to_string_lossy().into_owned(), duration_ms: media.duration_ms as i64,
             needs_review, review_reasons: reasons.clone(),
-            metadata: json!({ "platforms": publication_copy(planning), "planning":planning, "rendering_ms": rendering_ms, "qa": { "decode": "passed", "aspect_ratio": "native", "original_audio_retained": frozen.media.has_audio, "subtitle_partial_cues": mapped.iter().filter(|cue| cue.partial).count(), "skill_versions": frozen.skills.iter().map(|skill| json!({ "id": skill.id, "version": skill.version, "sha256": skill.sha256 })).collect::<Vec<_>>() } }),
+            metadata: json!({ "platforms": publication_copy(planning), "planning":planning, "rendering_ms": rendering_ms, "qa": { "decode": "passed", "aspect_ratio": "9:16", "original_audio_retained": frozen.media.has_audio, "subtitle_partial_cues": mapped.iter().filter(|cue| cue.partial).count(), "skill_versions": frozen.skills.iter().map(|skill| json!({ "id": skill.id, "version": skill.version, "sha256": skill.sha256 })).collect::<Vec<_>>() } }),
         }).await.map_err(|_| AiEditorError::Storage)?;
     }
     Ok(StageCheckpoint::Validating {

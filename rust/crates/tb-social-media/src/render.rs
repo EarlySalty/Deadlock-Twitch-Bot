@@ -1,7 +1,8 @@
 use sqlx::PgPool;
 
 use crate::enrichment::get_enrichment;
-use crate::subtitles::ass_from_segments;
+use crate::layout::get_clip_stored_layout;
+use crate::subtitles::{ass_from_segments, build_branded_ass};
 use crate::video_processor::{VideoProcessor, VideoProcessorError};
 use crate::vocab::load_all_vocab;
 
@@ -34,6 +35,7 @@ pub async fn build_clip_ass(pool: &PgPool, clip_db_id: i64) -> Option<String> {
 pub async fn render_clip_vertical(
     vp: &VideoProcessor,
     pool: &PgPool,
+    clip_db_id: i64,
     input_path: &str,
     output_path: &str,
     max_duration: i64,
@@ -44,9 +46,16 @@ pub async fn render_clip_vertical(
     else {
         return Err(VideoProcessorError::ProductionBusy);
     };
-    let result =
-        render_clip_vertical_with_lease(&mut lease, vp, input_path, output_path, max_duration)
-            .await;
+    let result = render_clip_vertical_with_lease(
+        &mut lease,
+        vp,
+        pool,
+        clip_db_id,
+        input_path,
+        output_path,
+        max_duration,
+    )
+    .await;
     lease
         .release()
         .await
@@ -57,6 +66,8 @@ pub async fn render_clip_vertical(
 pub async fn render_clip_vertical_with_lease(
     lease: &mut crate::production_lease::ProductionLease,
     vp: &VideoProcessor,
+    pool: &PgPool,
+    clip_db_id: i64,
     input_path: &str,
     output_path: &str,
     max_duration: i64,
@@ -66,7 +77,38 @@ pub async fn render_clip_vertical_with_lease(
         .await
         .map_err(VideoProcessorError::ProductionLease)?;
     lease.mark_claimed_work();
-    vp.render_native(input_path, output_path, max_duration)
+    let layout = get_clip_stored_layout(pool, clip_db_id).await;
+    let (login, clip_title, custom_title): (String, Option<String>, Option<String>) =
+        sqlx::query_as(
+            "SELECT streamer_login, clip_title, custom_title FROM twitch_clips_social_media WHERE id = $1",
+        )
+        .bind(clip_db_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|error| VideoProcessorError::Parse(error.to_string()))?;
+    let source_duration = vp.get_video_info(input_path).await?.duration;
+    let duration = if source_duration > 0.0 {
+        source_duration.min(max_duration as f64)
+    } else {
+        max_duration as f64
+    };
+    let cam_height = layout
+        .as_ref()
+        .filter(|value| value.cam_enabled && value.mode == "stacked")
+        .map(|value| value.cam_position.clamped_to_target().h)
+        .unwrap_or(600);
+    let ass = build_branded_ass(
+        &[],
+        custom_title
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or(clip_title.as_deref())
+            .unwrap_or(""),
+        &login,
+        cam_height,
+        duration,
+    );
+    vp.render_branded(input_path, output_path, max_duration, layout.as_ref(), &ass)
         .await
 }
 

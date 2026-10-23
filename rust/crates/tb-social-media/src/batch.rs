@@ -80,7 +80,8 @@ pub async fn render_all_for_user(
             }
         };
         let output = format!("{out_dir}/{}.mp4", clip.clip_id);
-        match render_clip_vertical(vp, pool, &input, &output, BATCH_MAX_SECS).await {
+        match render_clip_vertical(vp, pool, clip.clip_db_id, &input, &output, BATCH_MAX_SECS).await
+        {
             Ok(()) => result.rendered.push(output),
             Err(crate::video_processor::VideoProcessorError::ProductionBusy) => {
                 result.deferred.push(clip.clip_id)

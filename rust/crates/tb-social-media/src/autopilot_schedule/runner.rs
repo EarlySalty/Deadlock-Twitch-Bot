@@ -573,12 +573,8 @@ impl AutopilotWorker {
             .checked_mul(1000)
             .ok_or(RunnerError::Source)?;
         let expected = checkpoint.source_media.duration_ms.min(maximum);
-        let (width, height) = crate::video_processor::native_dimensions(
-            checkpoint.source_media.width,
-            checkpoint.source_media.height,
-        );
-        if media.width != width
-            || media.height != height
+        if media.width != crate::layout::TARGET_WIDTH as u32
+            || media.height != crate::layout::TARGET_HEIGHT as u32
             || (checkpoint.source_media.has_audio && !media.has_audio)
             || media.duration_ms.abs_diff(expected) > self.config.media_limits.max_duration_drift_ms
         {
@@ -683,6 +679,8 @@ impl AutopilotWorker {
                 render_clip_vertical_with_lease(
                     lease,
                     &self.video_processor,
+                    &self.pool,
+                    job.clip_id,
                     source.to_str().ok_or(RunnerError::Source)?,
                     staged.to_str().ok_or(RunnerError::Source)?,
                     checkpoint.max_duration_seconds,

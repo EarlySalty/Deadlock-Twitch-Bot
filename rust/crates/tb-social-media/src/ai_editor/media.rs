@@ -6,10 +6,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-use crate::layout::{TARGET_HEIGHT, TARGET_WIDTH};
-use crate::video_processor::{
-    bounded_ffmpeg_command, native_dimensions, RenderResourceLimits, VideoProcessor,
-};
+use crate::layout::{StreamerLayout, TARGET_HEIGHT, TARGET_WIDTH};
+use crate::video_processor::{bounded_ffmpeg_command, RenderResourceLimits, VideoProcessor};
 
 use super::model::ResourceLimits;
 use super::validation::{EditorError, ErrorCode, ValidatedPlan};
@@ -453,9 +451,14 @@ pub async fn prepare_intervals(
 
 pub async fn render_prepared(
     prepared: &PreparedMedia,
+    layout: Option<&StreamerLayout>,
+    ass: &str,
     limits: &ResourceLimits,
 ) -> Result<PathBuf, EditorError> {
     check_resources(limits)?;
+    if ass.len() > limits.max_ass_bytes {
+        return Err(EditorError::new(ErrorCode::MediaTooLarge));
+    }
     let output = prepared.owned.0.join("rendered.mp4");
     if output.exists() {
         return Err(EditorError::new(ErrorCode::InvalidMedia));
@@ -470,10 +473,12 @@ pub async fn render_prepared(
     let processor = VideoProcessor::default();
     tokio::time::timeout(
         Duration::from_millis(limits.process_deadline_ms),
-        processor.render_native_limited(
+        processor.render_branded_limited(
             &prepared.path().to_string_lossy(),
             &output.to_string_lossy(),
             max_duration,
+            layout,
+            ass,
             RenderResourceLimits {
                 encoder_threads: limits.encoder_threads,
                 max_output_bytes: limits.max_output_bytes,
@@ -485,8 +490,8 @@ pub async fn render_prepared(
     .map_err(|_| EditorError::new(ErrorCode::ProcessFailed))?;
     check_output(&output, limits.max_output_bytes)?;
     let info = probe_path(&output, limits).await?;
-    if (info.width, info.height)
-        != native_dimensions(prepared.source_info.width, prepared.source_info.height)
+    if info.width != TARGET_WIDTH as u32
+        || info.height != TARGET_HEIGHT as u32
         || info.has_audio != prepared.source_info.has_audio
         || info.duration_ms.abs_diff(prepared.expected_duration_ms) > limits.max_duration_drift_ms
     {
@@ -602,7 +607,8 @@ pub(super) async fn validate_output(
     check_resources(limits)?;
     let path = source_path(root, output, limits.max_output_bytes)?;
     let info = probe_path(&path, limits).await?;
-    if (info.width, info.height) != native_dimensions(source.width, source.height)
+    if info.width != TARGET_WIDTH as u32
+        || info.height != TARGET_HEIGHT as u32
         || info.has_audio != source.has_audio
         || info.duration_ms.abs_diff(expected_duration_ms) > limits.max_duration_drift_ms
     {
@@ -624,6 +630,28 @@ pub(super) async fn validate_output(
         .args(["-map", "0:v:0", "-map", "0:a?", "-f", "null", "-"]);
     run_status(command, limits.process_deadline_ms).await?;
     Ok(info)
+}
+
+pub(super) fn framing_reasons(layout: Option<&StreamerLayout>, source: &MediaInfo) -> Vec<String> {
+    let Some(layout) = layout else {
+        return Vec::new();
+    };
+    if !layout.cam_enabled || layout.mode.trim().eq_ignore_ascii_case("blur_pad") {
+        return Vec::new();
+    }
+    let width = i64::from(source.width);
+    let height = i64::from(source.height);
+    let outside = |crop: &crate::layout::LayoutBox| {
+        crop.x < 0 || crop.y < 0 || crop.x + crop.w > width || crop.y + crop.h > height
+    };
+    if layout.source.width != width
+        || layout.source.height != height
+        || outside(&layout.game_crop)
+        || outside(&layout.cam_crop)
+    {
+        return vec!["Das gespeicherte Layout passt nicht zur Auflösung dieses Clips. Bitte prüfe Bildausschnitt und Facecam.".into()];
+    }
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -924,17 +952,29 @@ mod tests {
             max_output_bytes: 1024,
             ..resources.clone()
         };
-        assert!(render_prepared(&prepared, &bounded_render).await.is_err());
+        assert!(render_prepared(
+            &prepared,
+            None,
+            &crate::subtitles::build_ass(&[]),
+            &bounded_render,
+        )
+        .await
+        .is_err());
         assert!(!prepared.owned.0.join("rendered.mp4").exists());
-        let rendered = render_prepared(&prepared, &resources)
-            .await
-            .expect("render native audio and video");
+        let rendered = render_prepared(
+            &prepared,
+            None,
+            &crate::subtitles::build_ass(&[]),
+            &resources,
+        )
+        .await
+        .expect("render branded audio and video");
         let rendered_info = inspect_media(root.path(), &rendered, &resources)
             .await
             .expect("probe rendered media");
         assert_eq!(
             (rendered_info.width, rendered_info.height),
-            (prepared.source_info.width, prepared.source_info.height)
+            (TARGET_WIDTH as u32, TARGET_HEIGHT as u32)
         );
         assert!(rendered_info.has_audio);
         let decoded_frame = root.path().join("rendered-frame.jpg");

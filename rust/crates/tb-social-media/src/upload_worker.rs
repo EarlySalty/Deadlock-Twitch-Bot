@@ -411,7 +411,7 @@ impl UploadTask {
         }
 
         let converted_path = self
-            .convert_to_vertical(&local_path, &item.platform)
+            .convert_to_vertical(item.clip_db_id, &local_path, &item.platform)
             .await?;
         if item.platform != "tiktok" {
             self.update_upload_status_logged(
@@ -675,6 +675,7 @@ impl UploadTask {
 
     async fn convert_to_vertical(
         &self,
+        clip_db_id: i64,
         input_path: &str,
         platform: &str,
     ) -> Result<String, WorkerError> {
@@ -682,6 +683,7 @@ impl UploadTask {
         render_clip_vertical(
             &self.video_processor,
             &self.pool,
+            clip_db_id,
             input_path,
             &output_path,
             max_duration_for(platform),
@@ -1413,6 +1415,7 @@ mod tests {
                 r#"#!/bin/sh
 for out do :; done
 printf '%s\n' "$*" > "$out"
+cat overlay.ass >> "$out"
 "#,
             )
             .unwrap();
@@ -1518,7 +1521,7 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
     }
 
     #[tokio::test]
-    async fn upload_renders_the_clip_natively_without_logo_or_layout() {
+    async fn upload_renders_current_layout_title_and_subtitles_again() {
         let Some(pool) = make_pool("t_sm_upload_fresh_render").await else {
             return;
         };
@@ -1534,20 +1537,39 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
         std::fs::write(&input, b"input").unwrap();
         let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, clip_title) VALUES ('render', 'https://clips.test/render', 'nani', 'Alter Titel') RETURNING id")
             .fetch_one(&pool).await.unwrap();
-        let layout = crate::layout::default_streamer_layout();
+        let mut layout = crate::layout::default_streamer_layout();
         crate::layout::set_clip_layout_override(&pool, clip, Some(&layout))
             .await
             .unwrap();
         let worker = task(pool.clone());
         let output = worker
-            .convert_to_vertical(input.to_str().unwrap(), "tiktok")
+            .convert_to_vertical(clip, input.to_str().unwrap(), "tiktok")
             .await
             .unwrap();
-        let args = std::fs::read_to_string(&output).unwrap();
-        assert!(args.contains("setsar=1,scale=trunc(iw/2)*2:trunc(ih/2)*2"));
-        assert!(!args.contains("ddc-logo"));
-        assert!(!args.contains("overlay"));
-        assert!(!args.contains("Alter Titel"));
+        let first = std::fs::read_to_string(&output).unwrap();
+        assert!(first.contains("Alter Titel"));
+        layout.cam_position.h = 500;
+        crate::layout::set_clip_layout_override(&pool, clip, Some(&layout))
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE twitch_clips_social_media SET custom_title = 'Neuer Titel' WHERE id = $1",
+        )
+        .bind(clip)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO social_media_clip_enrichment (clip_db_id, transcript_segments) VALUES ($1, $2)")
+            .bind(i32::try_from(clip).unwrap()).bind(serde_json::json!([{"start_seconds":0.0,"end_seconds":2.0,"text":"Neue Worte"}])).execute(&pool).await.unwrap();
+        let output = worker
+            .convert_to_vertical(clip, input.to_str().unwrap(), "tiktok")
+            .await
+            .unwrap();
+        let next = std::fs::read_to_string(&output).unwrap();
+        assert!(next.contains("Neuer Titel"));
+        assert!(!next.contains("Alter Titel"));
+        assert!(!next.contains("Neue Worte"));
+        assert!(next.contains("1080:500"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
