@@ -427,7 +427,6 @@ impl PreviewWorker {
         match render_clip_vertical(
             &self.video_processor,
             &self.pool,
-            job.clip_db_id,
             &input,
             &staged,
             PREVIEW_MAX_SECS,

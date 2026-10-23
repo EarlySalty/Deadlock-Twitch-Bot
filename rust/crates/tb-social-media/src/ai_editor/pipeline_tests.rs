@@ -784,7 +784,6 @@ async fn static_full_video_and_manual_ai_share_the_lease_and_busy_previews_remai
         crate::render::render_clip_vertical(
             &processor,
             &db.pool,
-            clip,
             &original.to_string_lossy(),
             &output.to_string_lossy(),
             2
@@ -825,8 +824,6 @@ async fn static_full_video_and_manual_ai_share_the_lease_and_busy_previews_remai
     crate::render::render_clip_vertical_with_lease(
         &mut lease,
         &processor,
-        &db.pool,
-        clip,
         &original.to_string_lossy(),
         &output.to_string_lossy(),
         2,
@@ -2050,38 +2047,7 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
     let (frozen, _) = preparing(&checkpoints, &runtime).expect("snapshot");
     let (base, validated) = planning(&checkpoints, &frozen, &runtime).expect("base plan");
     let mapped = subtitles(&checkpoints, &validated, &runtime).expect("real speech cues");
-    let ordinary =
-        super::super::validation::build_scaled_subtitle_ass(&validated, &mapped, "", "", 0, 100)
-            .expect("ordinary ASS");
-    let larger =
-        super::super::validation::build_scaled_subtitle_ass(&validated, &mapped, "", "", 0, 140)
-            .expect("scaled ASS");
-    let style_size = |ass: &str| {
-        ass.lines()
-            .find(|line| line.starts_with("Style: Default,"))
-            .expect("speech style")
-            .split(',')
-            .nth(2)
-            .expect("size")
-            .parse::<u16>()
-            .expect("numeric size")
-    };
-    assert!(style_size(&larger) > style_size(&ordinary));
-    assert_eq!(
-        ordinary
-            .lines()
-            .filter(|line| line.starts_with("Dialogue:"))
-            .collect::<Vec<_>>(),
-        larger
-            .lines()
-            .filter(|line| line.starts_with("Dialogue:"))
-            .collect::<Vec<_>>()
-    );
     assert_eq!(mapped[0].language.as_deref(), Some("de"));
-    assert!(super::super::validation::build_scaled_subtitle_ass(
-        &validated, &mapped, "", "", 0, 141
-    )
-    .is_err());
     let mut distinct = base.plan.clone();
     distinct.kept_intervals[0].start_ms = 100;
     let mut plan = base.clone();

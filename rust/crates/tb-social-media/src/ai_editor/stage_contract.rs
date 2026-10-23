@@ -191,6 +191,16 @@ impl Analysis {
 }
 
 impl Planning {
+    pub fn keep_full_source(&mut self, duration_ms: u64) {
+        self.plan.kept_intervals = vec![super::KeptInterval {
+            start_ms: 0,
+            end_ms: duration_ms,
+            reason: "Originalclip ohne Schnitt".into(),
+        }];
+        self.plan.hook = None;
+        self.variants.clear();
+    }
+
     pub fn clean_texts(&mut self, max_bytes: usize) {
         super::validation::clean_plan_texts(&mut self.plan, max_bytes);
         for variant in &mut self.variants {

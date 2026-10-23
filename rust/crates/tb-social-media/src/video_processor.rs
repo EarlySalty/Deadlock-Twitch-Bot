@@ -21,12 +21,11 @@ const AUDIO_BITRATE: &str = "192k";
 const AUDIO_SAMPLE_RATE: &str = "48000";
 const MAX_FPS: &str = "60";
 const BRAND_GOLD: &str = "0xC5A059";
-const LOGO: &[u8] = include_bytes!("../assets/ddc-logo.png");
-const FONT: &[u8] = include_bytes!("../assets/DejaVuSans-Bold.ttf");
+const NATIVE_FILTER: &str = "setsar=1,scale=trunc(iw/2)*2:trunc(ih/2)*2";
 
-struct BrandedRenderDirectory(PathBuf);
+struct RenderDirectory(PathBuf);
 
-impl Drop for BrandedRenderDirectory {
+impl Drop for RenderDirectory {
     fn drop(&mut self) {
         if let Err(error) = std::fs::remove_dir_all(&self.0) {
             if error.kind() != std::io::ErrorKind::NotFound {
@@ -304,6 +303,10 @@ pub fn plan_vertical_render(layout: Option<&StreamerLayout>) -> VerticalRender {
     }
 }
 
+pub fn native_dimensions(width: u32, height: u32) -> (u32, u32) {
+    (width - width % 2, height - height % 2)
+}
+
 /// FFmpeg/ffprobe-Wrapper.
 #[derive(Debug, Clone)]
 pub struct VideoProcessor {
@@ -334,45 +337,32 @@ impl VideoProcessor {
         }
     }
 
-    pub async fn render_branded(
+    pub async fn render_native(
         &self,
         input_path: &str,
         output_path: &str,
         max_duration: i64,
-        layout: Option<&StreamerLayout>,
-        ass: &str,
     ) -> Result<(), VideoProcessorError> {
-        self.render_branded_inner(input_path, output_path, max_duration, layout, ass, None)
+        self.render_native_inner(input_path, output_path, max_duration, None)
             .await
     }
 
-    pub(crate) async fn render_branded_limited(
+    pub(crate) async fn render_native_limited(
         &self,
         input_path: &str,
         output_path: &str,
         max_duration: i64,
-        layout: Option<&StreamerLayout>,
-        ass: &str,
         limits: RenderResourceLimits,
     ) -> Result<(), VideoProcessorError> {
-        self.render_branded_inner(
-            input_path,
-            output_path,
-            max_duration,
-            layout,
-            ass,
-            Some(limits),
-        )
-        .await
+        self.render_native_inner(input_path, output_path, max_duration, Some(limits))
+            .await
     }
 
-    async fn render_branded_inner(
+    async fn render_native_inner(
         &self,
         input_path: &str,
         output_path: &str,
         max_duration: i64,
-        layout: Option<&StreamerLayout>,
-        ass: &str,
         limits: Option<RenderResourceLimits>,
     ) -> Result<(), VideoProcessorError> {
         let started = std::time::Instant::now();
@@ -386,73 +376,56 @@ impl VideoProcessor {
             .parent()
             .ok_or_else(|| VideoProcessorError::OutputMissing(output_path.to_string()))?;
         tokio::fs::create_dir_all(parent).await?;
-        let assets = output.with_extension(format!("assets-{}", tb_crypto::random_hex_token(8)));
-        // Kein await zwischen exklusiver Anlage und Besitzübergabe an den Guard.
-        std::fs::create_dir(&assets)?;
-        let owned_assets = BrandedRenderDirectory(assets);
-        let assets = &owned_assets.0;
-        let render_temp = assets.join("render.mp4");
-        let result = async {
-            tokio::fs::write(assets.join("ddc-logo.png"), LOGO).await?;
-            tokio::fs::write(assets.join("DejaVuSans-Bold.ttf"), FONT).await?;
-            tokio::fs::write(assets.join("overlay.ass"), ass).await?;
-            let base_filter = match plan_vertical_render(layout) {
-                VerticalRender::Compose { filter, .. } => filter,
-                VerticalRender::BlurPad => build_fallback_filter(),
-            };
-            let filter = format!(
-                "{};[1:v]scale=120:120[logo];[vout][logo]overlay=48:300:shortest=1[branded];[branded]ass=overlay.ass:fontsdir=.[final]",
-                base_filter
-            );
-            let mut cmd = if let Some(limits) = limits {
-                bounded_ffmpeg_command(&self.ffmpeg, limits.max_output_bytes)
-            } else {
-                tokio::process::Command::new(&self.ffmpeg)
-            };
-            cmd.kill_on_drop(true)
-                .current_dir(assets)
-                .args(["-hide_banner", "-loglevel", "error"]);
-            if let Some(limits) = limits {
-                cmd.args(["-filter_threads", &limits.encoder_threads.to_string()])
-                    .args(["-filter_complex_threads", &limits.encoder_threads.to_string()])
-                    .args(["-threads", &limits.encoder_threads.to_string()]);
-            }
-            cmd.arg("-i").arg(&input);
-            if let Some(limits) = limits {
-                cmd.args(["-threads", &limits.encoder_threads.to_string()]);
-            }
-            cmd.args(["-loop", "1", "-i", "ddc-logo.png", "-filter_complex", &filter,
-                    "-map", "[final]", "-map", "0:a?", "-t"])
-                .arg(max_duration.max(1).to_string());
-            encode_options(&mut cmd);
-            if let Some(limits) = limits {
-                cmd.args(["-threads:v", &limits.encoder_threads.to_string()]);
-            }
-            let result = cmd.arg("-y").arg(&render_temp).output().await?;
-            if !result.status.success() {
-                return Err(VideoProcessorError::Ffmpeg(String::from_utf8_lossy(&result.stderr).trim().to_string()));
-            }
-            ensure_output(&render_temp.to_string_lossy())?;
-            if let Some(limits) = limits {
-                let size = tokio::fs::metadata(&render_temp).await?.len();
-                if size == 0 || size > limits.max_output_bytes {
-                    return Err(VideoProcessorError::Ffmpeg(
-                        "Das gerenderte Video ist leer oder überschreitet die zulässige Dateigröße."
-                            .to_string(),
-                    ));
-                }
-            }
-            tokio::fs::rename(&render_temp, &output).await?;
-            tracing::info!(
-                elapsed_ms = started.elapsed().as_millis() as u64,
-                preset = VIDEO_PRESET,
-                crf = VIDEO_CRF,
-                "social_media_render_complete"
-            );
-            Ok(())
+        let workspace = output.with_extension(format!("render-{}", tb_crypto::random_hex_token(8)));
+        std::fs::create_dir(&workspace)?;
+        let owned_workspace = RenderDirectory(workspace);
+        let render_temp = owned_workspace.0.join("render.mp4");
+        let mut cmd = if let Some(limits) = limits {
+            bounded_ffmpeg_command(&self.ffmpeg, limits.max_output_bytes)
+        } else {
+            tokio::process::Command::new(&self.ffmpeg)
+        };
+        cmd.kill_on_drop(true)
+            .current_dir(&owned_workspace.0)
+            .args(["-hide_banner", "-loglevel", "error"]);
+        if let Some(limits) = limits {
+            cmd.args(["-filter_threads", &limits.encoder_threads.to_string()])
+                .args(["-threads", &limits.encoder_threads.to_string()]);
         }
-        .await;
-        result
+        cmd.arg("-i").arg(&input);
+        if let Some(limits) = limits {
+            cmd.args(["-threads", &limits.encoder_threads.to_string()]);
+        }
+        cmd.args(["-vf", NATIVE_FILTER, "-map", "0:v:0", "-map", "0:a?", "-t"])
+            .arg(max_duration.max(1).to_string());
+        encode_options(&mut cmd);
+        if let Some(limits) = limits {
+            cmd.args(["-threads:v", &limits.encoder_threads.to_string()]);
+        }
+        let result = cmd.arg("-y").arg(&render_temp).output().await?;
+        if !result.status.success() {
+            return Err(VideoProcessorError::Ffmpeg(
+                String::from_utf8_lossy(&result.stderr).trim().to_string(),
+            ));
+        }
+        ensure_output(&render_temp.to_string_lossy())?;
+        if let Some(limits) = limits {
+            let size = tokio::fs::metadata(&render_temp).await?.len();
+            if size == 0 || size > limits.max_output_bytes {
+                return Err(VideoProcessorError::Ffmpeg(
+                    "Das gerenderte Video ist leer oder überschreitet die zulässige Dateigröße."
+                        .to_string(),
+                ));
+            }
+        }
+        tokio::fs::rename(&render_temp, &output).await?;
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            preset = VIDEO_PRESET,
+            crf = VIDEO_CRF,
+            "social_media_render_complete"
+        );
+        Ok(())
     }
 
     /// Liest Breite/Höhe/Dauer via ffprobe.
@@ -816,19 +789,17 @@ mod tests {
         std::fs::write(&input, b"source").expect("input");
         std::fs::write(
             &ffmpeg,
-            b"#!/bin/sh\nfor flag in -filter_threads -filter_complex_threads -threads -threads:v; do\n  previous=\n  found=0\n  for arg do\n    if [ \"$previous\" = \"$flag\" ] && [ \"$arg\" = 3 ]; then found=1; break; fi\n    previous=$arg\n  done\n  [ \"$found\" = 1 ] || exit 1\ndone\nfor last; do :; done\nprintf rendered > \"$last\"\n",
+            b"#!/bin/sh\nfor flag in -filter_threads -threads -threads:v; do\n  previous=\n  found=0\n  for arg do\n    if [ \"$previous\" = \"$flag\" ] && [ \"$arg\" = 3 ]; then found=1; break; fi\n    previous=$arg\n  done\n  [ \"$found\" = 1 ] || exit 1\ndone\nfor last; do :; done\nprintf rendered > \"$last\"\n",
         )
         .expect("ffmpeg shim");
         std::fs::set_permissions(&ffmpeg, std::fs::Permissions::from_mode(0o700))
             .expect("executable shim");
         let processor = VideoProcessor::new(ffmpeg.to_string_lossy(), "ffprobe");
         processor
-            .render_branded_limited(
+            .render_native_limited(
                 &input.to_string_lossy(),
                 &output.to_string_lossy(),
                 1,
-                None,
-                "",
                 RenderResourceLimits {
                     encoder_threads: 3,
                     max_output_bytes: 4096,
@@ -861,12 +832,10 @@ mod tests {
             .expect("executable shim");
         let processor = VideoProcessor::new(ffmpeg.to_string_lossy(), "ffprobe");
         let result = processor
-            .render_branded_limited(
+            .render_native_limited(
                 &input.to_string_lossy(),
                 &output.to_string_lossy(),
                 1,
-                None,
-                "",
                 RenderResourceLimits {
                     encoder_threads: 2,
                     max_output_bytes: 4096,
@@ -892,7 +861,7 @@ mod tests {
             std::fs::read_dir(dir.path())
                 .expect("tempdir")
                 .flatten()
-                .filter(|entry| entry.file_name().to_string_lossy().contains(".assets-"))
+                .filter(|entry| entry.file_name().to_string_lossy().contains(".render-"))
                 .count(),
             0
         );
@@ -921,13 +890,7 @@ mod tests {
 
         let processor = VideoProcessor::new(ffmpeg.to_string_lossy(), "ffprobe");
         let result = processor
-            .render_branded(
-                &input.to_string_lossy(),
-                &output.to_string_lossy(),
-                1,
-                None,
-                "",
-            )
+            .render_native(&input.to_string_lossy(), &output.to_string_lossy(), 1)
             .await;
         assert!(matches!(result, Err(VideoProcessorError::Ffmpeg(_))));
         assert_eq!(tokio::fs::read(&output).await.unwrap(), b"complete");
@@ -938,7 +901,7 @@ mod tests {
                 .filter(|entry| {
                     let name = entry.file_name();
                     let name = name.to_string_lossy();
-                    name.contains(".tmp-") || name.contains(".assets-")
+                    name.contains(".tmp-") || name.contains(".render-")
                 })
                 .count(),
             0
@@ -1001,16 +964,13 @@ mod tests {
         let processor = VideoProcessor::new(ffmpeg.to_string_lossy(), "ffprobe");
         let input_path = input.to_string_lossy();
         let output_path = output.to_string_lossy();
-        let ass = crate::subtitles::build_ass(&[]);
         let mut render = Box::pin(async {
             if bounded {
                 processor
-                    .render_branded_limited(
+                    .render_native_limited(
                         &input_path,
                         &output_path,
                         300,
-                        None,
-                        &ass,
                         RenderResourceLimits {
                             encoder_threads: 1,
                             max_output_bytes: 5_000_000,
@@ -1019,7 +979,7 @@ mod tests {
                     .await
             } else {
                 processor
-                    .render_branded(&input_path, &output_path, 300, None, &ass)
+                    .render_native(&input_path, &output_path, 300)
                     .await
             }
         });
