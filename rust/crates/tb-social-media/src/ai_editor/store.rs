@@ -529,7 +529,7 @@ async fn load_versions(
             let planning: super::stage_contract::Planning = parse_json(&text)?;
             decisions = planning
                 .plan
-                .kept_intervals
+                .timeline()
                 .into_iter()
                 .map(|interval| TimelineEntry {
                     start_ms: interval.start_ms as i64,

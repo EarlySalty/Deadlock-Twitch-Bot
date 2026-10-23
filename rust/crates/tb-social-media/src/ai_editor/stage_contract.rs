@@ -68,6 +68,11 @@ fn object(properties: Value) -> Value {
     json!({ "type": "object", "additionalProperties": false, "properties": properties, "required": required })
 }
 
+fn nullable(mut schema: Value) -> Value {
+    schema["type"] = json!(["object", "null"]);
+    schema
+}
+
 fn text(max: usize) -> Value {
     json!({ "type": "string", "minLength": 1, "maxLength": max })
 }
@@ -94,10 +99,14 @@ pub(super) fn planning_schema(
     let copy = object(
         json!({ "title": text(copy_limits.max_title_chars), "description": text(copy_limits.max_description_chars), "hashtags": array(text(copy_limits.max_hashtag_chars), copy_limits.max_hashtags) }),
     );
+    let interval = object(
+        json!({ "start_ms": timestamp(duration), "end_ms": timestamp(duration), "reason": text(limits.max_text_bytes) }),
+    );
     let plan = object(json!({
         "schema_version": { "type": "integer", "const": 1 },
         "source_duration_ms": { "type": "integer", "const": duration },
-        "kept_intervals": { "type": "array", "minItems": 1, "maxItems": limits.max_intervals, "items": object(json!({ "start_ms": timestamp(duration), "end_ms": timestamp(duration), "reason": text(limits.max_text_bytes) })) },
+        "kept_intervals": { "type": "array", "minItems": 1, "maxItems": limits.max_intervals, "items": interval.clone() },
+        "hook": nullable(interval),
         "observed_highlights": array(object(json!({ "start_ms": timestamp(duration), "end_ms": timestamp(duration), "observation": text(limits.max_text_bytes) })), limits.max_highlights),
         "significant_uncertainty": { "type": "boolean" },
         "review_reasons": array(text(limits.max_text_bytes), limits.max_review_reasons),

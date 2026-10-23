@@ -198,6 +198,7 @@ async fn prepared(
                 end_ms: frozen.media.duration_ms,
                 reason: "Vollständiger Zusammenhang".into(),
             }],
+            hook: None,
             observed_highlights: vec![],
             significant_uncertainty: false,
             review_reasons: vec![],

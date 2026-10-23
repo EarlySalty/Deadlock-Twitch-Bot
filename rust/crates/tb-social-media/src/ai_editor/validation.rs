@@ -10,6 +10,7 @@ pub enum ErrorCode {
     SourceMismatch,
     InvalidInterval,
     IntervalOrder,
+    InvalidHook,
     TooManyIntervals,
     OutputTooLong,
     TooMuchRemoved,
@@ -40,8 +41,12 @@ impl EditorError {
 #[derive(Debug, Clone)]
 pub struct ValidatedPlan {
     plan: EditPlan,
+    timeline: Vec<KeptInterval>,
     output_duration_ms: u64,
 }
+
+const MIN_HOOK_MS: u64 = 1_000;
+const MAX_HOOK_MS: u64 = 5_000;
 
 impl ValidatedPlan {
     pub fn source_duration_ms(&self) -> u64 {
@@ -53,7 +58,7 @@ impl ValidatedPlan {
     }
 
     pub fn intervals(&self) -> &[KeptInterval] {
-        &self.plan.kept_intervals
+        &self.timeline
     }
 
     pub fn needs_review(&self) -> bool {
@@ -175,13 +180,14 @@ pub fn validate_plan(
             .checked_add(interval.end_ms - interval.start_ms)
             .ok_or_else(|| EditorError::new(ErrorCode::OutputTooLong))?;
     }
-    if output_duration_ms > limits.max_output_duration_ms {
-        return Err(EditorError::new(ErrorCode::OutputTooLong));
-    }
     if (output_duration_ms as u128) * 100
         < (measured_duration_ms as u128) * (limits.min_kept_percent as u128)
     {
         return Err(EditorError::new(ErrorCode::TooMuchRemoved));
+    }
+    if let Some(hook) = &plan.hook {
+        validate_hook(hook, &plan.kept_intervals, limits)?;
+        output_duration_ms += hook.end_ms - hook.start_ms;
     }
     for highlight in &plan.observed_highlights {
         if highlight.start_ms >= highlight.end_ms || highlight.end_ms > measured_duration_ms {
@@ -195,10 +201,28 @@ pub fn validate_plan(
     for reason in &plan.review_reasons {
         valid_decision_text(reason, limits.max_text_bytes)?;
     }
+    if output_duration_ms > limits.max_output_duration_ms {
+        return Err(EditorError::new(ErrorCode::OutputTooLong));
+    }
     Ok(ValidatedPlan {
+        timeline: plan.timeline(),
         plan,
         output_duration_ms,
     })
+}
+
+fn validate_hook(
+    hook: &KeptInterval,
+    kept: &[KeptInterval],
+    limits: &PlanLimits,
+) -> Result<(), EditorError> {
+    let length = hook.end_ms.saturating_sub(hook.start_ms);
+    if !(MIN_HOOK_MS..=MAX_HOOK_MS).contains(&length)
+        || !preserves_highlight(kept, hook.start_ms, hook.end_ms)
+    {
+        return Err(EditorError::new(ErrorCode::InvalidHook));
+    }
+    valid_decision_text(&hook.reason, limits.max_text_bytes)
 }
 
 fn forbidden_decision_char(ch: char) -> bool {
@@ -232,7 +256,7 @@ pub(crate) fn clean_decision_text(text: &mut String, max_bytes: usize) {
 }
 
 pub(crate) fn clean_plan_texts(plan: &mut EditPlan, max_bytes: usize) {
-    for interval in &mut plan.kept_intervals {
+    for interval in plan.kept_intervals.iter_mut().chain(plan.hook.as_mut()) {
         clean_decision_text(&mut interval.reason, max_bytes);
     }
     for highlight in &mut plan.observed_highlights {
@@ -509,6 +533,7 @@ mod tests {
                     reason: "Team reaction".into(),
                 },
             ],
+            hook: None,
             observed_highlights: vec![Highlight {
                 start_ms: 1500,
                 end_ms: 2500,
@@ -518,6 +543,44 @@ mod tests {
             review_reasons: vec![],
             layout: LayoutIntent::ExistingStable,
         }
+    }
+
+    #[test]
+    fn hook_plays_first_and_must_repeat_kept_footage() {
+        let mut teaser = plan();
+        teaser.hook = Some(KeptInterval {
+            start_ms: 1500,
+            end_ms: 3000,
+            reason: "Elimination als Einstieg".into(),
+        });
+        let validated = validate_plan(teaser.clone(), 10_000, &limits()).expect("valid hook");
+        assert_eq!(validated.intervals()[0].start_ms, 1500);
+        assert_eq!(validated.intervals().len(), 3);
+        assert_eq!(validated.output_duration_ms(), 7_500);
+        let mut outside = teaser.clone();
+        outside.hook = Some(KeptInterval {
+            start_ms: 4500,
+            end_ms: 5500,
+            reason: "Leerlauf".into(),
+        });
+        assert_eq!(
+            validate_plan(outside, 10_000, &limits())
+                .err()
+                .map(|e| e.code),
+            Some(ErrorCode::InvalidHook)
+        );
+        let mut long = teaser;
+        long.kept_intervals[1].start_ms = 2000;
+        long.kept_intervals[0].end_ms = 2000;
+        long.hook = Some(KeptInterval {
+            start_ms: 2000,
+            end_ms: 8000,
+            reason: "Zu lang".into(),
+        });
+        assert_eq!(
+            validate_plan(long, 10_000, &limits()).err().map(|e| e.code),
+            Some(ErrorCode::InvalidHook)
+        );
     }
 
     #[test]

@@ -31,7 +31,7 @@ use super::{
     source::{SourceIdentity, Workspace},
     stage_contract::{analysis_schema, planning_schema, Analysis, Planning},
     store::{AiStage, StageCheckpoint, TimelineEntry, TranscriptSegment},
-    AiEditorError, EditorRuntime, MediaInfo, SkillId, SourceSubtitle, ValidatedPlan,
+    AiEditorError, EditPlan, EditorRuntime, MediaInfo, SkillId, SourceSubtitle, ValidatedPlan,
 };
 
 pub struct ProductionContext<'a> {
@@ -745,7 +745,7 @@ async fn plan(
     let request = EditorRequest {
         system: frozen.system(&skill_ids)?,
         text: planning_text(
-            json!({ "task": "Produce one coherent main edit with the existing stable layout, original audio and real speech cues. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output or force cuts. Keep uncertain content for review. Publication copy follows the requested language and template, not subtitle language.", "source_duration_ms": frozen.media.duration_ms, "analysis": analysis, "language": language, "segments": segments, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base)) }),
+            json!({ "task": "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. Publication copy follows the requested language and template, not subtitle language.", "source_duration_ms": frozen.media.duration_ms, "analysis": analysis, "language": language, "segments": segments, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base)) }),
             &personal,
         ),
         frames: vec![],
@@ -814,12 +814,12 @@ async fn plan(
     let _ = subtitles(ctx.checkpoints, &validated, runtime)?;
     let decisions = result
         .plan
-        .kept_intervals
-        .iter()
+        .timeline()
+        .into_iter()
         .map(|interval| TimelineEntry {
             start_ms: interval.start_ms as i64,
             end_ms: interval.end_ms as i64,
-            description: interval.reason.clone(),
+            description: interval.reason,
         })
         .collect();
     let review_reasons = result.plan.review_reasons.clone();
@@ -894,20 +894,21 @@ fn validate_variants(
             "variants not allowed or too many",
         ));
     }
-    let mut intervals = vec![&result.plan.kept_intervals];
+    let cut = |plan: &EditPlan| {
+        plan.timeline()
+            .iter()
+            .map(|i| (i.start_ms, i.end_ms))
+            .collect::<Vec<_>>()
+    };
+    let mut intervals = vec![cut(&result.plan)];
     for variant in &result.variants {
-        if intervals.iter().any(|previous| {
-            previous.iter().map(|i| (i.start_ms, i.end_ms)).eq(variant
-                .plan
-                .kept_intervals
-                .iter()
-                .map(|i| (i.start_ms, i.end_ms)))
-        }) {
+        let current = cut(&variant.plan);
+        if intervals.contains(&current) {
             return Err(AiEditorError::plan_rejected(
                 "variant duplicates an earlier cut",
             ));
         }
-        intervals.push(&variant.plan.kept_intervals);
+        intervals.push(current);
     }
     Ok(())
 }
