@@ -200,6 +200,7 @@ export const VERWALTUNG_EN: Record<string, string> = {
   'Re-Auth nötig': 'Re-auth needed',
   'Unvollständig': 'Incomplete',
   'Twitch ist vollständig verbunden. Du musst hier nichts tun.': 'Twitch is fully connected. Nothing to do here.',
+  'Twitch ist vollständig verbunden. Neu autorisieren musst du nur, wenn etwas nicht funktioniert.': 'Twitch is fully connected. You only need to reauthorize if something is not working.',
   'Das bestehende Twitch-OAuth ist zur Re-Auth markiert. Bitte neu autorisieren.': 'Your current Twitch OAuth is marked for re-auth. Please reauthorize.',
   '{count} Scopes fehlen. Neu autorisieren, um alle Funktionen zu nutzen.': '{count} scopes are missing. Reauthorize to use all features.',
   '1 Scope fehlt. Bitte neu autorisieren.': '1 scope is missing. Please reauthorize.',

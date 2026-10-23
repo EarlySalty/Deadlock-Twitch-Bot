@@ -164,8 +164,11 @@ export function VerwaltungPage() {
 
   const oauthConnected = oauthStatus === 'connected' && !hasScopeIssue;
   const oauthStatusText = oauthConnected ? 'Verbunden' : needsReauth ? 'Re-Auth nötig' : 'Unvollständig';
-  const oauthHintText = oauthConnected
+  const reauthHidden = oauthConnected && home.oauth?.reauthOffered === false;
+  const oauthHintText = reauthHidden
     ? 'Twitch ist vollständig verbunden. Du musst hier nichts tun.'
+    : oauthConnected
+    ? 'Twitch ist vollständig verbunden. Neu autorisieren musst du nur, wenn etwas nicht funktioniert.'
     : needsReauth
       ? 'Das bestehende Twitch-OAuth ist zur Re-Auth markiert. Bitte neu autorisieren.'
       : missingScopeCount > 1
@@ -187,7 +190,7 @@ export function VerwaltungPage() {
           status={t(oauthStatusText)}
           tone={oauthConnected ? 'success' : needsReauth ? 'error' : 'warning'}
           sentence={t(oauthHintText)}
-          footer={oauthConnected && home.oauth?.reauthOffered === false ? null : <a href={reconnectUrl} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"><ShieldCheck className="h-4 w-4" />{t("Jetzt neu autorisieren")}</a>}
+          footer={reauthHidden ? null : <a href={reconnectUrl} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"><ShieldCheck className="h-4 w-4" />{t("Jetzt neu autorisieren")}</a>}
         >
           <ScopeDisclosure granted={grantedScopes} missing={missingScopes} />
         </ConnectionCard>
