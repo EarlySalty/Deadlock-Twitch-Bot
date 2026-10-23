@@ -1,13 +1,15 @@
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AiJobView, AiVideoVersion } from './api';
+import type { AiJobView, AiVersionRating, AiVideoVersion } from './api';
 import { approveAiVersion, decideAiProposal, decideAiVersion, fetchAiPublishingContext, reviseAiVersion, scheduleAiVersion, selectAiVersion } from './api';
 import { MetadataPanel } from './MetadataPanel';
 import { editorErrorExplanation } from './failure';
 import { proposalCost } from './proposalCost';
 
 type Action = 'revise' | 'confirm' | 'cancel' | 'select' | 'accept' | 'reject' | 'approve' | 'schedule';
+
+const ratingActions: Action[] = ['select', 'accept', 'reject'];
 
 const platforms = [{id:'youtube',label:'YouTube'},{id:'tiktok',label:'TikTok'},{id:'instagram',label:'Instagram'}];
 
@@ -33,6 +35,8 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
   const [confirmed,setConfirmed] = useState(false);
   const [message,setMessage] = useState<string | { scheduledAt: string }>('');
   const [reloading,setReloading] = useState(false);
+  const [rated,setRated] = useState<AiVersionRating | null>(null);
+  const [lastAction,setLastAction] = useState<Action | null>(null);
   const busyJob = !['review','failed','rejected'].includes(job.status);
   const feedbackBytes = new TextEncoder().encode(feedback).length;
   const action = useMutation({
@@ -46,14 +50,18 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
       const result = await scheduleAiVersion(channel,job.id,version.id,selected);
       return {job:result.job,message: { scheduledAt: result.scheduledAt }};
     },
-    onMutate: () => setMessage(''),
-    onSuccess: (result,kind) => { setMessage(result.message); setConfirmed(false); if (kind === 'revise') setFeedback(''); onJob(result.job); },
+    onMutate: (kind) => { setMessage(''); setLastAction(kind); },
+    onSuccess: (result,kind) => { if (kind === 'accept' || kind === 'reject') setRated(kind === 'accept' ? 'accepted' : 'rejected'); setMessage(result.message); setConfirmed(false); if (kind === 'revise') setFeedback(''); onJob(result.job); },
   });
   const blocked = action.isPending || action.isError || reloading || metadataEditing;
+  const busy = action.isPending || reloading;
   useEffect(() => {
-    onBusyChange?.(blocked);
+    onBusyChange?.(busy);
     return () => onBusyChange?.(false);
-  }, [blocked, onBusyChange]);
+  }, [busy, onBusyChange]);
+  const rating = rated ?? version?.rating ?? null;
+  const preferred = version !== null && job.selected_version_id === version.id;
+  const ratingFeedback = lastAction !== null && ratingActions.includes(lastAction);
   const reload = async () => {
     setReloading(true);
     try {
@@ -78,7 +86,8 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
     {job.status === 'rejected' && <p role="status">{t("Der Änderungsvorschlag wurde verworfen. Die vorherige Fassung ist weiterhin zur Sichtung verfügbar.")}</p>}
     {version && <>
       <div className="social-ai-version-actions"><h4>{t('Fassung {version}{variant} beurteilen', { version: version.version_no, variant: version.variant_index > 0 ? t(', Variante {variant}', { variant: version.variant_index + 1 }) : '' })}</h4><p>{t("Bewertungen und bevorzugte Fassung sind unabhängig von der Videofreigabe.")}</p>
-        <div className="social-ai-actions"><button type="button" className="studio-button" disabled={blocked || historical || job.selected_version_id === version.id} onClick={() => action.mutate('select')}>{job.selected_version_id === version.id ? t("Bevorzugte Fassung") : t("Diese Fassung verwenden")}</button><button type="button" className="studio-button" disabled={blocked || historical} onClick={() => action.mutate('accept')}>{t("Fassung gefällt mir")}</button><button type="button" className="studio-button" disabled={blocked || version.status !== 'review'} onClick={() => action.mutate('reject')}>{t("Fassung gefällt mir nicht")}</button></div>
+        <div className="social-ai-actions"><button type="button" className="studio-button" aria-pressed={preferred} disabled={blocked || historical} onClick={() => { if (!preferred) action.mutate('select'); }}>{preferred ? t("Bevorzugte Fassung") : t("Diese Fassung verwenden")}</button><button type="button" className="studio-button" aria-pressed={rating === 'accepted'} disabled={blocked || historical} onClick={() => action.mutate('accept')}>{t("Fassung gefällt mir")}</button><button type="button" className="studio-button" aria-pressed={rating === 'rejected'} disabled={blocked || version.status !== 'review'} onClick={() => action.mutate('reject')}>{t("Fassung gefällt mir nicht")}</button></div>
+        {ratingFeedback && <ActionFeedback pending={action.isPending} message={message} />}
       </div>
       <form onSubmit={(event) => {event.preventDefault(); if (canStart && !historical && !busyJob && !blocked && feedback.trim() && feedbackBytes <= 2000) action.mutate('revise');}}>
         <label htmlFor={feedbackId}>{t("Was soll sich an dieser Fassung ändern?")}</label>
@@ -98,8 +107,15 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
         <p>{t("Die Übernahme verwendet genau diese fertige Datei, ohne erneute Analyse oder Videoerstellung.")} {version.status === 'scheduled' ? t("Diese Fassung ist bereits im Zeitplan. Weitere Plattformen brauchen eine gesonderte Freigabe und Übernahme.") : t("Nur die ausdrücklich übernommenen Plattformen werden eingeplant.")}</p>
       </fieldset>}
     </>}
-    {action.isPending && <p role="status">{t("Änderung wird gespeichert…")}</p>}
-    {message && <p role="status">{typeof message === 'string' ? t(message) : t('Ohne erneutes Rendern eingeplant für {date} (Ortszeit deines Browsers).', { date: new Date(message.scheduledAt).toLocaleString(locale) })}</p>}
+    {!ratingFeedback && <ActionFeedback pending={action.isPending} message={message} />}
     {action.isError && <div className="social-ai-alert" role="alert"><div><p>{editorErrorExplanation(action.error, t)} {t("Lade den aktuellen Stand neu, bevor du eine weitere Aktion ausführst.")}</p><button type="button" className="studio-button" disabled={reloading} onClick={() => { void reload(); }}>{reloading ? t("Stand wird geladen…") : t("Aktuellen Stand neu laden")}</button></div></div>}
   </section>;
+}
+
+function ActionFeedback({pending,message}: {pending: boolean; message: string | { scheduledAt: string }}) {
+  const t = useT();
+  const { locale } = useLanguage();
+  if (pending) return <p role="status">{t("Änderung wird gespeichert…")}</p>;
+  if (!message) return null;
+  return <p role="status">{typeof message === 'string' ? t(message) : t('Ohne erneutes Rendern eingeplant für {date} (Ortszeit deines Browsers).', { date: new Date(message.scheduledAt).toLocaleString(locale) })}</p>;
 }

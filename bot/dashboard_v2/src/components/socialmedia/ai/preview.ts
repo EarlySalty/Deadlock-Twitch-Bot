@@ -41,8 +41,8 @@ const BASE_JOB: AiJobView = {
   review_reasons: ['Prüfe, ob die Untertitel den gesprochenen Begriff korrekt wiedergeben.'],
   original_url: ORIGINAL,
   versions: [
-    { id: 2201, version_no: 1, created_at: '2026-10-11T08:18:03Z', status: 'review', duration_ms: 40600, file_url: OUTPUT, parent_version_id: null, job_id: 1101, variant_index: 0, original_url: ORIGINAL, decisions: [{start_ms:4200,end_ms:16500,description:'Einstieg behalten.'},{start_ms:26500,end_ms:54800,description:'Teamkampf und Reaktion behalten.'}], approved_platforms: [] },
-    { id: 2202, version_no: 2, created_at: '2026-10-11T08:25:00Z', status: 'failed', duration_ms: null, file_url: null, parent_version_id: 2201, job_id: 1102, variant_index: 0, original_url: null, decisions: [], approved_platforms: [] },
+    { id: 2201, version_no: 1, created_at: '2026-10-11T08:18:03Z', status: 'review', duration_ms: 40600, file_url: OUTPUT, parent_version_id: null, job_id: 1101, variant_index: 0, original_url: ORIGINAL, decisions: [{start_ms:4200,end_ms:16500,description:'Einstieg behalten.'},{start_ms:26500,end_ms:54800,description:'Teamkampf und Reaktion behalten.'}], approved_platforms: [], rating: null },
+    { id: 2202, version_no: 2, created_at: '2026-10-11T08:25:00Z', status: 'failed', duration_ms: null, file_url: null, parent_version_id: 2201, job_id: 1102, variant_index: 0, original_url: null, decisions: [], approved_platforms: [], rating: null },
   ],
   failure_code: null,
   failure_message: null,
@@ -180,6 +180,7 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
         if (!consent.external_ai_consent || !consent.global_allowed || typeof body.feedback !== 'string' || !body.feedback.trim()) return response({error:'not_allowed'},403);
         job = {...job,id:1104,parent_version_id:version.id,versions:autopilot ? job.versions.map((item) => item.id === version.id ? {...item,status:'rejected',approved_platforms:[]} : item) : job.versions,status:'awaiting_confirmation',stage:'planning',completed_at:null,revision_proposal:{summary:'Der Einstieg wird stärker gekürzt.',impact:'Die neue Fassung behält den Teamkampf und die ursprüngliche Reaktion.',reanalyze:false,requires_confirmation:true,estimated_provider_cost_usd:0}};
       } else if (action === 'select') job = {...job,selected_version_id:version.id};
+      else if (action === 'decision') job = {...job,versions:job.versions.map((item) => item.id === version.id ? {...item,rating:body.accept === true ? 'accepted' : 'rejected'} : item)};
       else if (action === 'approve' || action === 'schedule') {
         const selected = Array.isArray(body.platforms) ? body.platforms.filter((item): item is string => typeof item === 'string' && ['youtube','tiktok','instagram'].includes(item)) : [];
         if (!selected.length || (action === 'schedule' && selected.some((item) => !version.approved_platforms.includes(item)))) return response({error:'not_approved'},409);
