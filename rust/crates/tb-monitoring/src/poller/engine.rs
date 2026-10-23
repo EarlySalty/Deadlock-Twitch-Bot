@@ -239,7 +239,7 @@ impl PollEngine {
                 Ok(Some(ended_at)) => return Some(iso_seconds(ended_at)),
                 Ok(None) => {}
                 Err(error) => {
-                    tracing::debug!(%error, login = %login, "Stream-Ende konnte nicht gelesen werden");
+                    tracing::warn!(%error, login = %login, "Stream-Ende konnte nicht gelesen werden");
                 }
             }
         }
