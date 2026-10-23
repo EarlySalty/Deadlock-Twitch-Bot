@@ -227,6 +227,25 @@ impl PollEngine {
         }
     }
 
+    async fn announcement_ended_at(
+        &self,
+        login: &str,
+        stream_id: &str,
+        ended_now: bool,
+        now_iso: &str,
+    ) -> Option<String> {
+        if !stream_id.is_empty() {
+            match self.sessions.ended_at_of_stream(login, stream_id).await {
+                Ok(Some(ended_at)) => return Some(iso_seconds(ended_at)),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::debug!(%error, login = %login, "Stream-Ende konnte nicht gelesen werden");
+                }
+            }
+        }
+        ended_now.then(|| now_iso.to_string())
+    }
+
     async fn claim_announcement_reannounce_cooldown(&self, login: &str) {
         let Some(key) = announcement_reannounce_cooldown_key(login) else {
             return;
@@ -721,6 +740,9 @@ impl PollEngine {
                         .map(|s| s.streamer_login.clone())
                         .filter(|n| !n.trim().is_empty())
                         .unwrap_or_else(|| entry.login.clone());
+                    let ended_at_iso = self
+                        .announcement_ended_at(&login_lower, &previous_stream_id, true, &now_iso)
+                        .await;
                     let outcome = self
                         .sink
                         .end_announcement(EndAnnouncementRequest {
@@ -740,6 +762,7 @@ impl PollEngine {
                             started_at_iso: prev_state
                                 .and_then(|s| s.last_started_at.clone())
                                 .filter(|s| !s.trim().is_empty()),
+                            ended_at_iso,
                         })
                         .await;
                     match outcome {
@@ -847,6 +870,9 @@ impl PollEngine {
                     .filter(|n| !n.is_empty())
                     .or_else(|| prev_state.map(|s| s.streamer_login.clone()))
                     .unwrap_or_else(|| entry.login.clone());
+                let ended_at_iso = self
+                    .announcement_ended_at(&login_lower, &previous_stream_id, was_live, &now_iso)
+                    .await;
                 let outcome = self
                     .sink
                     .end_announcement(EndAnnouncementRequest {
@@ -860,6 +886,7 @@ impl PollEngine {
                             .map(str::to_string)
                             .or_else(|| prev_state.map(|s| s.twitch_user_id.clone())),
                         started_at_iso: started_at_iso.clone(),
+                        ended_at_iso,
                     })
                     .await;
                 match outcome {

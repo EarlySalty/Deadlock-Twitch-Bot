@@ -483,6 +483,7 @@ async fn end_announcement_editiert_offline_embed() {
             last_game: Some("Deadlock".to_string()),
             twitch_user_id: Some("42".to_string()),
             started_at_iso: Some("2026-06-09T17:00:00+00:00".to_string()),
+            ended_at_iso: Some("2026-06-09T18:00:00+00:00".to_string()),
         })
         .await;
     assert_eq!(outcome, EndAnnouncementOutcome::Updated);
@@ -537,6 +538,7 @@ async fn end_announcement_akzeptiert_bereits_geloeschte_nachricht() {
             last_game: None,
             twitch_user_id: Some("42".to_string()),
             started_at_iso: None,
+            ended_at_iso: None,
         })
         .await;
 
@@ -565,6 +567,7 @@ async fn end_announcement_vod_preview_gewinnt_vor_avatar_fallback() {
             last_game: Some("Deadlock".to_string()),
             twitch_user_id: Some("42".to_string()),
             started_at_iso: Some("2026-06-09T17:00:00+00:00".to_string()),
+            ended_at_iso: Some("2026-06-09T18:00:00+00:00".to_string()),
         })
         .await;
     assert_eq!(outcome, EndAnnouncementOutcome::Updated);
@@ -606,6 +609,7 @@ async fn sync_live_announcement_resume_editiert_offline_message_ohne_send() {
         last_game: Some("Deadlock".to_string()),
         twitch_user_id: Some("42".to_string()),
         started_at_iso: Some("2026-06-09T17:00:00+00:00".to_string()),
+        ended_at_iso: Some("2026-06-09T18:00:00+00:00".to_string()),
     })
     .await;
     transport.edits.lock().unwrap().clear();
@@ -708,6 +712,7 @@ async fn end_announcement_ist_offline_idempotent() {
         last_game: Some("Deadlock".to_string()),
         twitch_user_id: Some("42".to_string()),
         started_at_iso: Some("2026-06-09T17:00:00+00:00".to_string()),
+        ended_at_iso: Some("2026-06-09T18:00:00+00:00".to_string()),
     };
 
     assert_eq!(

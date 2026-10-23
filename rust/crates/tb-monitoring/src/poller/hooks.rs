@@ -76,6 +76,7 @@ pub struct EndAnnouncementRequest {
     pub last_game: Option<String>,
     pub twitch_user_id: Option<String>,
     pub started_at_iso: Option<String>,
+    pub ended_at_iso: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
