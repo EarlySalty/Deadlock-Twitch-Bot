@@ -45,20 +45,11 @@ async fn render_inputs_on(
     connection: &mut sqlx::PgConnection,
     clip_db_id: i64,
 ) -> Result<String, sqlx::Error> {
-    let (row, streamer): (serde_json::Value, Option<serde_json::Value>) = sqlx::query_as("SELECT to_jsonb(c), to_jsonb(l) FROM twitch_clips_social_media c LEFT JOIN social_media_streamer_layout l ON l.twitch_user_id = c.twitch_user_id WHERE c.id = $1")
-        .bind(clip_db_id).fetch_one(connection).await?;
-    let layout =
-        crate::layout::StreamerLayout::from_stored_value(&row["layout_override_json"], None, None)
-            .ok()
-            .or_else(|| {
-                let value = streamer?;
-                crate::layout::StreamerLayout::from_stored_value(
-                    &value["layout_json"],
-                    value["cam_enabled"].as_bool(),
-                    value["mode"].as_str(),
-                )
-                .ok()
-            });
+    let row: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(c) FROM twitch_clips_social_media c WHERE c.id = $1")
+            .bind(clip_db_id)
+            .fetch_one(connection)
+            .await?;
     let source = if let Some(path) = row["local_file_path"].as_str() {
         tokio::fs::metadata(path).await.ok().map(|metadata| {
             (
@@ -76,7 +67,7 @@ async fn render_inputs_on(
     Ok(serde_json::json!({
         "clip_url": row["clip_url"], "local_file_path": row["local_file_path"],
         "streamer_login": row["streamer_login"], "clip_title": row["clip_title"],
-        "custom_title": row["custom_title"], "layout": layout.map(|value| value.to_override_json()),
+        "custom_title": row["custom_title"], "render": "native",
         "source": source,
     })
     .to_string())
