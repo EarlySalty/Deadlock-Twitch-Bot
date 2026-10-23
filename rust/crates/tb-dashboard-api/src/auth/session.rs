@@ -1439,6 +1439,26 @@ impl DashboardAuthState {
         }))
     }
 
+    pub async fn record_dashboard_login(&self, user_id: &str) -> Result<(), sqlx::Error> {
+        let user_id = user_id.trim();
+        if user_id.is_empty() || !user_id.bytes().all(|c| c.is_ascii_digit()) {
+            return Ok(());
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_dashboard_logins (twitch_user_id, login_count)
+            VALUES ($1, 1)
+            ON CONFLICT (twitch_user_id) DO UPDATE
+            SET login_count = twitch_dashboard_logins.login_count + 1,
+                last_login_at = NOW()
+            "#,
+        )
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Self-Heal beim OAuth-Login (P1.56): reaktiviert einen departnered/archived/
     /// paused Partner. Setzt `status='active'`, löscht `departnered_at`/
     /// `admin_archived_at`, `manual_partner_opt_out=0` und einen reinen

@@ -437,6 +437,9 @@ async fn callback_handler_inner(
     };
 
     info!(twitch_login = %partner.twitch_login, "AUDIT dashboard login success");
+    if let Err(error) = state.record_dashboard_login(&identity.twitch_user_id).await {
+        warn!(%error, "Dashboard-Login-Zähler konnte nicht erhöht werden");
+    }
 
     let cookie = build_session_cookie(
         PARTNER_COOKIE_NAME,

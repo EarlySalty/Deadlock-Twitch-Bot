@@ -39,6 +39,7 @@ export interface InternalHomeOAuthStatus {
   grantedScopes?: string[];
   missingScopes?: string[];
   reconnectUrl?: string | null;
+  reauthOffered?: boolean;
   profileUrl?: string | null;
   lastCheckedAt?: string | null;
 }
@@ -567,6 +568,7 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
       grantedScopes: oauth.granted_scopes || [],
       missingScopes,
       reconnectUrl,
+      reauthOffered: (oauth as { reauth_offered?: boolean }).reauth_offered !== false,
       profileUrl,
       lastCheckedAt: oauth.last_checked_at || raw.generated_at || null,
     },

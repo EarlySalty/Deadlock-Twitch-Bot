@@ -187,7 +187,7 @@ export function VerwaltungPage() {
           status={t(oauthStatusText)}
           tone={oauthConnected ? 'success' : needsReauth ? 'error' : 'warning'}
           sentence={t(oauthHintText)}
-          footer={oauthConnected ? null : <a href={reconnectUrl} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"><ShieldCheck className="h-4 w-4" />{t("Jetzt neu autorisieren")}</a>}
+          footer={oauthConnected && home.oauth?.reauthOffered === false ? null : <a href={reconnectUrl} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"><ShieldCheck className="h-4 w-4" />{t("Jetzt neu autorisieren")}</a>}
         >
           <ScopeDisclosure granted={grantedScopes} missing={missingScopes} />
         </ConnectionCard>
