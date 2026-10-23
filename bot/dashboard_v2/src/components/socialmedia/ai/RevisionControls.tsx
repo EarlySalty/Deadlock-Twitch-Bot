@@ -1,7 +1,7 @@
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AiJobView, AiVersionRating, AiVideoVersion } from './api';
+import type { AiJobView, AiVideoVersion } from './api';
 import { approveAiVersion, decideAiProposal, decideAiVersion, fetchAiPublishingContext, reviseAiVersion, scheduleAiVersion, selectAiVersion } from './api';
 import { MetadataPanel } from './MetadataPanel';
 import { editorErrorExplanation } from './failure';
@@ -35,7 +35,6 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
   const [confirmed,setConfirmed] = useState(false);
   const [message,setMessage] = useState<string | { scheduledAt: string }>('');
   const [reloading,setReloading] = useState(false);
-  const [rated,setRated] = useState<AiVersionRating | null>(null);
   const [lastAction,setLastAction] = useState<Action | null>(null);
   const busyJob = !['review','failed','rejected'].includes(job.status);
   const feedbackBytes = new TextEncoder().encode(feedback).length;
@@ -51,7 +50,7 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
       return {job:result.job,message: { scheduledAt: result.scheduledAt }};
     },
     onMutate: (kind) => { setMessage(''); setLastAction(kind); },
-    onSuccess: (result,kind) => { if (kind === 'accept' || kind === 'reject') setRated(kind === 'accept' ? 'accepted' : 'rejected'); setMessage(result.message); setConfirmed(false); if (kind === 'revise') setFeedback(''); onJob(result.job); },
+    onSuccess: (result,kind) => { setMessage(result.message); setConfirmed(false); if (kind === 'revise') setFeedback(''); onJob(result.job); },
   });
   const blocked = action.isPending || action.isError || reloading || metadataEditing;
   const busy = action.isPending || reloading;
@@ -59,7 +58,7 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
     onBusyChange?.(busy);
     return () => onBusyChange?.(false);
   }, [busy, onBusyChange]);
-  const rating = rated ?? version?.rating ?? null;
+  const rating = version?.rating ?? null;
   const preferred = version !== null && job.selected_version_id === version.id;
   const ratingFeedback = lastAction !== null && ratingActions.includes(lastAction);
   const reload = async () => {

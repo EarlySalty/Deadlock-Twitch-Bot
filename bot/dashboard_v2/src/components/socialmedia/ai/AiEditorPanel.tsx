@@ -111,7 +111,7 @@ function Review({ job, selectedVersion, onVersionChange, channel, canStart, onJo
     <div className="social-ai-review-heading">
       <div><h3>{t("Original und bearbeitete Fassung")}</h3><p>{t("Die Schnittfassung hat eine eigene Zeitachse. Spiele die Videos einzeln ab oder lass das Original synchron mitlaufen.")}</p></div>
       {job.versions.length > 0 && <label className="social-ai-version-label">{t("Videofassung")}
-        <select className="studio-select" value={version?.id ?? ''} onChange={(event) => onVersionChange(Number(event.target.value))} disabled={!version || locked}>
+        <select className="studio-select" value={version?.id ?? ''} onChange={(event) => { if (keepsDraft(event.currentTarget, t)) return; onVersionChange(Number(event.target.value)); }} disabled={!version || locked}>
           {!version && <option value="">{t("Keine abspielbare Fassung")}</option>}
           {job.versions.map((item) => <option key={item.id} value={item.id} disabled={!chooseUsableVersion([item])}>{t("Fassung")} {item.version_no}{item.variant_index > 0 ? t(' · Variante {variant}', { variant: item.variant_index + 1 }) : ''} · {item.file_url ? timestamp(item.created_at, locale, t) : t("nicht verfügbar")}</option>)}
         </select>
@@ -304,9 +304,13 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = fals
         </div>}
       </section>
       {!settingsOnly && <>
-      <div className="social-ai-history"><div><h3>{t("Bearbeitungsaufträge")}</h3><p>{fixedClip === null ? t("Zuletzt gestartete Aufträge für diesen Kanal.") : t("Zuletzt gestartete Aufträge für diesen Clip.")}</p></div>{clipJobs && clipJobs.length > 0 && <label>{t("Auftrag ansehen")}<select className="studio-select" value={selectedJobId ?? ''} disabled={detailsLocked} onChange={(event) => { advanceSelection(); setJobSelection({ channel: twitchUserId, id: Number(event.target.value) }); }}>{clipJobs.map((item) => <option key={item.id} value={item.id}>{t("Auftrag")} {item.id} · {t(statusLabels[item.status])}</option>)}</select></label>}</div>
+      <div className="social-ai-history"><div><h3>{t("Bearbeitungsaufträge")}</h3><p>{fixedClip === null ? t("Zuletzt gestartete Aufträge für diesen Kanal.") : t("Zuletzt gestartete Aufträge für diesen Clip.")}</p></div>{clipJobs && clipJobs.length > 0 && <label>{t("Auftrag ansehen")}<select className="studio-select" value={selectedJobId ?? ''} disabled={detailsLocked} onChange={(event) => { if (keepsDraft(event.currentTarget, t)) return; advanceSelection(); setJobSelection({ channel: twitchUserId, id: Number(event.target.value) }); }}>{clipJobs.map((item) => <option key={item.id} value={item.id}>{t("Auftrag")} {item.id} · {t(statusLabels[item.status])}</option>)}</select></label>}</div>
       {jobs.isPending ? <p role="status">{t("Aufträge werden geladen…")}</p> : jobs.isError ? <EditorError retry={() => jobs.refetch()}>{t("Die Aufträge konnten nicht geladen werden. Der Start bleibt gesperrt, bis der Stand bekannt ist.")}</EditorError> : clipJobs?.length === 0 ? <p className="social-ai-empty">{fixedClip === null ? t("Noch kein Auftrag für diesen Kanal. Wähle oben einen Clip für einen manuellen Test.") : t("Für diesen Clip gibt es noch keinen KI-Auftrag.")}</p> : job.isPending ? <p role="status">{t("Auftrag wird geladen…")}</p> : job.isError ? <EditorError retry={() => job.refetch()}>{t("Der Auftrag konnte nicht geladen werden. Die letzte bekannte Fassung wird nicht als aktueller Stand angezeigt.")}</EditorError> : job.data && <AiJobDetails key={`${twitchUserId}-${job.data.id}`} job={job.data} channel={twitchUserId} onBusyChange={setDetailsLocked} onReload={async () => (await job.refetch()).isSuccess} onJob={(value) => {client.setQueryData(['social-ai','job',twitchUserId,value.id],value);client.invalidateQueries({queryKey:jobsKey});if (selectionRevision === jobSelectionRevision.current && value.id !== selectedJobId) setJobSelection({channel:twitchUserId,id:value.id});}} canStart={canStart} onRetry={() => { if (job.data && canRetryJob(job.data, { canStart, retryPending: retry.isPending, locked: detailsLocked })) retry.mutate({ channel: twitchUserId, id: job.data.id, revision: jobSelectionRevision.current }); }} retryPending={retry.isPending && currentRetryAction} retryError={retry.isError && currentRetryAction} />}
       </>}
     </>}
   </section>;
+}
+
+function keepsDraft(element: HTMLElement, t: (text: string) => string) {
+  return !!element.closest('.social-ai')?.querySelector('[data-unsaved="true"]') && !window.confirm(t('Ungespeicherte Änderungen verwerfen?'));
 }
