@@ -51,7 +51,7 @@ pub async fn open_editor(
             let decisions = revision::parent_planning(pool, owner, video.id)
                 .await?
                 .plan
-                .kept_intervals
+                .timeline()
                 .into_iter()
                 .map(|interval| store::TimelineEntry {
                     start_ms: interval.start_ms as i64,

@@ -5,7 +5,6 @@ import type { TikTokDraft } from '@/api/socialMedia';
 export type PublishPlatform = 'youtube' | 'tiktok' | 'instagram';
 export type PublishMode = 'review' | 'full_auto';
 export type ReviewMode = 'review' | 'full_auto' | 'veto_until_deadline';
-export type TikTokConsentState = 'missing' | 'bound' | 'stale';
 export type PendingHandling = 'keep_review' | 'transfer_eligible';
 export type DestinationStatus = 'pending' | 'preparing' | 'effect_started' | 'processing' | 'published' | 'retry' | 'held' | 'uncertain' | 'discarded' | 'failed';
 
@@ -75,7 +74,6 @@ export interface PublishVideo {
   expires_at: string | null;
   needs_review: boolean;
   review_reasons: string[];
-  tiktok_consent?: TikTokConsentState;
   artifact_state: 'present' | 'deleted' | 'missing' | 'error';
   cleanup_error: string | null;
   approvals: { platform: PublishPlatform; state: string; approver_user_id: string | null; decided_at: string | null }[];

@@ -529,7 +529,7 @@ async fn load_versions(
             let planning: super::stage_contract::Planning = parse_json(&text)?;
             decisions = planning
                 .plan
-                .kept_intervals
+                .timeline()
                 .into_iter()
                 .map(|interval| TimelineEntry {
                     start_ms: interval.start_ms as i64,
@@ -905,6 +905,7 @@ pub enum JobFailure {
     RenderingFailed,
     ValidationFailed,
     ProviderUnavailable,
+    ProviderAccess,
     BudgetExceeded,
     ConsentMissing,
 }
@@ -919,6 +920,7 @@ impl JobFailure {
             Self::RenderingFailed => "rendering_failed",
             Self::ValidationFailed => "validation_failed",
             Self::ProviderUnavailable => "provider_unavailable",
+            Self::ProviderAccess => "provider_access",
             Self::BudgetExceeded => "budget_exceeded",
             Self::ConsentMissing => "consent_missing",
         }
@@ -933,6 +935,9 @@ impl JobFailure {
             Self::RenderingFailed => "Das Video konnte nicht erstellt werden.",
             Self::ValidationFailed => "Das Video konnte nicht geprüft werden.",
             Self::ProviderUnavailable => "Der KI-Dienst ist derzeit nicht verfügbar.",
+            Self::ProviderAccess => {
+                "Der KI-Zugang ist auf dem Server nicht vollständig eingerichtet."
+            }
             Self::BudgetExceeded => "Das Kostenlimit ist erreicht.",
             Self::ConsentMissing => "Für die externe KI-Verarbeitung fehlt die Einwilligung.",
         }

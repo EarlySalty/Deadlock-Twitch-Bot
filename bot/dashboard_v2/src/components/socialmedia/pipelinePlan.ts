@@ -42,7 +42,7 @@ export const TEXT_SCOPES: { id: PolicyScope; title: string; text: string }[] = [
 export const HOLDS: Record<Exclude<ProductionHold, null>, string> = {
   disabled: 'Der Auto-Pilot ist ausgeschaltet.',
   paused: 'Pausiert. Laufende Produktionen werden fertiggestellt.',
-  review_backlog: 'Es warten Clips auf deine Freigabe. Danach geht es weiter.',
+  review_backlog: 'Videos oder Aufträge warten auf deine Prüfung. Danach geht es weiter.',
   failure_backlog: 'Die letzten Produktionen sind fehlgeschlagen. Ein Testlauf auf Planen gibt den Auto-Pilot wieder frei, sonst versucht er es nach 24 Stunden erneut.',
   empty_pool: 'Keine passenden Clips verfügbar. Prüfe deine Clips oder den Zeitraum.',
   no_schedule: 'Füge mindestens eine Zeit hinzu.',
@@ -137,7 +137,7 @@ export const PLAN_EN: Record<string, string> = {
   'Ein Teil ist gespeichert, der Rest nicht. Speichere erneut oder lade den gespeicherten Stand.': 'Part of it was saved, the rest was not. Save again or load the saved settings.',
   'Der Auto-Pilot ist ausgeschaltet.': 'Autopilot is off.',
   'Pausiert. Laufende Produktionen werden fertiggestellt.': 'Paused. Running productions will finish.',
-  'Es warten Clips auf deine Freigabe. Danach geht es weiter.': 'Clips are waiting for your approval. It continues afterwards.',
+  'Videos oder Aufträge warten auf deine Prüfung. Danach geht es weiter.': 'Videos or jobs are waiting for your review. It continues afterwards.',
   'Die letzten Produktionen sind fehlgeschlagen. Ein Testlauf auf Planen gibt den Auto-Pilot wieder frei, sonst versucht er es nach 24 Stunden erneut.': 'The last productions failed. A test run on Plan releases Auto-Pilot again, otherwise it tries again after 24 hours.',
   'Keine passenden Clips verfügbar. Prüfe deine Clips oder den Zeitraum.': 'No matching clips available. Check your clips or the date range.',
   'Füge mindestens eine Zeit hinzu.': 'Add at least one time.',

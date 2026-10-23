@@ -25,6 +25,7 @@ export const DESTINATION_REASONS: Record<string, string> = {
   tiktok_transfer_uncertain: 'Ob die Übertragung zu TikTok vollständig war, ist unklar. Wir laden nicht doppelt hoch.',
   tiktok_status_unconfirmed: 'TikTok hat den Status der Veröffentlichung nicht bestätigt. Bitte prüfe dein TikTok-Profil.',
   tiktok_inbox_only: 'TikTok hat das Video nur in dein TikTok-Postfach gelegt. Es wurde nicht veröffentlicht.',
+  tiktok_draft: 'TikTok erhält das Video als Entwurf. Veröffentlichen kannst du es danach in der TikTok-App.',
   tiktok_rejected: 'TikTok hat die Veröffentlichung abgelehnt.',
   tiktok_published_without_post_id: 'TikTok meldet die Veröffentlichung, aber ohne Link zum Beitrag.',
 };

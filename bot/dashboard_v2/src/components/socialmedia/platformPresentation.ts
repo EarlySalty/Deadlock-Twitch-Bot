@@ -39,7 +39,7 @@ export function approvalFact(clip: SocialClipMitPosting, platform: SocialPlatfor
 
 export function transferFact(clip: SocialClipMitPosting, platform: SocialPlatform): PlatformFact {
   const state = clip.upload_states?.[platform];
-  if (state === 'inbox') return fact('inbox', 'Im TikTok-Postfach');
+  if (state === 'inbox') return fact('inbox', 'Als Entwurf in TikTok');
   if (state === 'inbox_pending') return fact('pending_confirmation', 'Übertragung noch unbestätigt', 'warning');
   if (state === 'waiting_connection') return fact('waiting_connection', 'Wartet auf Verbindung', 'warning');
   if (state === 'waiting_tiktok_approval') return fact('waiting_consent', 'Wartet auf TikTok-Zustimmung', 'warning');
@@ -56,7 +56,7 @@ export function publicationFact(clip: SocialClipMitPosting, platform: SocialPlat
   const upload = clip.upload_states?.[platform];
   if (state === 'FAILED') return fact('failed', 'Veröffentlichung abgelehnt', 'danger');
   if (platform === 'tiktok' && state === 'PUBLISH_COMPLETE') return fact('confirmed', 'Veröffentlichung bestätigt', 'success');
-  if (platform === 'tiktok' && (upload === 'inbox' || upload === 'inbox_pending' || state === 'SEND_TO_USER_INBOX')) return fact('inbox', 'Veröffentlichung in TikTok erforderlich', 'warning');
+  if (platform === 'tiktok' && (upload === 'inbox' || upload === 'inbox_pending' || state === 'SEND_TO_USER_INBOX')) return fact('inbox', 'Entwurf in TikTok veröffentlichen', 'warning');
   if (platform === 'youtube' && clip.platform_status.youtube) {
     if (clip.youtube_visibility === 'private') return fact('private', 'Privat auf YouTube');
     if (clip.youtube_visibility === 'unlisted') return fact('unlisted', 'Nicht gelistet auf YouTube');

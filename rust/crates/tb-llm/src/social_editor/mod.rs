@@ -5,10 +5,12 @@ mod config;
 pub mod fixture;
 mod read_side;
 mod schema;
+mod subscription;
 mod usage;
 
 pub use config::{
-    EditorConfig, Effort, Pricing, ProviderConfig, ProviderKind, SocialAiSection, TrustedPricing,
+    EditorConfig, Effort, Pricing, ProviderConfig, ProviderKind, SocialAiSection,
+    SubscriptionRelay, TrustedPricing,
 };
 pub use read_side::{consent_allowed, global_consent, job_usage, JobUsage};
 pub use usage::Usage;
@@ -121,12 +123,14 @@ pub struct EditorError {
     pub estimated_micro_usd: Option<i64>,
     pub reserved_micro_usd: Option<i64>,
     pub cost_basis: Option<&'static str>,
+    pub access: Option<ProviderAccess>,
 }
 
 impl EditorError {
     fn new(kind: ErrorKind) -> Self {
         Self {
             kind,
+            access: None,
             ledger_id: None,
             request_id: None,
             http_status: None,
@@ -217,7 +221,7 @@ pub fn check_schema(schema: &Value) -> Result<(), EditorError> {
     schema::conformant_wire(schema).map(|_| ())
 }
 
-fn build_body(config: &ProviderConfig, request: &EditorRequest) -> Result<Value, EditorError> {
+fn content_blocks(request: &EditorRequest) -> Vec<Value> {
     let mut blocks = Vec::with_capacity(request.frames.len() * 2 + 1);
     for frame in &request.frames {
         blocks.push(json!({"type":"text","text":format!("Frame bei {} ms", frame.timestamp_ms)}));
@@ -226,6 +230,11 @@ fn build_body(config: &ProviderConfig, request: &EditorRequest) -> Result<Value,
         }}));
     }
     blocks.push(json!({"type":"text","text":request.text}));
+    blocks
+}
+
+fn build_body(config: &ProviderConfig, request: &EditorRequest) -> Result<Value, EditorError> {
+    let blocks = content_blocks(request);
     let effort = serde_json::to_value(config.effort)
         .map_err(|_| EditorError::new(ErrorKind::Configuration))?;
     let wire = schema::conformant_wire(&request.json_schema)?;
@@ -331,13 +340,19 @@ async fn check_consent(pool: &PgPool, twitch_user_id: &str) -> Result<(), Editor
     check_consent_on(&mut connection, twitch_user_id).await
 }
 
+struct AttemptEntry {
+    provider: &'static str,
+    reservation: i64,
+    estimated: Option<i64>,
+    cost_basis: &'static str,
+    abandon_after_ms: Option<u64>,
+}
+
 async fn begin_attempt(
     pool: &PgPool,
     config: &ProviderConfig,
     context: &EditorContext,
 ) -> Result<ReservedAttempt, EditorError> {
-    let (project, service) =
-        crate::ledger::identity().ok_or_else(|| EditorError::new(ErrorKind::Ledger))?;
     let reservation = config
         .pricing
         .reservation(
@@ -345,6 +360,48 @@ async fn begin_attempt(
             u64::from(config.max_output_tokens),
         )
         .ok_or_else(|| EditorError::new(ErrorKind::Configuration))?;
+    let entry = AttemptEntry {
+        provider: PROVIDER,
+        reservation,
+        estimated: None,
+        cost_basis: "reserved_upper_bound",
+        abandon_after_ms: None,
+    };
+    begin_entry(pool, config, context, &entry).await
+}
+
+async fn close_abandoned_on(
+    tx: &mut Transaction<'_, Postgres>,
+    provider: &str,
+    after_ms: u64,
+) -> Result<(), EditorError> {
+    let closed = sqlx::query("UPDATE public.llm_usage SET success=0,attempt_state='failed',error_code='Subscription/abandoned',finished_at=now() WHERE purpose=$1 AND provider=$2 AND attempt_state='started' AND reserved_micro_usd=0 AND (CASE WHEN ts ~ '^\\d{4}-\\d{2}-\\d{2}T' THEN ts::timestamptz END) < now() - make_interval(secs => $3)")
+        .bind(PURPOSE)
+        .bind(provider)
+        .bind(after_ms as f64 / 1000.0)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| EditorError::new(ErrorKind::Ledger))?
+        .rows_affected();
+    if closed > 0 {
+        tracing::warn!(
+            provider,
+            closed,
+            "Closed abandoned zero-cost Social AI attempts"
+        );
+    }
+    Ok(())
+}
+
+async fn begin_entry(
+    pool: &PgPool,
+    config: &ProviderConfig,
+    context: &EditorContext,
+    entry: &AttemptEntry,
+) -> Result<ReservedAttempt, EditorError> {
+    let (project, service) =
+        crate::ledger::identity().ok_or_else(|| EditorError::new(ErrorKind::Ledger))?;
+    let reservation = entry.reservation;
     let mut tx: Transaction<'_, Postgres> = pool
         .begin()
         .await
@@ -355,8 +412,11 @@ async fn begin_attempt(
         .await
         .map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     check_consent_on(&mut tx, &context.twitch_user_id).await?;
+    if let Some(after_ms) = entry.abandon_after_ms {
+        close_abandoned_on(&mut tx, entry.provider, after_ms).await?;
+    }
     let started: Vec<i64> = sqlx::query_scalar("SELECT id FROM public.llm_usage WHERE purpose=$1 AND provider=$2 AND attempt_state='started'")
-        .bind(PURPOSE).bind(PROVIDER).fetch_all(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
+        .bind(PURPOSE).bind(entry.provider).fetch_all(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     let options = pool.connect_options();
     {
         let active = ACTIVE_ATTEMPTS
@@ -379,10 +439,11 @@ async fn begin_attempt(
         return Err(EditorError::new(ErrorKind::Budget));
     }
     admin_limits::admit_on(&mut tx, context, reservation).await?;
-    let id: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage (ts,source,purpose,model,tokens_in,tokens_out,total,success,project,service,provider,attempt_state,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,cost_basis) VALUES ($1,$2,$3,$4,NULL,NULL,NULL,0,$5,$6,$7,'started',$8,$9,$10,$11,'reserved_upper_bound') RETURNING id")
+    let id: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage (ts,source,purpose,model,tokens_in,tokens_out,total,success,project,service,provider,attempt_state,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ($1,$2,$3,$4,NULL,NULL,NULL,0,$5,$6,$7,'started',$8,$9,$10,$11,$12,$13) RETURNING id")
         .bind(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false))
-        .bind(crate::ledger::SOURCE).bind(PURPOSE).bind(&config.model).bind(project).bind(service).bind(PROVIDER)
+        .bind(crate::ledger::SOURCE).bind(PURPOSE).bind(&config.model).bind(project).bind(service).bind(entry.provider)
         .bind(&context.twitch_user_id).bind(&context.job_id).bind(&context.stage).bind(reservation)
+        .bind(entry.estimated).bind(entry.cost_basis)
         .fetch_one(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     let attempt = ReservedAttempt::register(id, options)?;
     tx.commit()
@@ -644,8 +705,48 @@ pub async fn complete(
     configuration: &EditorConfig,
     request: &EditorRequest,
 ) -> Result<EditorResponse, EditorError> {
-    let key =
-        crate::keys::anthropic_api_key().ok_or_else(|| EditorError::new(ErrorKind::Unavailable))?;
+    complete_with_fallback(
+        pool,
+        context,
+        configuration,
+        request,
+        crate::keys::anthropic_api_key,
+    )
+    .await
+}
+
+async fn complete_with_fallback(
+    pool: &PgPool,
+    context: &EditorContext,
+    configuration: &EditorConfig,
+    request: &EditorRequest,
+    key: impl FnOnce() -> Option<String>,
+) -> Result<EditorResponse, EditorError> {
+    let reason = match &configuration.provider.subscription_relay {
+        Some(relay) => {
+            match subscription::attempt(pool, context, configuration, request, relay).await {
+                Ok(response) => {
+                    tracing::info!(
+                        path = "subscription",
+                        stage = %context.stage,
+                        ledger_id = response.ledger_id,
+                        "Social AI request served"
+                    );
+                    return Ok(response);
+                }
+                Err(subscription::Outcome::Stop(error)) => return Err(error),
+                Err(subscription::Outcome::Fallback(reason)) => reason,
+            }
+        }
+        None => "not_configured",
+    };
+    tracing::info!(
+        path = "api_fallback",
+        reason,
+        stage = %context.stage,
+        "Social AI request routed to the API"
+    );
+    let key = key().ok_or_else(|| EditorError::new(ErrorKind::Unavailable))?;
     complete_with_key(pool, context, configuration, request, &key).await
 }
 
@@ -848,11 +949,133 @@ async fn complete_with_key(
                     estimated_micro_usd: failure_estimate,
                     reserved_micro_usd: Some(reservation),
                     cost_basis: Some(failure_cost(rejected, exceeds_reservation)),
+                    access: status.and_then(|status| access_problem(status, &bytes)),
                 })
             }
         }
     }
     Err(EditorError::new(ErrorKind::Transport))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAccess {
+    Ready,
+    KeyMissing,
+    WorkspaceRequired,
+    WorkspaceInvalid,
+    KeyRejected,
+    Unreachable,
+}
+
+impl ProviderAccess {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::KeyMissing => "key_missing",
+            Self::WorkspaceRequired => "workspace_required",
+            Self::WorkspaceInvalid => "workspace_invalid",
+            Self::KeyRejected => "key_rejected",
+            Self::Unreachable => "unreachable",
+        }
+    }
+}
+
+fn access_problem(status: StatusCode, body: &[u8]) -> Option<ProviderAccess> {
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return Some(ProviderAccess::KeyRejected);
+    }
+    if status != StatusCode::BAD_REQUEST {
+        return None;
+    }
+    let message = serde_json::from_slice::<Value>(body).ok()?;
+    let message = message.get("error")?.get("message")?.as_str()?;
+    if message.contains("not scoped to a workspace") {
+        Some(ProviderAccess::WorkspaceRequired)
+    } else if message.contains("anthropic-workspace-id header must be") {
+        Some(ProviderAccess::WorkspaceInvalid)
+    } else {
+        None
+    }
+}
+
+const ACCESS_CACHE_TTL: Duration = Duration::from_secs(300);
+
+static ACCESS_CACHE: LazyLock<tokio::sync::Mutex<Option<CachedAccess>>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(None));
+
+#[derive(Clone, Copy)]
+struct CachedAccess {
+    at: Instant,
+    credentials: u64,
+    access: ProviderAccess,
+}
+
+fn credential_fingerprint(key: Option<&str>, workspace: Option<&str>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    workspace.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub async fn probe_access(configuration: &EditorConfig) -> ProviderAccess {
+    let key = crate::keys::anthropic_api_key();
+    let workspace = crate::keys::anthropic_workspace_id();
+    let credentials = credential_fingerprint(key.as_deref(), workspace.as_deref());
+    let mut cache = ACCESS_CACHE.lock().await;
+    if let Some(entry) = *cache {
+        if entry.credentials == credentials && entry.at.elapsed() < ACCESS_CACHE_TTL {
+            return entry.access;
+        }
+    }
+    let access = match key {
+        Some(key) => request_access(&configuration.provider, &key, workspace).await,
+        None => ProviderAccess::KeyMissing,
+    };
+    *cache = Some(CachedAccess {
+        at: Instant::now(),
+        credentials,
+        access,
+    });
+    access
+}
+
+async fn request_access(
+    config: &ProviderConfig,
+    key: &str,
+    workspace: Option<String>,
+) -> ProviderAccess {
+    let Ok(client) = Client::builder()
+        .no_proxy()
+        .redirect(Policy::none())
+        .timeout(Duration::from_millis(config.request_timeout_ms))
+        .build()
+    else {
+        return ProviderAccess::Unreachable;
+    };
+    let Ok(workspace) = workspace_header(workspace) else {
+        return ProviderAccess::WorkspaceInvalid;
+    };
+    let endpoint = format!(
+        "{}/v1/models?limit=1",
+        config.endpoint.trim_end_matches('/')
+    );
+    let mut builder = client
+        .get(&endpoint)
+        .header("x-api-key", key)
+        .header("anthropic-version", "2023-06-01");
+    if let Some(workspace) = workspace {
+        builder = builder.header("anthropic-workspace-id", workspace);
+    }
+    let Ok(reply) = builder.send().await else {
+        return ProviderAccess::Unreachable;
+    };
+    let status = reply.status();
+    if status.is_success() {
+        return ProviderAccess::Ready;
+    }
+    let body = reply.bytes().await.unwrap_or_default();
+    access_problem(status, &body).unwrap_or(ProviderAccess::Unreachable)
 }
 
 #[cfg(test)]

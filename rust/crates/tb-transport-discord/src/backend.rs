@@ -36,13 +36,26 @@ pub struct DeleteMessage {
     pub reason: String,
 }
 
-/// Payload für `/internal/master/v1/discord/send-dm` (Token-Lifecycle-DMs).
-/// Der Broker-Endpunkt nimmt ausschließlich `user_id` + Text-`content`
-/// entgegen (kein Embed) und öffnet selbst den DM-Channel.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DmPurpose {
+    #[default]
+    Proactive,
+    Security,
+}
+
+impl DmPurpose {
+    pub fn is_proactive(&self) -> bool {
+        *self == DmPurpose::Proactive
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SendUserDm {
     pub user_id: u64,
     pub content: String,
+    #[serde(skip_serializing_if = "DmPurpose::is_proactive")]
+    pub dm_purpose: DmPurpose,
 }
 
 /// Payload für eine Embed-Nachricht in den Alert-Channel. Nutzt denselben
@@ -101,6 +114,8 @@ pub enum DiscordError {
     BrokerError { status: u16, body: String },
     #[error("Antwort-Deserialisierung fehlgeschlagen: {0}")]
     Deserialize(#[from] serde_json::Error),
+    #[error("Nutzer hat Bot-DMs abbestellt")]
+    DmOptedOut,
 }
 
 /// Abstraktes Discord-Backend — ermöglicht Test-Stubs ohne Netz.

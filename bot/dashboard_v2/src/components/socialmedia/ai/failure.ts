@@ -1,4 +1,4 @@
-import type { AiJobView } from './api';
+import type { AiJobView, AiProviderAccess } from './api';
 import { dictionaryFor, type TranslateParams } from '@/i18n/dictionary';
 import { FEHLER_TEXTE, fehlerText } from '../labels';
 
@@ -11,10 +11,24 @@ const explanations: Record<string, string> = {
   render_failed: 'Das bearbeitete Video konnte nicht erstellt werden.',
   validation_failed: 'Die Prüfung des erstellten Videos ist fehlgeschlagen.',
   provider_unavailable: 'Der externe KI-Anbieter war nicht erreichbar.',
+  provider_access: 'Der KI-Zugang ist auf dem Server nicht vollständig eingerichtet. Ein Admin muss ihn prüfen, danach kannst du die Phase erneut versuchen.',
   budget_exceeded: 'Das verfügbare Kostenlimit reicht für diesen Auftrag nicht aus.',
   consent_missing: 'Die erforderliche Freigabe für externe KI fehlt.',
   interrupted: 'Die Bearbeitung wurde unterbrochen.',
 };
+
+const providerAccessTexts: Record<AiProviderAccess, string> = {
+  ready: 'Der KI-Zugang ist eingerichtet und wurde erfolgreich geprüft.',
+  key_missing: 'Auf dem Server ist kein Schlüssel für den KI-Anbieter hinterlegt. Ein Admin muss ihn eintragen.',
+  workspace_required: 'Der Schlüssel für den KI-Anbieter ist hinterlegt, gehört aber zu keinem Workspace. Ein Admin muss die Workspace-ID ergänzen oder einen Workspace-Schlüssel eintragen.',
+  workspace_invalid: 'Die hinterlegte Workspace-ID wird vom KI-Anbieter nicht angenommen. Ein Admin muss sie prüfen.',
+  key_rejected: 'Der KI-Anbieter lehnt den hinterlegten Schlüssel ab. Ein Admin muss ihn prüfen.',
+  unreachable: 'Der KI-Anbieter konnte gerade nicht erreicht werden. Der Zugang wird in wenigen Minuten erneut geprüft.',
+};
+
+export function providerAccessText(access: AiProviderAccess): string {
+  return providerAccessTexts[access];
+}
 
 export function canRetryJob(job: Pick<AiJobView, 'status' | 'can_retry'>, state: { canStart: boolean; retryPending: boolean; locked: boolean }): boolean {
   return job.status === 'failed' && job.can_retry && state.canStart && !state.retryPending && !state.locked;

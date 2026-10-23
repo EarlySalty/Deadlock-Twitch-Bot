@@ -5,7 +5,7 @@ import { DESTINATION_REASONS, HOLD_REASONS } from './reviewReasons';
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 
-export interface DiscardedItem { key: string; title: string; reason: string }
+export interface FailedItem { key: string; title: string; reason: string }
 
 export function clipName(clips: SocialClipMitPosting[] | undefined, clipDbId: number, fallback: string): string {
   const clip = clips?.find(item => item.clip_db_id === clipDbId);
@@ -23,7 +23,7 @@ function automaticDestinationDiscard(state: string, reason: string | null | unde
   return state === 'failed' || (state === 'discarded' && Boolean(reason) && !MANUAL_DESTINATION_REASONS.has(reason ?? ''));
 }
 
-export function discardedItems(schedule: ScheduleQueueSnapshot | undefined, publish: PublishSnapshot | undefined, clips: SocialClipMitPosting[] | undefined, t: Translate): DiscardedItem[] {
+export function failedItems(schedule: ScheduleQueueSnapshot | undefined, publish: PublishSnapshot | undefined, clips: SocialClipMitPosting[] | undefined, t: Translate): FailedItem[] {
   const jobs = (schedule?.jobs ?? []).filter(job => job.status === 'failed').map(job => ({
     key: `job-${job.id}`, title: job.clip_title || t('Clip {id}', { id: job.clip_id }),
     reason: reasonText(job.review_reasons, HOLD_REASONS, t) ?? (job.last_error ? t(job.last_error) : t('Produktion fehlgeschlagen')),

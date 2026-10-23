@@ -198,6 +198,7 @@ async fn prepared(
                 end_ms: frozen.media.duration_ms,
                 reason: "Vollständiger Zusammenhang".into(),
             }],
+            hook: None,
             observed_highlights: vec![],
             significant_uncertainty: false,
             review_reasons: vec![],
@@ -367,12 +368,21 @@ fn every_stage_schema_passes_the_structured_output_wire_contract() {
     let duration = limits.plan.max_source_duration_ms;
     tb_llm::social_editor::check_schema(&analysis_schema(&limits.plan, duration))
         .expect("analysis schema");
-    for max_variants in [0, limits.revisions.max_variants.saturating_sub(1)] {
+    for multi_output in [false, true] {
         for mut schema in [
             planning_schema(&limits.plan, &limits.copy, duration),
             super::super::stage_contract::revision_schema(&limits.plan, &limits.copy, duration),
         ] {
-            schema["properties"]["variants"]["maxItems"] = json!(max_variants);
+            if multi_output {
+                schema["properties"]["variants"]["maxItems"] =
+                    json!(limits.revisions.max_variants.saturating_sub(1));
+            } else {
+                super::super::stage_contract::drop_variants(&mut schema);
+                assert!(schema["properties"].get("variants").is_none());
+                assert!(!schema["required"]
+                    .as_array()
+                    .is_some_and(|names| names.iter().any(|name| name == "variants")));
+            }
             tb_llm::social_editor::check_schema(&schema).expect("planning schema");
         }
     }

@@ -1,7 +1,7 @@
 use super::*;
 use tb_social_media::credentials::SocialMediaCredentials;
 use tb_social_media::uploaders::tiktok::{
-    build_caption, video_digest, CreatorInfo, TikTokPostOptions, TikTokUploader,
+    build_caption, video_digest, CreatorInfo, TikTokUploader,
 };
 
 fn error(status: StatusCode, message: &str) -> Response {
@@ -326,90 +326,6 @@ pub async fn creator_info_handler(
         "platform_user_id": credentials.platform_user_id,
     }))
     .into_response()
-}
-
-pub(super) async fn save_choice(
-    pool: &PgPool,
-    clip_id: i64,
-    raw: Option<&Value>,
-) -> Result<(), Response> {
-    let mut options: TikTokPostOptions = raw.cloned().and_then(|raw| serde_json::from_value(raw).ok()).ok_or_else(|| error(
-        StatusCode::BAD_REQUEST, "Bitte öffne die TikTok-Freigabe am Clip und wähle die Veröffentlichungseinstellungen.",
-    ))?;
-    let credentials = credentials(pool, clip_id).await?;
-    if options.credential_id != credentials.id
-        || Some(options.platform_user_id.as_str()) != credentials.platform_user_id.as_deref()
-    {
-        return Err(error(
-            StatusCode::CONFLICT,
-            "Das TikTok-Konto hat sich geändert. Bitte öffne die Freigabe erneut.",
-        ));
-    }
-    let user: String =
-        sqlx::query_scalar("SELECT twitch_user_id FROM twitch_clips_social_media WHERE id = $1")
-            .bind(clip_id)
-            .fetch_one(pool)
-            .await
-            .map_err(|_| clip_load_failed())?;
-    if !tiktok_editor::valid_music_consent(pool, &user, credentials.platform_user_id.as_deref())
-        .await?
-    {
-        return Err(error(
-            StatusCode::BAD_REQUEST,
-            "Bitte bestätige zuerst einmalig die Musiknutzung für dieses TikTok-Konto.",
-        ));
-    }
-    let info = creator(&credentials).await?;
-    let (path, duration, digest) = duration(pool, clip_id).await?;
-    if options.approved_video_sha256 != digest {
-        return Err(error(
-            StatusCode::CONFLICT,
-            "Die Videovorschau hat sich geändert. Bitte öffne die TikTok-Freigabe erneut.",
-        ));
-    }
-    options.video_path = path;
-    options.validate(&info, duration).map_err(|error_value| {
-        if let tb_social_media::uploaders::UploadError::Validation(message) = error_value {
-            error(StatusCode::BAD_REQUEST, &message)
-        } else {
-            error(
-                StatusCode::BAD_REQUEST,
-                "Bitte prüfe die TikTok-Freigabe erneut.",
-            )
-        }
-    })?;
-    let options = serde_json::to_value(options).map_err(|_| invalid_payload())?;
-    persist_choice(pool, clip_id, options).await
-}
-
-pub(super) async fn persist_choice(
-    pool: &PgPool,
-    clip_id: i64,
-    options: Value,
-) -> Result<(), Response> {
-    let mut tx = pool.begin().await.map_err(|_| clip_load_failed())?;
-    sqlx::query("SELECT id FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE")
-        .bind(clip_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|_| clip_load_failed())?;
-    let active: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = 'tiktok' AND (status IN ('processing', 'inbox', 'inbox_pending', 'completed') OR (tiktok_publish_id IS NOT NULL AND NOT (status = 'failed' AND COALESCE(tiktok_publish_status = 'FAILED', FALSE)))))",
-    ).bind(clip_id).fetch_one(&mut *tx).await.map_err(|_| clip_load_failed())?;
-    if active {
-        return Err(error(StatusCode::CONFLICT, "Für diesen Clip hat die TikTok-Übertragung bereits begonnen. Ein weiterer Upload bleibt gesperrt."));
-    }
-    sqlx::query("UPDATE twitch_clips_social_media SET tiktok_post_options = $1 WHERE id = $2")
-        .bind(&options)
-        .bind(clip_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| clip_load_failed())?;
-    tb_social_media::clip_queue::apply_tiktok_choice(&mut tx, clip_id, &options)
-        .await
-        .map_err(|_| clip_load_failed())?;
-    tx.commit().await.map_err(|_| clip_load_failed())?;
-    Ok(())
 }
 
 #[cfg(test)]

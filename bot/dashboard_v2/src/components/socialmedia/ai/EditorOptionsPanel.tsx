@@ -2,6 +2,7 @@ import { useT } from '@/context/LanguageContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AiEditorOptions, AiPublishLanguage } from './api';
 import { fetchAiConsent, fetchAiOptions, saveAiOptions } from './api';
+import { providerAccessText } from './failure';
 
 const languages: { value: AiPublishLanguage; label: string }[] = [
   { value: 'de', label: 'Deutsch' },
@@ -36,11 +37,14 @@ export function EditorOptionsPanel({ channel, disabled = false }: { channel: str
 export function AiPlanOptions({ channel, onOpenSettings }: { channel: string; onOpenSettings: () => void }) {
   const t = useT();
   const consent = useQuery({ queryKey: ['social-ai', 'consent', channel], queryFn: ({ signal }) => fetchAiConsent(channel, signal), retry: false, refetchOnWindowFocus: false });
-  const ready = consent.isSuccess && consent.data.external_ai_consent && consent.data.global_allowed;
+  const access = consent.isSuccess ? consent.data.provider_access : null;
+  const blocked = access != null && access !== 'ready';
+  const ready = consent.isSuccess && consent.data.external_ai_consent && consent.data.global_allowed && !blocked;
   const status = consent.isPending ? t('Freigabe wird geladen…')
     : consent.isError ? t('Die Freigabe konnte nicht geladen werden.')
       : !consent.data.global_allowed ? t('Ein Admin muss die externe KI erst freigeben.')
-        : consent.data.external_ai_consent ? t('KI-Einwilligung erteilt.') : t('KI-Einwilligung fehlt. Ohne Einwilligung startet keine KI-Bearbeitung.');
+        : !consent.data.external_ai_consent ? t('KI-Einwilligung fehlt. Ohne Einwilligung startet keine KI-Bearbeitung.')
+          : blocked ? `${t('KI-Einwilligung erteilt.')} ${t(providerAccessText(access))}` : t('KI-Einwilligung erteilt.');
   return <div className="social-ai-plan-options">
     <p className={`social-ai-consent-status${ready ? '' : ' social-ai-caution'}`} role="status">{status} <button type="button" className="studio-link-button" onClick={onOpenSettings}>{t('Einwilligung in Einstellungen ändern')}</button></p>
     <EditorOptionsPanel key={channel} channel={channel} disabled={!consent.isSuccess || !consent.data.global_allowed} />

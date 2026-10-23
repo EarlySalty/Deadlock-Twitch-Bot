@@ -5,7 +5,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tb_config::{stt::SttConfig, BotConfigSnapshot};
-use tb_llm::social_editor::{EditorConfig, SocialAiSection};
+use tb_llm::{
+    social_editor::{EditorConfig, SocialAiSection},
+    video_observer::VideoObserverConfig,
+};
 
 use super::{brain::BrainRetrieveConfig, stt::SttJobConfig, PlanLimits, ResourceLimits};
 
@@ -30,6 +33,8 @@ pub struct RuntimeConfig {
     pub brain: Option<BrainRuntimeConfig>,
     #[serde(default)]
     pub revisions: RevisionLimits,
+    #[serde(default)]
+    pub video_observer: Option<VideoObserverConfig>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -153,6 +158,23 @@ fn resolve(root: &Path, path: &Path) -> PathBuf {
     }
 }
 
+fn stable_root(canonical: PathBuf) -> PathBuf {
+    let Some(releases) = canonical.parent() else {
+        return canonical;
+    };
+    if releases.file_name().is_none_or(|name| name != "releases") {
+        return canonical;
+    }
+    let Some(current) = releases.parent().map(|base| base.join("current")) else {
+        return canonical;
+    };
+    if current.canonicalize().ok().as_deref() == Some(canonical.as_path()) {
+        current
+    } else {
+        canonical
+    }
+}
+
 fn packaged_root() -> Result<PathBuf, super::AiEditorError> {
     let executable = std::env::current_exe().map_err(|_| super::AiEditorError::Configuration)?;
     executable
@@ -228,9 +250,11 @@ impl MediaRuntime {
         package_root: &Path,
         configuration: MediaConfiguration,
     ) -> Result<Self, super::AiEditorError> {
-        let root = package_root
-            .canonicalize()
-            .map_err(|_| super::AiEditorError::Configuration)?;
+        let root = stable_root(
+            package_root
+                .canonicalize()
+                .map_err(|_| super::AiEditorError::Configuration)?,
+        );
         validate_media(
             &configuration.source_root,
             &configuration.work_root,
@@ -369,6 +393,9 @@ impl RuntimeConfig {
                 .brain
                 .as_ref()
                 .is_some_and(|brain| !brain.retrieval().validate())
+            || self.video_observer.as_ref().is_some_and(|observer| {
+                !observer.valid() || observer.total_deadline_ms >= self.job_deadline_ms
+            })
         {
             return Err(super::AiEditorError::Configuration);
         }
@@ -430,7 +457,10 @@ impl SttRuntimeConfig {
 
     pub fn job_config(&self) -> Result<SttJobConfig, super::AiEditorError> {
         Ok(SttJobConfig {
-            binary: self.binary.clone(),
+            binary: self
+                .binary
+                .canonicalize()
+                .map_err(|_| super::AiEditorError::Configuration)?,
             model_directory: self
                 .settings
                 .model_directory

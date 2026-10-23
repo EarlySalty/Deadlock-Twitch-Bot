@@ -894,6 +894,7 @@ mod tests {
                     reason: "Reaction".into(),
                 },
             ],
+            hook: None,
             observed_highlights: vec![],
             significant_uncertainty: false,
             review_reasons: vec![],

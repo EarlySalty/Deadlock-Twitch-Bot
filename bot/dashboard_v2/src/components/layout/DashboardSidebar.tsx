@@ -16,6 +16,7 @@ import {
   analyticsTabHref,
 } from '@/preview/routes';
 import { useOnboarding } from '@/components/onboarding/onboardingState';
+import { currentPathname, isPublicTourPath, tourHref } from '@/publicTour';
 import { FeedbackBadge } from '@/components/feedback/FeedbackBadge';
 import { useT } from '@/context/LanguageContext';
 import {
@@ -113,20 +114,22 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   const navigationId = useId();
   const compactNavigation = activeRoute === 'social';
   const shownAvatar = avatarFailed ? null : avatarUrl;
+  const tourPath = currentPathname();
+  const toHref = (href: string) => tourHref(href, tourPath);
   const canSeeChallenges = Boolean(
     authStatus?.authenticated && authStatus.twitchUserId && (authStatus.isAdmin || authStatus.partnerStatus === 'active'),
   );
 
   const mainNavItems: SidebarNavItem[] = [
-    ...(adminEligible && adminMode ? [{ href: '/twitch/analyse?view=category', label: t('Deadlock weltweit'), icon: BarChart3, active: activeRoute === 'category' }] : []),
-    { href: PREVIEW_HOME_ROUTE, label: t('Home'), icon: Home, active: activeRoute === 'home' },
+    ...(adminEligible && adminMode && !isPublicTourPath(tourPath) ? [{ href: toHref('/twitch/analyse?view=category'), label: t('Deadlock weltweit'), icon: BarChart3, active: activeRoute === 'category' }] : []),
+    { href: toHref(PREVIEW_HOME_ROUTE), label: t('Home'), icon: Home, active: activeRoute === 'home' },
     ...(canSeeChallenges
-      ? [{ href: '/twitch/challenges', label: t('Rangliste & Erfolge'), icon: Trophy, active: activeRoute === 'challenges' }]
+      ? [{ href: toHref('/twitch/challenges'), label: t('Rangliste & Erfolge'), icon: Trophy, active: activeRoute === 'challenges' }]
       : []),
     ...(canAccessAnalyticsDashboard
       ? [
           {
-            href: analyticsTabHref('overview'),
+            href: toHref(analyticsTabHref('overview')),
             label: t('Analyse'),
             icon: BarChart3,
             active: activeRoute === 'analyse',
@@ -134,39 +137,39 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
         ]
       : []),
     {
-      href: '/twitch/social-media',
+      href: toHref('/twitch/social-media'),
       label: t('Social-Media-Manager'),
       icon: Film,
       active: activeRoute === 'social',
     },
-    { href: PREVIEW_UPLINK_ROUTE, label: t('Uplink'), icon: Radio, active: activeRoute === 'uplink' },
+    { href: toHref(PREVIEW_UPLINK_ROUTE), label: t('Uplink'), icon: Radio, active: activeRoute === 'uplink' },
   ];
   const toolNavItems: SidebarNavItem[] = [
     {
-      href: PREVIEW_VERWALTUNG_ROUTE,
+      href: toHref(PREVIEW_VERWALTUNG_ROUTE),
       label: t('Verwaltung'),
       icon: Settings,
       active: activeRoute === 'verwaltung',
     },
     {
-      href: PREVIEW_OVERLAY_ROUTE,
+      href: toHref(PREVIEW_OVERLAY_ROUTE),
       label: t('Stream-Overlay'),
       icon: MonitorPlay,
       active: activeRoute === 'overlay',
     },
     {
-      href: PREVIEW_TITLE_ROUTE,
+      href: toHref(PREVIEW_TITLE_ROUTE),
       label: t('Titel-Studio'),
       icon: Sparkles,
       active: activeRoute === 'title',
     },
     {
-      href: PREVIEW_PRICING_ROUTE,
+      href: toHref(PREVIEW_PRICING_ROUTE),
       label: t('Plan: {plan}', { plan: planName }),
       icon: BadgeCheck,
       active: activeRoute === 'pricing',
     },
-    { href: PREVIEW_CHANGELOG_ROUTE, label: t('Changelog'), icon: FileText },
+    { href: toHref(PREVIEW_CHANGELOG_ROUTE), label: t('Changelog'), icon: FileText },
   ];
 
   return (
@@ -304,13 +307,13 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
             {t('Hilfe')}
           </div>
           <a
-            href="/twitch/hilfe"
+            href={toHref('/twitch/hilfe')}
             className="flex items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-border-hover hover:text-white"
           >
             <BookOpen className="h-4 w-4" />
             {t('Hilfe & Einrichtung')}
           </a>
-          {onboarding.enabled && <button
+          {onboarding.enabled && !isPublicTourPath(tourPath) && <button
             type="button"
             data-onboarding-restart
             disabled={onboarding.pending}
@@ -322,7 +325,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
             <RotateCcw className="h-4 w-4" />
             {t('Tour erneut zeigen')}
           </button>}
-          <a href="/twitch/feedback" aria-current={activeRoute === 'feedback' ? 'page' : undefined} className="flex min-h-11 items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary hover:text-white"><MessageSquare className="h-4 w-4 shrink-0" /><span className="flex-1">{t('Kritik & Wünsche')}</span><FeedbackBadge isAdmin={adminMode} /></a>
+          <a href={toHref('/twitch/feedback')} aria-current={activeRoute === 'feedback' ? 'page' : undefined} className="flex min-h-11 items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary hover:text-white"><MessageSquare className="h-4 w-4 shrink-0" /><span className="flex-1">{t('Kritik & Wünsche')}</span><FeedbackBadge isAdmin={adminMode} /></a>
           <a href="/twitch/faq" className="flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-white"><CircleHelp className="h-4 w-4 shrink-0" />{t('Häufige Fragen')}</a>
         </div>
         </div>

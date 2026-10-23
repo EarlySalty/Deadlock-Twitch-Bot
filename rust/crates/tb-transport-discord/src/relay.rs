@@ -118,6 +118,19 @@ struct BrokerEnvelope<T> {
     result: Option<T>,
 }
 
+fn is_dm_opted_out(status: u16, body: &str) -> bool {
+    status == 403
+        && serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .pointer("/error/code")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|code| code == "dm_opted_out")
+            })
+            .unwrap_or(false)
+}
+
 #[derive(serde::Serialize)]
 struct ResolveUserRequest {
     user_id: u64,
@@ -900,6 +913,9 @@ impl DiscordBackend for BrokerRelay {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
+            if is_dm_opted_out(status, &body) {
+                return Err(DiscordError::DmOptedOut);
+            }
             return Err(DiscordError::BrokerError { status, body });
         }
         let result: SendResult = resp.json().await?;
@@ -934,7 +950,7 @@ impl DiscordBackend for BrokerRelay {
 mod tests {
     include!("personal_invite_tests.rs");
     use super::*;
-    use crate::DeleteMessage;
+    use crate::{DeleteMessage, DmPurpose};
     use tb_config::BrokerConfig;
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1548,6 +1564,7 @@ mod tests {
         let payload = SendUserDm {
             user_id: 42,
             content: "Token-Fehler — bitte neu verbinden.".to_string(),
+            dm_purpose: DmPurpose::Proactive,
         };
         let result = relay.send_user_dm(payload).await.unwrap();
         assert!(result.ok);
@@ -1559,6 +1576,35 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
         assert_eq!(body["user_id"], 42);
         assert_eq!(body["content"], "Token-Fehler — bitte neu verbinden.");
+        assert!(body.get("dm_purpose").is_none());
+    }
+
+    #[tokio::test]
+    async fn send_user_dm_meldet_opt_out_und_sendet_sicherheitszweck() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/send-dm"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "ok": false,
+                "result": null,
+                "error": {"code": "dm_opted_out", "message": "user 42 opted out of bot DMs"}
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let error = relay
+            .send_user_dm(SendUserDm {
+                user_id: 42,
+                content: "x".to_string(),
+                dm_purpose: DmPurpose::Security,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, DiscordError::DmOptedOut));
+        let received = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        assert_eq!(body["dm_purpose"], "security");
     }
 
     #[tokio::test]
@@ -1716,6 +1762,7 @@ mod tests {
             .send_user_dm(SendUserDm {
                 user_id: 1,
                 content: "x".to_string(),
+                dm_purpose: DmPurpose::Proactive,
             })
             .await
             .unwrap();

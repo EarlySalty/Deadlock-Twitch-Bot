@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use sqlx::PgPool;
-use tb_raid::token_lifecycle::{discord_user_id_for, TokenLifecycleNotifier};
+use tb_raid::token_lifecycle::{discord_user_id_for, DmPurpose, TokenLifecycleNotifier};
 use tb_social_media::reauth::SocialReauthNotifier;
 
 use crate::token_lifecycle_wiring::BrokerTokenLifecycleNotifier;
@@ -51,7 +51,9 @@ impl SocialReauthNotifier for SocialConnectionNotifier {
         else {
             return false;
         };
-        self.dm.send_user_dm(&discord_user_id, &content).await
+        self.dm
+            .send_user_dm(&discord_user_id, &content, DmPurpose::Security)
+            .await
     }
 }
 

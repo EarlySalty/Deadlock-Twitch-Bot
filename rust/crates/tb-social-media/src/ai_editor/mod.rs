@@ -3,6 +3,7 @@ pub mod learning;
 mod media;
 pub mod metadata;
 mod model;
+mod observation;
 pub mod options;
 mod pipeline;
 pub mod revision;
@@ -56,6 +57,8 @@ pub enum AiEditorError {
     Budget,
     #[error("Der KI-Dienst ist derzeit nicht verfügbar.")]
     Provider,
+    #[error("Der KI-Zugang ist auf dem Server nicht vollständig eingerichtet.")]
+    ProviderAccess,
     #[error("Die Untertitel konnten nicht erstellt werden.")]
     Transcription,
     #[error("Der Schnittplan ist ungültig.")]
@@ -83,6 +86,11 @@ pub enum AiEditorError {
 }
 
 impl AiEditorError {
+    pub(crate) fn plan_rejected(reason: &str) -> Self {
+        tracing::warn!(reason, "AI edit plan rejected");
+        Self::Plan
+    }
+
     pub fn is_source_fetch_failure(&self) -> bool {
         matches!(
             self,
@@ -107,7 +115,7 @@ impl AiEditorError {
         matches!(self, Self::Consent)
     }
 
-    const UNIT_VARIANTS: [AiEditorError; 19] = [
+    const UNIT_VARIANTS: [AiEditorError; 20] = [
         Self::Configuration,
         Self::Source,
         Self::SourceDownload,
@@ -116,6 +124,7 @@ impl AiEditorError {
         Self::Consent,
         Self::Budget,
         Self::Provider,
+        Self::ProviderAccess,
         Self::Transcription,
         Self::Plan,
         Self::Render,
@@ -155,6 +164,9 @@ impl From<store::AiStoreError> for AiEditorError {
 
 impl From<tb_llm::social_editor::EditorError> for AiEditorError {
     fn from(error: tb_llm::social_editor::EditorError) -> Self {
+        if error.access.is_some() {
+            return Self::ProviderAccess;
+        }
         match error.kind {
             tb_llm::social_editor::ErrorKind::Consent => Self::Consent,
             tb_llm::social_editor::ErrorKind::Budget => Self::Budget,

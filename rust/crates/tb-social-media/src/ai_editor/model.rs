@@ -8,10 +8,22 @@ pub struct EditPlan {
     pub schema_version: u16,
     pub source_duration_ms: u64,
     pub kept_intervals: Vec<KeptInterval>,
+    #[serde(default)]
+    pub hook: Option<KeptInterval>,
     pub observed_highlights: Vec<Highlight>,
     pub significant_uncertainty: bool,
     pub review_reasons: Vec<String>,
     pub layout: LayoutIntent,
+}
+
+impl EditPlan {
+    pub fn timeline(&self) -> Vec<KeptInterval> {
+        self.hook
+            .iter()
+            .chain(&self.kept_intervals)
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

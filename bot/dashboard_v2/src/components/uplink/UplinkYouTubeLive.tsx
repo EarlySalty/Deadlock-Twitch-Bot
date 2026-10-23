@@ -1,8 +1,18 @@
 import { useLanguage, useT } from '../../context/LanguageContext';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Info, Loader2, Radio, ShieldCheck, TriangleAlert } from 'lucide-react';
+import {
+  TITEL_MAX,
+  entwurfAus,
+  naechsterEntwurf,
+  speichernErlaubt,
+  type YouTubeLiveEinstellungen,
+  type YouTubeLiveEntwurf,
+  type YouTubeLiveSichtbarkeit,
+} from './youTubeLiveEntwurf';
 
-export type YouTubeLiveSichtbarkeit = 'private' | 'unlisted' | 'public';
+export type { YouTubeLiveEinstellungen, YouTubeLiveEntwurf, YouTubeLiveSichtbarkeit } from './youTubeLiveEntwurf';
+
 export type YouTubeLiveZustand =
   | 'inaktiv'
   | 'vorbereitet'
@@ -13,28 +23,12 @@ export type YouTubeLiveZustand =
   | 'fehler'
   | 'unklar';
 
-export interface YouTubeLiveEinstellungen {
-  titel: string;
-  sichtbarkeit: YouTubeLiveSichtbarkeit;
-  autoStart: boolean;
-  autoStop: boolean;
-  freigegebenAm: string | null;
-}
-
 export interface YouTubeLiveStatus {
   zustand: YouTubeLiveZustand;
   hinweis: string | null;
   broadcastId: string | null;
   seit: string | null;
   wiederaufnehmbar: boolean;
-}
-
-export interface YouTubeLiveEntwurf {
-  titel: string;
-  sichtbarkeit: YouTubeLiveSichtbarkeit;
-  autoStart: boolean;
-  autoStop: boolean;
-  liveFreigeben: boolean;
 }
 
 export interface UplinkYouTubeLiveProps {
@@ -57,41 +51,6 @@ const SICHTBARKEITEN: ReadonlyArray<{
   { wert: 'unlisted', label: 'Nicht gelistet', erklaerung: 'Nur wer den Link hat, sieht den Livestream.' },
   { wert: 'public', label: 'Öffentlich', erklaerung: 'Für alle sichtbar und in deinem Kanal gelistet.' },
 ];
-
-const TITEL_MAX = 100;
-
-export function entwurfAus(einstellungen: YouTubeLiveEinstellungen | null): YouTubeLiveEntwurf {
-  if (!einstellungen) {
-    return { titel: '', sichtbarkeit: 'private', autoStart: false, autoStop: false, liveFreigeben: false };
-  }
-  return {
-    titel: einstellungen.titel,
-    sichtbarkeit: einstellungen.sichtbarkeit,
-    autoStart: einstellungen.autoStart,
-    autoStop: einstellungen.autoStop,
-    liveFreigeben: einstellungen.freigegebenAm !== null,
-  };
-}
-
-export function speichernErlaubt(entwurf: YouTubeLiveEntwurf): boolean {
-  const laenge = entwurf.titel.trim().length;
-  return laenge >= 1 && entwurf.titel.length <= TITEL_MAX;
-}
-
-export function naechsterEntwurf(
-  entwurf: YouTubeLiveEntwurf,
-  einstellungen: YouTubeLiveEinstellungen | null,
-  beruehrt: boolean,
-  gesendet: YouTubeLiveEntwurf | null = null,
-): YouTubeLiveEntwurf {
-  const gespeichert = entwurfAus(einstellungen);
-  const bestaetigt = gesendet !== null && einstellungen !== null &&
-    (Object.keys(gesendet) as Array<keyof YouTubeLiveEntwurf>).every(
-      (key) => gespeichert[key] === gesendet[key] && entwurf[key] === gesendet[key],
-    );
-  if (beruehrt && !bestaetigt) return entwurf;
-  return gespeichert;
-}
 
 function beendenErlaubt(status: YouTubeLiveStatus | null): boolean {
   if (!status) return false;

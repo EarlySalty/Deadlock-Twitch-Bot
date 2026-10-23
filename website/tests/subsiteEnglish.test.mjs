@@ -49,6 +49,7 @@ for (const page of [
   "vertriebler",
   "v1",
   "v3",
+  "v4",
 ]) {
   test(`${page} metadata preserves German and selects English by host or query`, () => {
     const original = metadata("deutsche-deadlock-community.de", page);

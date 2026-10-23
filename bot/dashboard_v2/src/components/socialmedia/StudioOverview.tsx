@@ -34,7 +34,7 @@ export interface StudioOverviewData {
 const HOLDS = {
   empty_pool: 'Keine passenden Clips verfügbar',
   no_schedule: 'Wöchentliche Termine fehlen',
-  review_backlog: 'Eine Prüfung ist offen',
+  review_backlog: 'Mehrere Prüfungen sind offen',
   failure_backlog: 'Mehrere Produktionen sind fehlgeschlagen',
   outside_lead: 'Nächster Termin außerhalb des Vorlaufs',
   paused: 'Neue Produktionen pausiert',
@@ -132,7 +132,7 @@ export function StudioStatusStrip({ data, onNavigate }: {
       tone={running > 0 ? 'gold' : 'neutral'} onClick={() => onNavigate('clips', 'preparing')} />
     <StatusItem icon={AlertTriangle} label={t('Prüfungen offen')}
       value={reviewsKnown ? String(productionReviews + clipReviews) : reviews.value}
-      detail={reviewsKnown ? t('{productions} Produktionen & Videos · {clips} Clip-Freigaben', { productions: productionReviews, clips: clipReviews }) : reviews.detail}
+      detail={reviewsKnown ? t('{reviews} Videos & Aufträge · {clips} Clip-Freigaben', { reviews: productionReviews, clips: clipReviews }) : reviews.detail}
       tone={reviewsKnown && productionReviews + clipReviews > 0 ? 'warning' : 'neutral'}
       onClick={() => onNavigate('clips', 'review')} />
     <StatusItem icon={Plug} label={t('Plattformen')}

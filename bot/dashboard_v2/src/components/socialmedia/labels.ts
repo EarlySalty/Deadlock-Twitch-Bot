@@ -80,7 +80,7 @@ export const STATUS_META: Record<EnrichmentStatus, { label: string; tone: LabelT
 
 export const REPORT_KIND_LABELS: Record<SocialMediaReportKind, string> = {
   streamer: 'Streamer',
-  cross: 'Cross',
+  cross: 'Kanalübergreifend',
   admin: 'Admin',
 };
 

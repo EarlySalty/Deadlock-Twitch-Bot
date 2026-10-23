@@ -24,9 +24,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use sqlx::PgPool;
 use tb_chat::timeout_tracking::{BotBannedChannelHandler, BotBannedChannelSignal};
-use tb_raid::token_lifecycle::TokenLifecycleNotifier;
+use tb_raid::token_lifecycle::{DmPurpose, TokenLifecycleNotifier};
 use tb_raid::{BotBanStatusProbe, TokenLifecycleReactor};
-use tb_transport_discord::{BrokerRelay, DiscordBackend, SendAlertEmbed, SendUserDm};
+use tb_transport_discord::{BrokerRelay, DiscordBackend, DiscordError, SendAlertEmbed, SendUserDm};
 
 use crate::task_supervisor::TaskSupervisor;
 
@@ -81,6 +81,57 @@ impl BrokerTokenLifecycleNotifier {
             pool,
         }
     }
+
+    pub(crate) async fn deliver_user_dm(
+        &self,
+        discord_user_id: &str,
+        content: &str,
+        purpose: DmPurpose,
+    ) -> UserDmOutcome {
+        let Some(relay) = &self.relay else {
+            return UserDmOutcome::Failed;
+        };
+        let Ok(user_id) = discord_user_id.parse::<u64>() else {
+            return UserDmOutcome::Failed;
+        };
+        let payload = SendUserDm {
+            user_id,
+            content: content.to_string(),
+            dm_purpose: wire_purpose(purpose),
+        };
+        match relay.send_user_dm(payload).await {
+            Ok(result) if result.ok && !result.result.message_id.is_empty() => UserDmOutcome::Sent,
+            Ok(_) => {
+                tracing::warn!("Discord DM broker returned no successful delivery");
+                UserDmOutcome::Failed
+            }
+            Err(DiscordError::DmOptedOut) => {
+                tracing::info!(
+                    user_id,
+                    "Bot-DM übersprungen: Nutzer hat Bot-Nachrichten abbestellt"
+                );
+                UserDmOutcome::OptedOut
+            }
+            Err(e) => {
+                tracing::debug!("Token-Lifecycle: User-DM nicht zustellbar: {e}");
+                UserDmOutcome::Failed
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UserDmOutcome {
+    Sent,
+    OptedOut,
+    Failed,
+}
+
+fn wire_purpose(purpose: DmPurpose) -> tb_transport_discord::DmPurpose {
+    match purpose {
+        DmPurpose::Proactive => tb_transport_discord::DmPurpose::Proactive,
+        DmPurpose::Security => tb_transport_discord::DmPurpose::Security,
+    }
 }
 
 #[async_trait]
@@ -108,29 +159,10 @@ impl TokenLifecycleNotifier for BrokerTokenLifecycleNotifier {
         }
     }
 
-    async fn send_user_dm(&self, discord_user_id: &str, content: &str) -> bool {
-        let Some(relay) = &self.relay else {
-            return false;
-        };
-        let Ok(user_id) = discord_user_id.parse::<u64>() else {
-            return false;
-        };
-        let payload = SendUserDm {
-            user_id,
-            content: content.to_string(),
-        };
-        match relay.send_user_dm(payload).await {
-            Ok(result) if result.ok && !result.result.message_id.is_empty() => true,
-            Ok(_) => {
-                tracing::warn!("Discord DM broker returned no successful delivery");
-                false
-            }
-            Err(e) => {
-                // DMs geschlossen / User unbekannt etc. → nur Debug, kein Alarm.
-                tracing::debug!("Token-Lifecycle: User-DM nicht zustellbar: {e}");
-                false
-            }
-        }
+    async fn send_user_dm(&self, discord_user_id: &str, content: &str, purpose: DmPurpose) -> bool {
+        self.deliver_user_dm(discord_user_id, content, purpose)
+            .await
+            == UserDmOutcome::Sent
     }
 
     async fn revoke_streamer_role(&self, discord_user_id: &str, reason: &str) -> bool {

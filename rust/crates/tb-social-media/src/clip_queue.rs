@@ -149,23 +149,10 @@ pub(crate) async fn queue_upload_on(
     request: QueueUploadRequest<'_>,
     reason: Option<&str>,
 ) -> Result<i64, QueueError> {
-    let platform = request.platform;
     let explicit_schedule = matches!(request.schedule, UploadSchedule::Replace(_));
     let queue_id = queue_upload_record_on(connection, request).await?;
-    let awaiting_choice = if platform == "tiktok" {
-        let (has_column, options): (bool, Option<serde_json::Value>) = sqlx::query_as(
-            "SELECT to_jsonb(q) ? 'tiktok_post_options', NULLIF(to_jsonb(q)->'tiktok_post_options', 'null'::jsonb) \
-             FROM twitch_clips_upload_queue q WHERE id = $1",
-        )
-        .bind(queue_id)
-        .fetch_one(&mut *connection)
-        .await?;
-        has_column && !tiktok_choice_is_complete(options.as_ref())
-    } else {
-        false
-    };
-    sqlx::query("UPDATE twitch_clips_upload_queue SET status = CASE WHEN $3 OR (platform = 'tiktok' AND status = 'waiting_tiktok_approval') THEN 'waiting_tiktok_approval' WHEN $2::text IS NULL THEN 'pending' ELSE 'waiting_connection' END, last_error = $2, last_attempt_at = CASE WHEN $2::text IS NULL THEN NULL ELSE NOW() END WHERE id = $1 AND produced_video_id IS NULL AND (status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval') OR (status = 'waiting_schedule' AND (scheduled_at > NOW() OR $4)))")
-        .bind(queue_id).bind(reason).bind(awaiting_choice).bind(explicit_schedule).execute(connection).await?;
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = CASE WHEN $2::text IS NULL THEN 'pending' ELSE 'waiting_connection' END, last_error = $2, last_attempt_at = CASE WHEN $2::text IS NULL THEN NULL ELSE NOW() END WHERE id = $1 AND produced_video_id IS NULL AND (status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval') OR (status = 'waiting_schedule' AND (scheduled_at > NOW() OR $3)))")
+        .bind(queue_id).bind(reason).bind(explicit_schedule).execute(connection).await?;
     Ok(queue_id)
 }
 
@@ -220,18 +207,6 @@ pub async fn apply_tiktok_choice(
         .rows_affected();
     }
     Ok(changed)
-}
-
-pub async fn wait_for_tiktok_approval(pool: &PgPool, queue_id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE twitch_clips_upload_queue SET status = 'waiting_tiktok_approval', last_error = NULL \
-         WHERE id = $1 AND platform = 'tiktok' AND status IN ('pending', 'waiting_connection') \
-           AND tiktok_publish_id IS NULL",
-    )
-    .bind(queue_id)
-    .execute(pool)
-    .await?;
-    Ok(())
 }
 
 pub async fn upload_wait_reason_for_clip(
@@ -547,7 +522,6 @@ pub async fn get_upload_queue(
     }
     if matches!(status, "pending" | "waiting_connection") {
         sql.push_str(" AND (q.scheduled_at IS NULL OR q.scheduled_at <= now())");
-        sql.push_str(" AND (q.platform <> 'tiktok' OR NOT (to_jsonb(q) ? 'tiktok_post_options') OR COALESCE(to_jsonb(q)->'tiktok_post_options'->'consent' = 'true'::jsonb, FALSE))");
     }
     if status == "waiting_connection" {
         sql.push_str(
@@ -1092,7 +1066,7 @@ mod tests {
             .unwrap();
         let before: (String, bool, i32) = sqlx::query_as("SELECT status, scheduled_at = $2::text::timestamptz, attempts FROM twitch_clips_upload_queue WHERE id = $1")
             .bind(future_id).bind(&future).fetch_one(&pool).await.unwrap();
-        assert_eq!(before, ("waiting_tiktok_approval".into(), true, 0));
+        assert_eq!(before, ("waiting_connection".into(), true, 0));
         let old_id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, scheduled_at) VALUES ($1, 'tiktok', 'failed', NOW() - INTERVAL '1 day') RETURNING id")
             .bind(clip).fetch_one(&pool).await.unwrap();
         let youtube_id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, scheduled_at, completed_at) VALUES ($1, 'youtube', 'completed', NOW() - INTERVAL '1 day', NOW()) RETURNING id")
@@ -1137,10 +1111,7 @@ mod tests {
         );
         let held: (String, serde_json::Value, bool) = sqlx::query_as("SELECT status, tiktok_post_options, scheduled_at = $2::text::timestamptz FROM twitch_clips_upload_queue WHERE id = $1")
             .bind(future_id).bind(&future).fetch_one(&pool).await.unwrap();
-        assert_eq!(
-            held,
-            ("waiting_tiktok_approval".into(), options.clone(), true)
-        );
+        assert_eq!(held, ("waiting_connection".into(), options.clone(), true));
         let mut tx = pool.begin().await.unwrap();
         apply_tiktok_choice(&mut tx, clip, &options).await.unwrap();
         tx.commit().await.unwrap();

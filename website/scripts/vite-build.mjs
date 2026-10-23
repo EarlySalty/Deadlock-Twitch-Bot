@@ -13,16 +13,20 @@ const server = await createServer({
 });
 
 try {
-  const mod = await server.ssrLoadModule("/src/pages/StreamerNetworkV3Page.tsx");
-  const html = renderToString(
-    createElement(StrictMode, null, createElement(mod.StreamerNetworkV3Page)),
-  );
-  const file = "dist/v3/index.html";
-  const template = fs.readFileSync(file, "utf-8");
-  fs.writeFileSync(
-    file,
-    template.replace('<div id="root"></div>', `<div id="root">${html}</div>`),
-  );
+  for (const [page, file] of [
+    ["StreamerNetworkV3Page", "dist/v3/index.html"],
+    ["StreamerNetworkV4Page", "dist/v4/index.html"],
+  ]) {
+    const mod = await server.ssrLoadModule(`/src/pages/${page}.tsx`);
+    const html = renderToString(
+      createElement(StrictMode, null, createElement(mod[page])),
+    );
+    const template = fs.readFileSync(file, "utf-8");
+    fs.writeFileSync(
+      file,
+      template.replace('<div id="root"></div>', `<div id="root">${html}</div>`),
+    );
+  }
 } finally {
   await server.close();
 }

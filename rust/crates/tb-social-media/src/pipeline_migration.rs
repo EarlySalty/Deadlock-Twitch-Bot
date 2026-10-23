@@ -409,6 +409,61 @@ pub async fn activate_ready(pool: &PgPool) -> Result<Vec<CutoverReport>, Migrati
     Ok(reports)
 }
 
+pub type OwnerCutover = (String, Result<CutoverReport, MigrationError>);
+
+pub async fn cutover_new_owners(pool: &PgPool) -> Result<Vec<OwnerCutover>, MigrationError> {
+    if !write_barrier_installed(&mut *pool.acquire().await?).await? {
+        return Err(MigrationError::BarrierMissing);
+    }
+    let planned = dry_run(pool).await?;
+    let candidates = owners_to_adopt(pool, &planned.channels).await?;
+    let mut results = Vec::with_capacity(candidates.len());
+    for owner in candidates {
+        let result = adopt_owner(pool, &owner).await;
+        results.push((owner, result));
+    }
+    Ok(results)
+}
+
+async fn adopt_owner(pool: &PgPool, owner: &str) -> Result<CutoverReport, MigrationError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL TimeZone = 'UTC'")
+        .execute(&mut *tx)
+        .await?;
+    autopilot_settings::lock_owner(&mut tx, owner).await?;
+    let report = match cutover_state(&mut tx, owner).await?.as_deref() {
+        None | Some("shadow") => activate_on(&mut tx, owner).await?,
+        Some("unified" | "paused") => outcome(owner, CutoverOutcome::AlreadyClosed, 0),
+        Some(_) => outcome(owner, CutoverOutcome::NotShadow, 0),
+    };
+    tx.commit().await?;
+    Ok(report)
+}
+
+async fn owners_to_adopt(
+    pool: &PgPool,
+    channels: &[ChannelDecision],
+) -> Result<Vec<String>, MigrationError> {
+    let owners: Vec<String> = channels
+        .iter()
+        .map(|channel| channel.twitch_user_id.clone())
+        .collect();
+    if owners.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_scalar(
+        "SELECT owner FROM unnest($1::text[]) AS owner
+         WHERE NOT EXISTS (
+             SELECT 1 FROM social_pipeline_cutover c
+             WHERE c.twitch_user_id = owner AND c.state <> 'shadow'
+         )
+         ORDER BY owner",
+    )
+    .bind(&owners)
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn pause(pool: &PgPool, owner: &str) -> Result<CutoverReport, MigrationError> {
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, owner).await?;
@@ -1108,10 +1163,18 @@ pub fn plan(inventory: &Inventory) -> Plan {
             plan.rows.push(planned(table, owner, key, row, outcome));
         }
     }
-    for owner in plan_owners(&plan) {
-        let reconciliation = context.reconciliation(&owner, &plan);
-        plan.reconciliation.insert(owner, reconciliation);
+    let mut by_owner = BTreeMap::<&str, Vec<&PipelineMigrationMapping>>::new();
+    for row in &plan.rows {
+        by_owner
+            .entry(row.mapping.twitch_user_id.as_str())
+            .or_default()
+            .push(&row.mapping);
     }
+    let reconciliation: BTreeMap<String, Value> = by_owner
+        .into_iter()
+        .map(|(owner, rows)| (owner.to_string(), context.reconciliation(owner, &rows)))
+        .collect();
+    plan.reconciliation.extend(reconciliation);
     plan
 }
 
@@ -1558,15 +1621,9 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn reconciliation(&self, owner: &str, plan: &Plan) -> Value {
-        let rows: Vec<&PipelineMigrationMapping> = plan
-            .rows
-            .iter()
-            .map(|row| &row.mapping)
-            .filter(|mapping| mapping.twitch_user_id == owner)
-            .collect();
+    fn reconciliation(&self, owner: &str, rows: &[&PipelineMigrationMapping]) -> Value {
         let mut counts = BTreeMap::<String, DispositionCounts>::new();
-        for mapping in &rows {
+        for mapping in rows {
             count(
                 counts.entry(mapping.legacy_table.clone()).or_default(),
                 mapping.disposition,
@@ -1581,7 +1638,7 @@ impl<'a> Context<'a> {
             "counts": counts,
             "unresolved": unresolved,
             "ready": unresolved == 0,
-            "proposed_policy": self.proposed_policy(owner, &rows),
+            "proposed_policy": self.proposed_policy(owner, rows),
         })
     }
 

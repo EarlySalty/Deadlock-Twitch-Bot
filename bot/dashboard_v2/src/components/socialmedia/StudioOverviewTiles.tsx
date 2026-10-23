@@ -1,13 +1,13 @@
-import { lazy, Suspense, useId, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, Ban, Coins, Send } from 'lucide-react';
+import { ArrowRight, Coins, Send, TriangleAlert } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import type { SocialClipMitPosting } from '@/api/socialMedia';
 import type { ScheduleQueueSnapshot } from './autopilot/schedule-queue';
 import type { PublishSnapshot } from './autopilot/publish-review/api';
 import type { AiJobView } from './ai/api';
 import { platformIconUrl } from './platformIcon';
-import { clipName, discardedItems, type DiscardedItem } from './discardedItems';
+import { clipName, failedItems, type FailedItem } from './failedItems';
 import { WorkspaceDialog } from './WorkspaceDialog';
 import type { SocialMediaViewTarget } from './labels';
 import type { QueueStage } from './queuePresentation';
@@ -21,7 +21,7 @@ interface RecentItem { key: string; title: string; at: string | null; platforms:
 
 function recentPublications(publish: PublishSnapshot | undefined, clips: SocialClipMitPosting[] | undefined, t: Translate): RecentItem[] {
   const produced = (publish?.videos ?? []).flatMap(video => {
-    const platforms = video.event?.destinations.filter(destination => destination.state === 'published').map(destination => destination.platform) ?? [];
+    const platforms = video.event?.destinations.filter(destination => destination.state === 'published' && destination.reason !== 'tiktok_draft').map(destination => destination.platform) ?? [];
     return platforms.length === 0 ? [] : [{ key: `video-${video.id}`, title: clipName(clips, video.clip_id, t('Video {id}', { id: video.id })), at: video.event?.completed_at ?? video.event?.executed_at ?? null, platforms }];
   });
   const legacy = (clips ?? []).filter(clip => clip.status === 'published_all').map(clip => ({
@@ -63,28 +63,22 @@ function RecentTile({ items, onNavigate }: { items: RecentItem[]; onNavigate: Na
   </Tile>;
 }
 
-function topReasons(items: DiscardedItem[]): { reason: string; count: number }[] {
+function topReasons(items: FailedItem[]): { reason: string; count: number }[] {
   const counts = new Map<string, number>();
   for (const item of items) counts.set(item.reason, (counts.get(item.reason) ?? 0) + 1);
   return [...counts].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count).slice(0, 3);
 }
 
-function DiscardedTile({ items }: { items: DiscardedItem[] }) {
+function FailedTile({ items, onNavigate }: { items: FailedItem[]; onNavigate: Navigate }) {
   const { t } = useLanguage();
-  const id = useId();
-  return <Tile icon={Ban} title={t('Von KI aussortiert')}>
+  return <Tile icon={TriangleAlert} title={t('Fehlgeschlagen')}
+    footer={<button type="button" className="studio-overview-link" onClick={() => onNavigate('clips', 'failed')}>{t('Alle Fehler ansehen')}<ArrowRight className="h-4 w-4" aria-hidden /></button>}>
     <p className="studio-tile-value">{items.length}</p>
-    {items.length === 0 ? <p className="studio-overview-empty">{t('Nichts aussortiert.')}</p> : <>
-      <ul className="studio-tile-list studio-tile-top-reasons" aria-label={t('Häufigste Gründe')}>{topReasons(items).map(entry => <li key={entry.reason}>
-        <span className="studio-tile-item-title" title={entry.reason}>{entry.reason}</span>
+    {items.length === 0 ? <p className="studio-overview-empty">{t('Keine Fehler.')}</p>
+      : <ul className="studio-tile-list studio-tile-top-reasons" aria-label={t('Häufigste Gründe')}>{topReasons(items).map(entry => <li key={entry.reason}>
+        <span className="studio-tile-item-reason" title={entry.reason}>{entry.reason}</span>
         <span className="studio-tile-item-meta">{entry.count}×</span>
-      </li>)}</ul>
-      <button type="button" className="studio-overview-link" popoverTarget={id}>{t('Gründe ansehen')}<ArrowRight className="h-4 w-4" aria-hidden /></button>
-      <div id={id} popover="auto" className="studio-import-popover studio-tile-popover">
-        <h3>{t('Warum aussortiert wurde')}</h3>
-        <ul className="studio-tile-reasons">{items.map(item => <li key={item.key}><strong title={item.title}>{item.title}</strong><span>{item.reason}</span></li>)}</ul>
-      </div>
-    </>}
+      </li>)}</ul>}
   </Tile>;
 }
 
@@ -107,7 +101,7 @@ function CostTile({ owner, streamer, isAdmin, statisticsPlatforms }: { owner?: s
   return <Tile icon={Coins} title={t('KI-Kosten & Nutzung')}
     footer={<button type="button" className="studio-overview-link" disabled={!streamer} onClick={() => setOpen(true)}>{t('Details')}<ArrowRight className="h-4 w-4" aria-hidden /></button>}>
     {owner ? <CostSummary owner={owner} /> : <p className="studio-overview-empty">{t('Bitte einen Kanal auswählen.')}</p>}
-    {open && <WorkspaceDialog eyebrow={t('Performance')} title={t('Auswertung')} onClose={() => setOpen(false)}>
+    {open && <WorkspaceDialog eyebrow={t('Kennzahlen')} title={t('Auswertung')} onClose={() => setOpen(false)}>
       <Suspense fallback={<p role="status">{t('Wird geladen')}</p>}>
         <AnalyticsTab streamer={streamer} twitchUserId={owner} isAdmin={isAdmin} statisticsPlatforms={statisticsPlatforms} />
       </Suspense>
@@ -128,7 +122,7 @@ export function StudioOverviewTiles({ schedule, publish, clips, owner, streamer,
   const { t } = useLanguage();
   return <div className="studio-tiles">
     <RecentTile items={recentPublications(publish, clips, t)} onNavigate={onNavigate} />
-    <DiscardedTile items={discardedItems(schedule, publish, clips, t)} />
+    <FailedTile items={failedItems(schedule, publish, clips, t)} onNavigate={onNavigate} />
     <CostTile owner={owner} streamer={streamer} isAdmin={isAdmin} statisticsPlatforms={statisticsPlatforms} />
   </div>;
 }

@@ -52,7 +52,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::{PgPool, Row};
-use tb_transport_discord::{BrokerRelay, DiscordBackend, SendUserDm};
+use tb_transport_discord::{BrokerRelay, DiscordBackend, DiscordError, DmPurpose, SendUserDm};
 
 use tb_internal_api::handlers::raid_oauth::{
     OAuthCallbackResult, RaidOAuthError, RaidOAuthPort, RaidStatePayload,
@@ -69,6 +69,8 @@ const RAID_REQUIREMENTS_PURPOSE: &str = "raid_requirements_oauth";
 const RAID_REQUIREMENTS_DM_BODY: &str = "Hey! Du bist als Partner im Auto-Raid-Netzwerk der deutschen Deadlock-Community dabei – jetzt fehlt nur noch deine einmalige Twitch-Freigabe. Damit raidet der Bot deinen Stream am Ende automatisch zu einem anderen aktiven Deadlock-Streamer, statt deine Zuschauer ins Leere laufen zu lassen, und schickt dir umgekehrt selbst Raids. Du gibst nur die Raid-Berechtigung frei, sonst nichts – dauert keine Minute:";
 const RAID_REQUIREMENTS_BUTTON_LABEL: &str = "Jetzt Raid-Freigabe erteilen";
 const RAID_REQUIREMENTS_RESULT_MESSAGE: &str = "Partner wurde zur Raid-Freigabe angeschrieben.";
+const RAID_REQUIREMENTS_OPTED_OUT_MESSAGE: &str =
+    "Partner hat Bot-Nachrichten abbestellt, es wurde keine Nachricht gesendet.";
 
 // ---------------------------------------------------------------------------
 // Lokale Login-Normalisierung für DB-Werte
@@ -1099,8 +1101,23 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         let content = format!(
             "{RAID_REQUIREMENTS_DM_BODY}\n\n[{RAID_REQUIREMENTS_BUTTON_LABEL}]({auth_url})"
         );
-        let result = match relay.send_user_dm(SendUserDm { user_id, content }).await {
+        let dm = SendUserDm {
+            user_id,
+            content,
+            dm_purpose: DmPurpose::Proactive,
+        };
+        let result = match relay.send_user_dm(dm).await {
             Ok(result) => result,
+            Err(DiscordError::DmOptedOut) => {
+                tracing::info!(
+                    twitch_user_id = %partner.twitch_user_id,
+                    login = %partner.twitch_login,
+                    "raid requirements DM übersprungen: Bot-Nachrichten abbestellt"
+                );
+                self.mark_requirements_failed(&partner.twitch_user_id, "dm_opted_out")
+                    .await;
+                return Ok(RAID_REQUIREMENTS_OPTED_OUT_MESSAGE.to_string());
+            }
             Err(error) => {
                 tracing::error!(
                     %error,

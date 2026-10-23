@@ -61,6 +61,7 @@ export interface QueueJob {
   last_error: string | null;
   review_reasons: string[];
   review_explanation: string | null;
+  superseded?: boolean;
 }
 
 export interface PolicyPreview {

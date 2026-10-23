@@ -87,6 +87,7 @@ async fn cleanup_once(pool: &PgPool, discord: &dyn DiscordBackend) -> Result<(),
                     DiscordError::BrokerError { status, .. } => format!("discord_status_{status}"),
                     DiscordError::Http(_) => "discord_http".to_owned(),
                     DiscordError::Deserialize(_) => "discord_decode".to_owned(),
+                    DiscordError::DmOptedOut => "discord_dm_opted_out".to_owned(),
                 };
                 sqlx::query(
                     "UPDATE twitch_crew_review_events event

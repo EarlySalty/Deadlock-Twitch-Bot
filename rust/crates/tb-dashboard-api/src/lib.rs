@@ -313,6 +313,18 @@ fn build_authed_router_with_analysis_store(
             "/social-media/api/access/me",
             get(social_media::my_access_handler),
         )
+        .route(
+            "/social-media/api/access/request",
+            post(social_media::access_request_post_handler),
+        )
+        .route(
+            "/social-media/api/access/requests",
+            get(social_media::access_requests_get_handler),
+        )
+        .route(
+            "/social-media/api/access/requests/{twitch_user_id}",
+            delete(social_media::access_request_delete_handler),
+        )
         // Analytics-Ansicht (identisch zu stats) + Queue-Upload.
         .route(
             "/social-media/api/analytics",

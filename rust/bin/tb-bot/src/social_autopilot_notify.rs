@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use sqlx::PgPool;
-use tb_raid::token_lifecycle::{discord_user_id_for, TokenLifecycleNotifier};
+use tb_raid::token_lifecycle::{discord_user_id_for, DmPurpose};
 use tb_social_media::autopilot_publish::{AutopilotNotifier, DiscordDelivery};
 
-use crate::token_lifecycle_wiring::BrokerTokenLifecycleNotifier;
+use crate::token_lifecycle_wiring::{BrokerTokenLifecycleNotifier, UserDmOutcome};
 
 pub(crate) struct AutopilotDiscordNotifier {
     pool: PgPool,
@@ -23,10 +23,14 @@ impl AutopilotNotifier for AutopilotDiscordNotifier {
         else {
             return DiscordDelivery::Unavailable;
         };
-        if self.dm.send_user_dm(&discord_user_id, content).await {
-            DiscordDelivery::Sent
-        } else {
-            DiscordDelivery::Failed
+        match self
+            .dm
+            .deliver_user_dm(&discord_user_id, content, DmPurpose::Proactive)
+            .await
+        {
+            UserDmOutcome::Sent => DiscordDelivery::Sent,
+            UserDmOutcome::OptedOut => DiscordDelivery::Unavailable,
+            UserDmOutcome::Failed => DiscordDelivery::Failed,
         }
     }
 }

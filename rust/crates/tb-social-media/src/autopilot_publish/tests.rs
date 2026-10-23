@@ -12,7 +12,6 @@ use super::*;
 use crate::autopilot_settings::{AutopilotSettings, ScheduleSlot};
 use crate::produced_video::{NewProducedVideo, RenderedVideo};
 use crate::production_jobs::ProductionMode;
-use crate::uploaders::tiktok::TikTokPostOptions;
 use crate::uploaders::{UploadCheckpoint, UploadError};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -297,20 +296,6 @@ async fn consented(pool: &PgPool, id: i64, platforms: &[&str]) -> Vec<Destinatio
     decisions
 }
 
-fn with_tiktok(choice: Value) -> Vec<DestinationDecision> {
-    vec![DestinationDecision {
-        platform: "tiktok".into(),
-        tiktok_options: Some(choice),
-    }]
-}
-
-async fn rejection(pool: &PgPool, id: i64, decisions: &[DestinationDecision]) -> String {
-    match approve(pool, "owner", id, decisions).await {
-        Err(PublishError::Invalid(message)) => message,
-        other => panic!("expected a precise TikTok rejection, got {other:?}"),
-    }
-}
-
 async fn bound_options(pool: &PgPool, id: i64) -> Option<Value> {
     sqlx::query_scalar(
         "SELECT metadata #> '{publication,tiktok_options}' FROM social_produced_videos WHERE id = $1",
@@ -331,192 +316,17 @@ async fn approval_count(pool: &PgPool, id: i64) -> i64 {
     .expect("approvals")
 }
 
-async fn tiktok_state(pool: &PgPool, id: i64) -> &'static str {
-    snapshot(pool, "owner")
-        .await
-        .expect("snapshot")
-        .videos
-        .into_iter()
-        .find(|video| video.id == id)
-        .expect("listed video")
-        .tiktok_consent
-}
-
-async fn save_choice_setting(pool: &PgPool, key: String, value: &Value) {
-    sqlx::query("INSERT INTO social_media_settings (key, value) VALUES ($1, $2::text::jsonb)")
-        .bind(key)
-        .bind(value.to_string())
-        .execute(pool)
-        .await
-        .expect("saved choices");
-}
-
 #[tokio::test]
-async fn tiktok_consent_binds_the_exact_version_once_and_drafts_do_not_authorize() {
+async fn tiktok_approval_sends_a_draft_without_post_consent() {
     let pool = pool().await;
     configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
-    let (id, file) = video(&pool, "consent").await;
-    let clip: i64 = sqlx::query_scalar("SELECT clip_id FROM social_produced_videos WHERE id = $1")
-        .bind(id)
-        .fetch_one(&pool)
-        .await
-        .expect("clip");
-    let draft = json!({"caption": "Entwurf", "privacy_level": "SELF_ONLY", "allow_comment": false, "allow_duet": false, "allow_stitch": false});
-    save_choice_setting(&pool, format!("tiktok_draft:owner:{clip}"), &draft).await;
-    save_choice_setting(&pool, "tiktok_defaults:owner".into(), &draft).await;
-    assert_eq!(
-        rejection(&pool, id, &decisions(&["tiktok"])).await,
-        TikTokBindingIssue::ConsentMissing.message()
-    );
-    assert_eq!(
-        rejection(&pool, id, &with_tiktok(draft)).await,
-        TIKTOK_OPTIONS_UNREADABLE
-    );
-    let mut unconfirmed = tiktok_choice(&pool, id).await;
-    unconfirmed["consent"] = json!(false);
-    assert_eq!(
-        rejection(&pool, id, &with_tiktok(unconfirmed)).await,
-        TikTokBindingIssue::ConsentMissing.message()
-    );
-    let choice = tiktok_choice(&pool, id).await;
-    assert_eq!(
-        rejection(&pool, id, &with_tiktok(choice.clone())).await,
-        TikTokBindingIssue::MusicConsentMissing.message()
-    );
-    music_consent(&pool, "tt-1").await;
-    let mut disclosed = choice.clone();
-    disclosed["commercial_content"] = json!(true);
-    assert_eq!(
-        rejection(&pool, id, &with_tiktok(disclosed)).await,
-        TikTokBindingIssue::OptionsInvalid.message()
-    );
-    assert_eq!(approval_count(&pool, id).await, 0);
-    assert!(bound_options(&pool, id).await.is_none());
-    assert!(destinations(&pool, id).await.is_empty());
-    assert_eq!(tiktok_state(&pool, id).await, "missing");
-    approve(&pool, "owner", id, &with_tiktok(choice))
-        .await
-        .expect("exact consent");
-    let stored = bound_options(&pool, id).await.expect("stored binding");
-    assert_eq!(stored["video_path"], json!(file.to_string_lossy()));
-    assert_eq!(stored["caption"], json!("Highlight\n\n#Deadlock"));
-    assert_eq!(tiktok_state(&pool, id).await, "bound");
-    let subject = tiktok_subject(&pool, "owner", id).await.expect("subject");
-    assert!(subject.binding().is_ok());
+    let (id, _) = video(&pool, "draft").await;
     approve(&pool, "owner", id, &decisions(&["tiktok"]))
         .await
-        .expect("existing binding is reused");
-    assert_eq!(bound_options(&pool, id).await, Some(stored));
-    cleanup(pool).await;
-}
-
-#[tokio::test]
-async fn tiktok_binding_is_invalidated_by_edits_account_changes_and_file_changes() {
-    let pool = pool().await;
-    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
-    let (id, file) = video(&pool, "invalidated").await;
-    let first = tiktok_choice(&pool, id).await;
-    music_consent(&pool, "tt-1").await;
-    approve(&pool, "owner", id, &with_tiktok(first.clone()))
-        .await
-        .expect("first consent");
-    sqlx::query("UPDATE social_produced_videos SET status = 'review', expires_at = clock_timestamp() + INTERVAL '1 day' WHERE id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await
-        .expect("back in review");
-    let mut copies = std::collections::BTreeMap::new();
-    copies.insert(
-        "youtube".to_string(),
-        crate::ai_editor::metadata::PlatformCopy {
-            title: "Neuer Titel".into(),
-            description: String::new(),
-            hashtags: vec!["Deadlock".into()],
-        },
-    );
-    crate::ai_editor::metadata::save(&pool, "owner", id, copies)
-        .await
-        .expect("edited copy");
+        .expect("draft approval without consent");
+    assert_eq!(approval_count(&pool, id).await, 1);
     assert!(bound_options(&pool, id).await.is_none());
-    assert_eq!(tiktok_state(&pool, id).await, "missing");
-    assert_eq!(
-        rejection(&pool, id, &with_tiktok(first)).await,
-        TikTokBindingIssue::CaptionChanged.message()
-    );
-    let second = tiktok_choice(&pool, id).await;
-    assert_eq!(second["caption"], json!("Neuer Titel\n\n#Deadlock"));
-    approve(&pool, "owner", id, &with_tiktok(second.clone()))
-        .await
-        .expect("consent for the edited version");
-    let held = destinations(&pool, id).await;
-    sqlx::query("INSERT INTO social_media_platform_auth (platform, twitch_user_id, platform_user_id, authorized_at) VALUES ('tiktok', 'owner', 'tt-2', '2999-01-01')")
-        .execute(&pool)
-        .await
-        .expect("other account");
-    music_consent(&pool, "tt-2").await;
-    let subject = tiktok_subject(&pool, "owner", id).await.expect("subject");
-    assert_eq!(
-        subject.binding().err(),
-        Some(TikTokBindingIssue::AccountChanged)
-    );
-    assert_eq!(tiktok_state(&pool, id).await, "stale");
-    assert_eq!(
-        rejection(&pool, id, &decisions(&["tiktok"])).await,
-        TikTokBindingIssue::AccountChanged.message()
-    );
-    assert_eq!(
-        rejection(&pool, id, &with_tiktok(second)).await,
-        TikTokBindingIssue::AccountChanged.message()
-    );
-    assert_eq!(destinations(&pool, id).await, held);
-    let third = tiktok_choice(&pool, id).await;
-    approve(&pool, "owner", id, &with_tiktok(third.clone()))
-        .await
-        .expect("consent for the new account");
-    std::fs::write(&file, b"different rendered bytes").expect("changed file");
-    let subject = tiktok_subject(&pool, "owner", id).await.expect("subject");
-    assert_eq!(
-        subject.binding().err(),
-        Some(TikTokBindingIssue::FileChanged)
-    );
-    assert_eq!(
-        rejection(&pool, id, &with_tiktok(third)).await,
-        TikTokBindingIssue::FileChanged.message()
-    );
-    let stored = bound_options(&pool, id).await.expect("old binding kept");
-    assert_eq!(stored["platform_user_id"], json!("tt-2"));
-    assert_ne!(
-        stored["approved_video_sha256"],
-        json!(subject.approved_video_sha256)
-    );
-    cleanup(pool).await;
-}
-
-#[tokio::test]
-async fn tiktok_binding_cannot_change_after_the_effect_started() {
-    let pool = pool().await;
-    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
-    let (id, _) = video(&pool, "started").await;
-    let choice = tiktok_choice(&pool, id).await;
-    music_consent(&pool, "tt-1").await;
-    approve(&pool, "owner", id, &with_tiktok(choice.clone()))
-        .await
-        .expect("consent");
-    sqlx::query("UPDATE twitch_clips_upload_queue SET effect_started_at = clock_timestamp() WHERE produced_video_id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await
-        .expect("effect started");
-    let mut public = choice;
-    public["privacy_level"] = json!("PUBLIC_TO_EVERYONE");
-    assert_eq!(
-        rejection(&pool, id, &with_tiktok(public)).await,
-        TIKTOK_EFFECT_STARTED
-    );
-    assert_eq!(
-        bound_options(&pool, id).await.expect("binding")["privacy_level"],
-        json!("SELF_ONLY")
-    );
+    assert!(!destinations(&pool, id).await.is_empty());
     cleanup(pool).await;
 }
 
@@ -1173,7 +983,7 @@ async fn stale_claim_cannot_change_a_recovered_destination() {
         .await
         .expect("stale hold");
     assert!(!executor
-        .start_effect(&stale, Some("yt-1"), None)
+        .start_effect(&stale, Some("yt-1"), false)
         .await
         .expect("stale start"));
     executor
@@ -1804,7 +1614,7 @@ struct TikTokFake {
     statuses: Mutex<HashMap<String, Value>>,
     polls: Mutex<Vec<String>>,
     steps: Mutex<Vec<TikTokStep>>,
-    calls: Mutex<Vec<(String, TikTokPostOptions)>>,
+    calls: Mutex<Vec<(String, String)>>,
     persisted_before_transfer: Mutex<Vec<bool>>,
 }
 
@@ -1820,7 +1630,7 @@ impl TikTokFake {
         })
     }
 
-    fn calls(&self) -> Vec<(String, TikTokPostOptions)> {
+    fn calls(&self) -> Vec<(String, String)> {
         self.calls.lock().expect("calls").clone()
     }
 
@@ -1858,13 +1668,12 @@ impl DestinationPublisher for TikTokFake {
         &self,
         _owner: &str,
         request: &PublishRequest,
-        options: &TikTokPostOptions,
         checkpoint: &dyn UploadCheckpoint,
     ) -> Result<String, UploadError> {
         self.calls
             .lock()
             .expect("calls")
-            .push((request.file_path.clone(), options.clone()));
+            .push((request.file_path.clone(), request.title.clone()));
         let step = {
             let mut steps = self.steps.lock().expect("steps");
             if steps.is_empty() {
@@ -1898,12 +1707,7 @@ impl DestinationPublisher for TikTokFake {
         }
     }
 
-    async fn tiktok_status(
-        &self,
-        _owner: &str,
-        _options: &TikTokPostOptions,
-        publish_id: &str,
-    ) -> Result<Value, UploadError> {
+    async fn tiktok_status(&self, _owner: &str, publish_id: &str) -> Result<Value, UploadError> {
         self.polls.lock().expect("polls").push(publish_id.into());
         Ok(self
             .statuses
@@ -1953,7 +1757,7 @@ async fn dispatching(pool: &PgPool, fake: &Arc<TikTokFake>) -> PublishExecutor {
 }
 
 #[tokio::test]
-async fn disabled_tiktok_dispatch_holds_with_the_specific_binding_reason() {
+async fn disabled_tiktok_dispatch_holds_at_the_effect_boundary() {
     let pool = pool().await;
     configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
     let fake = TikTokFake::with(&pool, vec![]);
@@ -1977,7 +1781,7 @@ async fn disabled_tiktok_dispatch_holds_with_the_specific_binding_reason() {
         queue_state(&pool, revoked, "tiktok").await,
         (
             queue_status::HELD.into(),
-            Some("tiktok_music_consent_missing".into())
+            Some("tiktok_effect_boundary_pending".into())
         )
     );
     dispatching(&pool, &fake)
@@ -2004,13 +1808,9 @@ async fn tiktok_dispatch_persists_publish_id_before_transfer_and_never_repeats()
     let fake = TikTokFake::with(&pool, vec![TikTokStep::Transfer("pub-1", Ok(()))]);
     let executor = dispatching(&pool, &fake).await;
     executor.tick().await.expect("dispatch tick");
-    let bound: TikTokPostOptions =
-        serde_json::from_value(bound_options(&pool, id).await.expect("binding"))
-            .expect("bound options");
     let calls = fake.calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].1, bound);
-    assert_ne!(calls[0].1.caption, "queue row title");
+    assert_eq!(calls[0].1, "queue row title");
     assert_eq!(fake.persisted(), vec![true]);
     assert_eq!(
         queue_state(&pool, id, "tiktok").await,
@@ -2021,10 +1821,7 @@ async fn tiktok_dispatch_persists_publish_id_before_transfer_and_never_repeats()
     );
     let (publish_id, options, _, uploaded) = tiktok_row(&pool, id).await;
     assert_eq!(publish_id.as_deref(), Some("pub-1"));
-    assert_eq!(
-        options,
-        Some(serde_json::to_value(&bound).expect("options json"))
-    );
+    assert_eq!(options, None);
     assert!(!uploaded);
     executor.tick().await.expect("second tick");
     executor.tick().await.expect("third tick");
@@ -2114,7 +1911,7 @@ async fn claim_checkpoint_is_fenced_by_generation_and_written_once() {
 }
 
 #[tokio::test]
-async fn rejected_tiktok_choice_is_held_editable_and_dispatched_once_after_rebinding() {
+async fn rejected_tiktok_draft_is_held_and_dispatched_once_after_reapproval() {
     let pool = pool().await;
     configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
     let id = tiktok_ready(&pool, "rejected").await;
@@ -2139,11 +1936,9 @@ async fn rejected_tiktok_choice_is_held_editable_and_dispatched_once_after_rebin
     let (publish_id, _, started, _) = tiktok_row(&pool, id).await;
     assert!(publish_id.is_none());
     assert!(!started);
-    let mut choice = tiktok_choice(&pool, id).await;
-    choice["privacy_level"] = json!("FOLLOWER_OF_CREATOR");
-    approve(&pool, "owner", id, &with_tiktok(choice))
+    approve(&pool, "owner", id, &decisions(&["tiktok"]))
         .await
-        .expect("rebind");
+        .expect("reapprove");
     sqlx::query("UPDATE twitch_clips_upload_queue SET next_retry_at = clock_timestamp() - INTERVAL '1 minute' WHERE produced_video_id = $1")
         .bind(id)
         .execute(&pool)
@@ -2152,7 +1947,6 @@ async fn rejected_tiktok_choice_is_held_editable_and_dispatched_once_after_rebin
     executor.tick().await.expect("rebound tick");
     let calls = fake.calls();
     assert_eq!(calls.len(), 2);
-    assert_eq!(calls[1].1.privacy_level, "FOLLOWER_OF_CREATOR");
     assert_eq!(
         queue_state(&pool, id, "tiktok").await,
         (
@@ -2281,12 +2075,10 @@ async fn reconciliation_settles_processing_rows_without_unclear_alerts() {
     assert!(tiktok_row(&pool, posted).await.3);
     assert_eq!(
         queue_state(&pool, inbox, "tiktok").await,
-        (
-            queue_status::FAILED.into(),
-            Some("tiktok_inbox_only".into())
-        )
+        (queue_status::PUBLISHED.into(), Some("tiktok_draft".into()))
     );
-    assert!(!tiktok_row(&pool, inbox).await.3);
+    assert_eq!(external_id(&pool, inbox).await.as_deref(), Some("pub-b"));
+    assert!(tiktok_row(&pool, inbox).await.3);
     assert_eq!(
         queue_state(&pool, rejected, "tiktok").await,
         (queue_status::FAILED.into(), Some("tiktok_rejected".into()))
@@ -2487,20 +2279,6 @@ async fn unusable_files_are_held_with_their_own_reason() {
     let (publish_id, _, started, _) = tiktok_row(&pool, id).await;
     assert!(publish_id.is_none());
     assert!(!started);
-    cleanup(pool).await;
-}
-
-#[tokio::test]
-async fn snapshot_consent_follows_music_consent() {
-    let pool = pool().await;
-    configure(&pool, &["tiktok"], &[("tiktok", "tt-1")]).await;
-    let id = tiktok_ready(&pool, "music").await;
-    assert_eq!(tiktok_state(&pool, id).await, "bound");
-    sqlx::query("DELETE FROM social_media_settings WHERE key LIKE 'tiktok_music_consent:%'")
-        .execute(&pool)
-        .await
-        .expect("revoke music consent");
-    assert_eq!(tiktok_state(&pool, id).await, "stale");
     cleanup(pool).await;
 }
 

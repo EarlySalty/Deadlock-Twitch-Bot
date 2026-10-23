@@ -1,13 +1,8 @@
-use serde_json::Value;
 use sqlx::{PgConnection, PgPool};
 
 use super::executor::{Claim, DestinationPublisher};
-use super::{
-    queue_status, stored_tiktok_options, tiktok_account_on, tiktok_subject_on, Binding,
-    PublishError,
-};
+use super::{queue_status, tiktok_account_on, PublishError};
 use crate::tiktok_recovery::{self, ClaimCheckpoint, PublishState};
-use crate::uploaders::tiktok::TikTokPostOptions;
 use crate::uploaders::UploadError;
 
 pub(super) const BOUNDARY_PENDING: &str = "tiktok_effect_boundary_pending";
@@ -20,64 +15,18 @@ const ALREADY_PUBLISHED: &str = "tiktok_already_published";
 const TRANSFER_ACTIVE: &str = "tiktok_transfer_active";
 const INIT_UNCONFIRMED: &str = "tiktok_init_unconfirmed";
 const STATUS_UNCONFIRMED: &str = "tiktok_status_unconfirmed";
-const INBOX_ONLY: &str = "tiktok_inbox_only";
+const DRAFT: &str = "tiktok_draft";
 const REJECTED: &str = "tiktok_rejected";
 const WITHOUT_POST_ID: &str = "tiktok_published_without_post_id";
-const INBOX_ONLY_MESSAGE: &str =
-    "TikTok hat das Video nur in dein TikTok-Postfach gelegt. Es wurde nicht veröffentlicht.";
 const PROCESSING_POLL_SECONDS: i32 = 60;
 const UNCERTAIN_POLL_SECONDS: i32 = 600;
 const PROCESSING_LIMIT_HOURS: i32 = 24;
 const RECONCILE_WINDOW_DAYS: i32 = 7;
 const RECONCILE_BATCH: i64 = 10;
 
-pub(super) async fn verified_options(
-    pool: &PgPool,
-    claim: &Claim,
-    digest: &str,
-) -> Result<Result<TikTokPostOptions, &'static str>, PublishError> {
-    let binding = Binding {
-        path: claim.request.file_path.clone(),
-        digest: digest.to_string(),
-    };
-    let mut connection = pool.acquire().await?;
-    match tiktok_subject_on(&mut connection, &claim.owner, claim.video_id, &binding).await {
-        Ok(subject) => Ok(subject.binding().cloned().map_err(|issue| issue.reason())),
-        Err(PublishError::NotFound | PublishError::State | PublishError::Io(_)) => {
-            Ok(Err("exact_file_changed"))
-        }
-        Err(error) => Err(error),
-    }
-}
-
-pub(super) async fn binding_issue_on(
-    connection: &mut PgConnection,
-    video_id: i64,
-    options: &TikTokPostOptions,
-) -> Result<Option<&'static str>, PublishError> {
-    let metadata: Option<String> = sqlx::query_scalar(
-        "SELECT metadata::text FROM social_produced_videos WHERE id = $1 FOR UPDATE",
-    )
-    .bind(video_id)
-    .fetch_optional(&mut *connection)
-    .await?;
-    let Some(metadata) = metadata else {
-        return Ok(Some("exact_file_changed"));
-    };
-    let metadata: Value = serde_json::from_str(&metadata)?;
-    if stored_tiktok_options(&metadata).as_ref() != Some(options) {
-        return Ok(Some("tiktok_consent_missing"));
-    }
-    if crate::ai_editor::metadata::tiktok_caption(&metadata) != options.caption {
-        return Ok(Some("tiktok_caption_changed"));
-    }
-    Ok(None)
-}
-
 pub(super) async fn effect_issue_on(
     connection: &mut PgConnection,
     claim: &Claim,
-    options: &TikTokPostOptions,
 ) -> Result<Option<&'static str>, PublishError> {
     let unified: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM social_pipeline_cutover
@@ -92,14 +41,6 @@ pub(super) async fn effect_issue_on(
     let account = tiktok_account_on(connection, &claim.owner).await?;
     if account.credential_id.is_none() || account.platform_user_id.is_none() {
         return Ok(Some("account_missing"));
-    }
-    if account.credential_id != Some(options.credential_id)
-        || account.platform_user_id.as_deref() != Some(options.platform_user_id.as_str())
-    {
-        return Ok(Some("account_changed"));
-    }
-    if !account.music_consent {
-        return Ok(Some("tiktok_music_consent_missing"));
     }
     clip_issue_on(connection, claim.queue_id).await
 }
@@ -153,7 +94,6 @@ pub(super) async fn dispatch(
     pool: &PgPool,
     publisher: &dyn DestinationPublisher,
     claim: &Claim,
-    options: &TikTokPostOptions,
     max_attempts: i32,
 ) -> Result<(), PublishError> {
     let checkpoint = ClaimCheckpoint {
@@ -162,13 +102,11 @@ pub(super) async fn dispatch(
         generation: claim.generation,
     };
     let result = publisher
-        .publish_tiktok(&claim.owner, &claim.request, options, &checkpoint)
+        .publish_tiktok(&claim.owner, &claim.request, &checkpoint)
         .await;
     match result {
         Ok(publish_id) => processing(pool, claim, &publish_id).await,
-        Err(UploadError::NotStarted(error)) => {
-            not_started(pool, claim, options, *error, max_attempts).await
-        }
+        Err(UploadError::NotStarted(error)) => not_started(pool, claim, *error, max_attempts).await,
         Err(error) => {
             tracing::warn!(%error, queue = claim.queue_id, "TikTok transfer outcome is uncertain");
             uncertain(pool, claim).await
@@ -218,14 +156,13 @@ async fn uncertain(pool: &PgPool, claim: &Claim) -> Result<(), PublishError> {
 async fn not_started(
     pool: &PgPool,
     claim: &Claim,
-    options: &TikTokPostOptions,
     error: UploadError,
     max_attempts: i32,
 ) -> Result<(), PublishError> {
     let attempts = claim.attempts.saturating_add(1);
     let file_invalid = match &error {
         UploadError::Io(_) => true,
-        UploadError::Validation(_) => !file_intact(claim, options).await,
+        UploadError::Validation(_) => !file_intact(claim).await,
         _ => false,
     };
     let (status, reason, delay) = match &error {
@@ -273,7 +210,7 @@ fn retry_reason(error: &UploadError) -> &'static str {
     }
 }
 
-async fn file_intact(claim: &Claim, options: &TikTokPostOptions) -> bool {
+async fn file_intact(claim: &Claim) -> bool {
     let path = &claim.request.file_path;
     let non_empty = tokio::fs::metadata(path)
         .await
@@ -281,7 +218,7 @@ async fn file_intact(claim: &Claim, options: &TikTokPostOptions) -> bool {
     non_empty
         && crate::uploaders::tiktok::video_digest(path)
             .await
-            .is_ok_and(|digest| digest == options.approved_video_sha256)
+            .is_ok_and(|digest| Some(digest.as_str()) == claim.sha256.as_deref())
 }
 
 pub(super) async fn reconcile(
@@ -291,12 +228,10 @@ pub(super) async fn reconcile(
 ) -> Result<usize, PublishError> {
     retry_unconfirmed_init(pool, max_attempts).await?;
     escalate_stalled(pool).await?;
-    let rows: Vec<(i64, String, String, String, String)> = sqlx::query_as(
-        "SELECT q.id::bigint, q.status, v.twitch_user_id, q.tiktok_publish_id,
-             q.tiktok_post_options::text
+    let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
+        "SELECT q.id::bigint, q.status, v.twitch_user_id, q.tiktok_publish_id
          FROM twitch_clips_upload_queue q JOIN social_produced_videos v ON v.id = q.produced_video_id
          WHERE q.platform = 'tiktok' AND q.tiktok_publish_id IS NOT NULL
-         AND q.tiktok_post_options IS NOT NULL
          AND q.effect_started_at > clock_timestamp() - make_interval(days => $3)
          AND ((q.status = $1 AND COALESCE(q.last_attempt_at, '-infinity'::timestamptz)
                  < clock_timestamp() - make_interval(secs => $4::double precision))
@@ -313,18 +248,8 @@ pub(super) async fn reconcile(
     .fetch_all(pool)
     .await?;
     let mut resolved = 0;
-    for (queue_id, status, owner, publish_id, options) in rows {
-        if poll(
-            pool,
-            publisher,
-            queue_id,
-            &status,
-            &owner,
-            &publish_id,
-            &options,
-        )
-        .await?
-        {
+    for (queue_id, status, owner, publish_id) in rows {
+        if poll(pool, publisher, queue_id, &status, &owner, &publish_id).await? {
             resolved += 1;
         }
     }
@@ -338,7 +263,6 @@ async fn poll(
     status: &str,
     owner: &str,
     publish_id: &str,
-    options: &str,
 ) -> Result<bool, PublishError> {
     let touched = sqlx::query(
         "UPDATE twitch_clips_upload_queue SET last_attempt_at = clock_timestamp()
@@ -353,8 +277,7 @@ async fn poll(
     if touched != 1 {
         return Ok(false);
     }
-    let options: TikTokPostOptions = serde_json::from_str(options)?;
-    let response = match publisher.tiktok_status(owner, &options, publish_id).await {
+    let response = match publisher.tiktok_status(owner, publish_id).await {
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(%error, queue = queue_id, "TikTok publication status unavailable");
@@ -364,20 +287,14 @@ async fn poll(
     tiktok_recovery::record_status(pool, queue_id, &response).await?;
     match tiktok_recovery::classify(&response) {
         PublishState::Published(post_id) => {
-            published(pool, queue_id, status, publish_id, post_id.as_deref()).await
+            let reason = post_id.is_none().then_some(WITHOUT_POST_ID);
+            let external_id = post_id.as_deref().unwrap_or(publish_id);
+            delivered(pool, queue_id, status, publish_id, external_id, reason).await
         }
         PublishState::Inbox => {
-            finish(
-                pool,
-                queue_id,
-                status,
-                publish_id,
-                INBOX_ONLY,
-                Some(INBOX_ONLY_MESSAGE),
-            )
-            .await
+            delivered(pool, queue_id, status, publish_id, publish_id, Some(DRAFT)).await
         }
-        PublishState::Rejected => finish(pool, queue_id, status, publish_id, REJECTED, None).await,
+        PublishState::Rejected => finish(pool, queue_id, status, publish_id, REJECTED).await,
         PublishState::Processing => {
             resume_processing(pool, queue_id, status, publish_id).await?;
             Ok(false)
@@ -386,15 +303,14 @@ async fn poll(
     }
 }
 
-async fn published(
+async fn delivered(
     pool: &PgPool,
     queue_id: i64,
     status: &str,
     publish_id: &str,
-    post_id: Option<&str>,
+    external_id: &str,
+    reason: Option<&str>,
 ) -> Result<bool, PublishError> {
-    let external_id = post_id.unwrap_or(publish_id);
-    let reason = post_id.is_none().then_some(WITHOUT_POST_ID);
     let mut tx = pool.begin().await?;
     let changed = sqlx::query(
         "UPDATE twitch_clips_upload_queue SET status = $4, external_id = $5,
@@ -431,11 +347,10 @@ async fn finish(
     status: &str,
     publish_id: &str,
     reason: &str,
-    message: Option<&str>,
 ) -> Result<bool, PublishError> {
     let changed = sqlx::query(
         "UPDATE twitch_clips_upload_queue SET status = $4, outcome_reason = $5,
-         last_error = COALESCE($6, last_error, $5), next_retry_at = NULL
+         last_error = COALESCE(last_error, $5), next_retry_at = NULL
          WHERE id = $1 AND status = $2 AND tiktok_publish_id = $3",
     )
     .bind(queue_id)
@@ -443,7 +358,6 @@ async fn finish(
     .bind(publish_id)
     .bind(queue_status::FAILED)
     .bind(reason)
-    .bind(message)
     .execute(pool)
     .await?
     .rows_affected();

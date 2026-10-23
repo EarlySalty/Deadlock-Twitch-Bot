@@ -491,6 +491,9 @@ fn legacy_publications(row: &PgRow) -> Result<Vec<LegacyPublication>, sqlx::Erro
         ("instagram", "instagram_media_id"),
     ] {
         if let Some(external_id) = row.try_get::<Option<String>, _>(column)? {
+            if is_unpublished_draft(platform, &external_id) {
+                continue;
+            }
             publications.push(LegacyPublication {
                 platform,
                 external_id,
@@ -498,6 +501,10 @@ fn legacy_publications(row: &PgRow) -> Result<Vec<LegacyPublication>, sqlx::Erro
         }
     }
     Ok(publications)
+}
+
+fn is_unpublished_draft(platform: &str, external_id: &str) -> bool {
+    platform == "tiktok" && external_id.starts_with("v_inbox_")
 }
 
 fn source_from_row(row: &PgRow) -> Result<PipelineSource, PoolError> {
@@ -698,4 +705,19 @@ async fn load_destinations(
 
 fn raw_text(raw: &Value, key: &str) -> Option<String> {
     raw.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use super::is_unpublished_draft;
+
+    #[test]
+    fn tiktok_inbox_ids_are_not_publications() {
+        assert!(is_unpublished_draft(
+            "tiktok",
+            "v_inbox_file~v2.7699546714403031062"
+        ));
+        assert!(!is_unpublished_draft("tiktok", "7699546714403031062"));
+        assert!(!is_unpublished_draft("youtube", "v_inbox_file~x"));
+    }
 }

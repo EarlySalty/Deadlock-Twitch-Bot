@@ -89,7 +89,9 @@ async fn project(
     job.estimated_provider_cost_usd = totals.estimated_provider_cost_usd;
     job.measured_provider_cost_usd = None;
     job.provider_latency_ms = totals.provider_latency_ms;
-    job.cost_basis = if job.estimated_provider_cost_usd.is_some() {
+    job.cost_basis = if totals.subscription_included {
+        "subscription_included"
+    } else if job.estimated_provider_cost_usd.is_some() {
         "usage_priced_estimate"
     } else {
         "unknown"
@@ -249,6 +251,7 @@ fn failure(error: &AiEditorError, stage: AiStage) -> JobFailure {
         AiEditorError::Consent => JobFailure::ConsentMissing,
         AiEditorError::Budget => JobFailure::BudgetExceeded,
         AiEditorError::Provider => JobFailure::ProviderUnavailable,
+        AiEditorError::ProviderAccess => JobFailure::ProviderAccess,
         AiEditorError::Transcription => JobFailure::TranscriptionFailed,
         AiEditorError::Render => JobFailure::RenderingFailed,
         AiEditorError::Validation => JobFailure::ValidationFailed,

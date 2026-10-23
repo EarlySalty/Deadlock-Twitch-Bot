@@ -32,10 +32,12 @@ export function isEnglishLanding(
       "/streamer/vertriebler",
       "/streamer/v1",
       "/streamer/v3",
+      "/streamer/v4",
       "/affiliate-portal",
       "/vertriebler",
       "/v1",
       "/v3",
+      "/v4",
       "/twitch/affiliate/portal",
     ].includes(path)
   )
@@ -73,7 +75,7 @@ export function landingLink(raw: string): string {
   if (
     publicPaths[url.pathname] ||
     publicPaths[normalized] ||
-    /^\/streamer\/(faq|onboarding|vergleich|clips|affiliate-portal|vertriebler|v1|v3)(\/|\/index\.html)?$/.test(
+    /^\/streamer\/(faq|onboarding|vergleich|clips|affiliate-portal|vertriebler|v1|v3|v4)(\/|\/index\.html)?$/.test(
       url.pathname,
     )
   ) {

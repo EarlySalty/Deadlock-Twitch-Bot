@@ -274,8 +274,7 @@ impl AutopilotWorker {
             .join(format!("production-{}", job.id));
         tokio::fs::create_dir_all(&directory).await?;
         let root = self.config.output_root.canonicalize()?;
-        let directory = directory.canonicalize()?;
-        if !directory.starts_with(&root) {
+        if !directory.canonicalize()?.starts_with(&root) {
             return Err(RunnerError::Source);
         }
         Ok(directory)
@@ -380,7 +379,6 @@ impl AutopilotWorker {
         let expected = self
             .config
             .output_root
-            .canonicalize()?
             .join(&job.twitch_user_id)
             .join(format!("production-{}", job.id))
             .join(format!("upload-{}.mp4", video.version_no));

@@ -394,7 +394,7 @@ impl tb_raid::token_lifecycle::TokenLifecycleNotifier for GraceNotifier {
         true
     }
 
-    async fn send_user_dm(&self, _: &str, _: &str) -> bool {
+    async fn send_user_dm(&self, _: &str, _: &str, _: tb_raid::token_lifecycle::DmPurpose) -> bool {
         true
     }
 

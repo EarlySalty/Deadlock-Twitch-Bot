@@ -6,8 +6,8 @@ use chrono::{DateTime, Datelike, Duration as Span, Utc};
 
 use super::*;
 use crate::autopilot_publish::{
-    self, approve, snapshot, tiktok_subject, DestinationDecision, DestinationPublisher,
-    PublishExecutor, PublishOutcome, PublishRequest,
+    self, approve, tiktok_subject, DestinationDecision, DestinationPublisher, PublishExecutor,
+    PublishOutcome, PublishRequest,
 };
 use crate::autopilot_settings::{
     PipelineMode, PolicyScope, ReviewPolicy, ScheduleSlot, TextDefaults,
@@ -15,7 +15,6 @@ use crate::autopilot_settings::{
 use crate::production_jobs::autopilot_schedule::{
     resolve_review, save_schedule, ReviewDecision, SchedulePatch,
 };
-use crate::uploaders::tiktok::TikTokPostOptions;
 use crate::uploaders::{UploadCheckpoint, UploadError};
 
 const OWNER: &str = "101";
@@ -87,22 +86,15 @@ impl DestinationPublisher for FakePlatforms {
         &self,
         _owner: &str,
         request: &PublishRequest,
-        options: &TikTokPostOptions,
         checkpoint: &dyn UploadCheckpoint,
     ) -> Result<String, UploadError> {
-        assert!(options.consent, "TikTok dispatch without per-post consent");
         let number = self.record("tiktok", request).await;
         let publish_id = format!("pub-{number}");
         checkpoint.record_publish_id(&publish_id).await?;
         Ok(publish_id)
     }
 
-    async fn tiktok_status(
-        &self,
-        _owner: &str,
-        _options: &TikTokPostOptions,
-        publish_id: &str,
-    ) -> Result<Value, UploadError> {
+    async fn tiktok_status(&self, _owner: &str, publish_id: &str) -> Result<Value, UploadError> {
         self.polls.lock().expect("polls").push(publish_id.into());
         Ok(
             json!({"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": [format!("post-{publish_id}")]}),
@@ -564,23 +556,6 @@ async fn bound_hash(pool: &PgPool, id: i64, platform: &str) -> Option<String> {
     .expect("bound hash")
 }
 
-async fn visible_reason(pool: &PgPool, id: i64, platform: &str) -> Option<String> {
-    snapshot(pool, OWNER)
-        .await
-        .expect("snapshot")
-        .videos
-        .into_iter()
-        .find(|video| video.id == id)
-        .and_then(|video| video.event)
-        .and_then(|event| {
-            event
-                .destinations
-                .into_iter()
-                .find(|destination| destination.platform == platform)
-        })
-        .and_then(|destination| destination.reason)
-}
-
 fn assert_delivered(call: &Call, video: &ProducedVideo, hash: &str) {
     let (title, description, hashtags) = frozen_text(&video.metadata, &call.platform);
     assert_eq!(Some(call.file_path.as_str()), video.file_path.as_deref());
@@ -688,50 +663,14 @@ async fn run_cell(cell: Cell) {
         Some(artifact.as_str())
     );
     assert_delivered(&youtube[0], &video, &artifact);
-    if cell.review == ReviewPolicy::Required {
-        assert_eq!(fake.on("tiktok").len(), 1, "{} tiktok dispatch", cell.name);
-        assert_delivered(&fake.on("tiktok")[0], &video, &artifact);
-        age_tiktok(pool, video.id).await;
-        executor.tick().await.expect("reconcile tick");
-        assert_eq!(
-            status_of(pool, video.id, "tiktok").await.map(|row| row.0),
-            Some(autopilot_publish::queue_status::PUBLISHED.into())
-        );
-    } else {
-        assert!(
-            fake.on("tiktok").is_empty(),
-            "{} TikTok without consent",
-            cell.name
-        );
-        let held = status_of(pool, video.id, "tiktok")
-            .await
-            .expect("tiktok destination");
-        assert_eq!(
-            held.0,
-            autopilot_publish::queue_status::HELD,
-            "{}",
-            cell.name
-        );
-        let reason = held.1.expect("held reason");
-        assert!(
-            reason.starts_with("tiktok_"),
-            "{} reason {reason}",
-            cell.name
-        );
-        assert_eq!(visible_reason(pool, video.id, "tiktok").await, Some(reason));
-        let consent: Option<Value> = sqlx::query_scalar(
-            "SELECT metadata #> '{publication,tiktok_options}' FROM social_produced_videos WHERE id = $1",
-        )
-        .bind(video.id)
-        .fetch_one(pool)
-        .await
-        .expect("tiktok binding");
-        assert!(
-            consent.is_none_or(|options| options["consent"] != json!(true)),
-            "{} consent was set automatically",
-            cell.name
-        );
-    }
+    assert_eq!(fake.on("tiktok").len(), 1, "{} tiktok dispatch", cell.name);
+    assert_delivered(&fake.on("tiktok")[0], &video, &artifact);
+    age_tiktok(pool, video.id).await;
+    executor.tick().await.expect("reconcile tick");
+    assert_eq!(
+        status_of(pool, video.id, "tiktok").await.map(|row| row.0),
+        Some(autopilot_publish::queue_status::PUBLISHED.into())
+    );
     assert!(
         fake.on("instagram").is_empty(),
         "unselected destination contacted"
@@ -926,4 +865,158 @@ async fn acceptance_barrier_rejects_new_legacy_rows_for_unified_owners() {
         .and_then(|error| error.code())
         .map(|code| code.into_owned());
     assert_eq!(code.as_deref(), Some("23514"));
+}
+
+async fn failed_legacy(pool: &PgPool, clip: i64, platform: &str, error: &str) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, last_error)
+         VALUES ($1, $2, 'failed', $3) RETURNING id",
+    )
+    .bind(clip)
+    .bind(platform)
+    .bind(error)
+    .fetch_one(pool)
+    .await
+    .expect("failed legacy row")
+}
+
+async fn queue_status(pool: &PgPool, id: i64) -> (String, bool) {
+    sqlx::query_as(
+        "SELECT status, scheduled_at IS NOT NULL FROM twitch_clips_upload_queue WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .expect("queue row")
+}
+
+fn error_code(result: Result<sqlx::postgres::PgQueryResult, sqlx::Error>) -> Option<String> {
+    result
+        .expect_err("barrier rejects the retry")
+        .as_database_error()
+        .and_then(|error| error.code())
+        .map(|code| code.into_owned())
+}
+
+async fn reopen(pool: &PgPool, id: i64) -> Result<sqlx::postgres::PgQueryResult, sqlx::Error> {
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'pending' WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await
+}
+
+async fn owner_cutover(pool: &PgPool) -> Option<crate::pipeline_migration::CutoverOutcome> {
+    crate::pipeline_migration::cutover_new_owners(pool)
+        .await
+        .expect("new owner cutover")
+        .into_iter()
+        .find(|(owner, _)| owner == OWNER)
+        .map(|(_, result)| result.expect("owner cutover result").outcome)
+}
+
+async fn cutover_state(pool: &PgPool) -> Option<String> {
+    sqlx::query_scalar("SELECT state FROM social_pipeline_cutover WHERE twitch_user_id = $1")
+        .bind(OWNER)
+        .fetch_optional(pool)
+        .await
+        .expect("cutover state")
+}
+
+#[tokio::test]
+async fn acceptance_new_owner_cutover_retries_shadow_owner_until_ready() {
+    use crate::pipeline_migration::CutoverOutcome;
+    let db = harness_database().await;
+    let pool = &db.pool;
+    sqlx::raw_sql(
+        "ALTER TABLE social_media_streamer_settings ADD COLUMN IF NOT EXISTS twitch_user_id TEXT;
+        ALTER TABLE social_media_platform_schedule ADD COLUMN IF NOT EXISTS twitch_user_id TEXT;
+        ALTER TABLE social_media_category_settings ADD COLUMN IF NOT EXISTS twitch_user_id TEXT;",
+    )
+    .execute(pool)
+    .await
+    .expect("owner columns of the legacy settings");
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let clip = deadlock_clip(pool, &runtime, PipelineMode::Upload).await;
+    let running: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'youtube', 'processing') RETURNING id",
+    )
+    .bind(clip)
+    .fetch_one(pool)
+    .await
+    .expect("running legacy upload");
+    assert_eq!(cutover_state(pool).await, None);
+    assert_eq!(owner_cutover(pool).await, Some(CutoverOutcome::NotReady));
+    assert_eq!(cutover_state(pool).await.as_deref(), Some("shadow"));
+    assert_eq!(owner_cutover(pool).await, Some(CutoverOutcome::NotReady));
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'failed' WHERE id = $1")
+        .bind(running)
+        .execute(pool)
+        .await
+        .expect("running upload ends");
+    assert_eq!(owner_cutover(pool).await, Some(CutoverOutcome::Activated));
+    assert_eq!(cutover_state(pool).await.as_deref(), Some("unified"));
+    assert_eq!(owner_cutover(pool).await, None);
+}
+
+#[tokio::test]
+async fn acceptance_legacy_drain_retry_reopens_one_row_per_clip_and_platform() {
+    let cell = Cell {
+        name: "legacy-retry",
+        mode: PipelineMode::Upload,
+        review: ReviewPolicy::Off,
+    };
+    let db = harness_database().await;
+    let pool = &db.pool;
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let clip = deadlock_clip(pool, &runtime, cell.mode).await;
+    let older = failed_legacy(pool, clip, "tiktok", "tiktok: unaudited_client").await;
+    let newest = failed_legacy(pool, clip, "tiktok", "tiktok: unaudited_client").await;
+    let gone = failed_legacy(pool, clip, "youtube", "upload failed (HTTP 410)").await;
+    let open: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'youtube', 'pending') RETURNING id",
+    )
+    .bind(clip)
+    .fetch_one(pool)
+    .await
+    .expect("open legacy row");
+    channel(pool, cell).await;
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261022180000_social_legacy_drain_retry.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("legacy drain retry migration");
+    assert_eq!(queue_status(pool, newest).await, ("pending".into(), true));
+    assert_eq!(queue_status(pool, older).await.0, "failed");
+    assert_eq!(queue_status(pool, gone).await.0, "failed");
+    assert_eq!(queue_status(pool, open).await, ("pending".into(), false));
+
+    assert_eq!(
+        error_code(reopen(pool, older).await).as_deref(),
+        Some("23505")
+    );
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'failed' WHERE id = $1")
+        .bind(newest)
+        .execute(pool)
+        .await
+        .expect("retry fails again");
+    reopen(pool, older)
+        .await
+        .expect("a failed legacy row may run again");
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'failed' WHERE id = $1")
+        .bind(older)
+        .execute(pool)
+        .await
+        .expect("retry fails again");
+    sqlx::query("UPDATE twitch_clips_social_media SET uploaded_tiktok = TRUE WHERE id = $1")
+        .bind(clip)
+        .execute(pool)
+        .await
+        .expect("clip already published");
+    assert_eq!(
+        error_code(reopen(pool, older).await).as_deref(),
+        Some("23514")
+    );
 }

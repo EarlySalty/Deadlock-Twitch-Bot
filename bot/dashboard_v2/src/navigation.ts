@@ -10,6 +10,7 @@ import {
   PREVIEW_UPLINK_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
 } from './preview/routes';
+import { isPublicTourPath, livePathFromTourPath, tourHref } from './publicTour';
 
 const dashboardPaths = new Set([
   PREVIEW_ANALYTICS_ROUTE, PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE,
@@ -25,10 +26,25 @@ function navigationIndex(): number | null {
   return index !== undefined && index >= 0 ? index : null;
 }
 
+function isDashboardPath(pathname: string): boolean {
+  const normalized = pathname.replace(/\/+$/, '') || '/';
+  return dashboardPaths.has(normalized) || isPublicTourPath(normalized);
+}
+
 export function dashboardDestination(href: string): URL | null {
   const url = new URL(href, window.location.href);
-  return url.origin === window.location.origin && dashboardPaths.has(url.pathname.replace(/\/+$/, '') || '/')
+  return url.origin === window.location.origin && isDashboardPath(url.pathname)
     ? url : null;
+}
+
+export function tourLinkHref(href: string, currentHref: string): string | null {
+  const current = new URL(currentHref);
+  if (!isPublicTourPath(current.pathname)) return null;
+  const url = new URL(href, current);
+  const livePath = url.pathname.replace(/\/+$/, '') || '/';
+  if (url.origin !== current.origin || isPublicTourPath(livePath) || !dashboardPaths.has(livePath)) return null;
+  const next = new URL(tourHref(`${url.pathname}${url.search}${url.hash}`, current.pathname), current.origin);
+  return livePathFromTourPath(next.pathname) === livePath ? next.href : null;
 }
 
 export function navigateDashboard(event: MouseEvent<HTMLAnchorElement>) {

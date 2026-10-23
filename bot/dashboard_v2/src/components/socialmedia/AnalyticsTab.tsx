@@ -211,7 +211,7 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin, statisticsPlatfo
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
               <div className="rounded-2xl border border-border bg-bg/35 p-4">
                 <div className="text-xs font-bold uppercase tracking-[0.14em] text-text-secondary mb-3">
-                  {t('Views nach Bucket')}
+                  {t('Aufrufe nach Zeitraum')}
                 </div>
                 <div className="h-[260px]">
                   <ResponsiveContainer width="100%" height="100%">
@@ -274,7 +274,7 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin, statisticsPlatfo
               disabled={crossReportMutation.isPending}
               className="rounded-xl border border-accent/30 bg-accent/12 px-4 py-3 text-left hover:bg-accent/18 transition disabled:opacity-50"
             >
-              <div className="text-xs font-bold uppercase tracking-[0.14em] text-accent">{t('Cross')}</div>
+              <div className="text-xs font-bold uppercase tracking-[0.14em] text-accent">{t('Kanalübergreifend')}</div>
               <div className="text-sm text-white mt-1">{t('Monatsreport über alle Streamer')}</div>
             </button>
           </div>
