@@ -411,6 +411,7 @@ fn request(partners: Vec<OnlineCandidate>) -> AutoRaidRequest {
         offline_trigger_ts: Some(1000.0),
         reason: "auto_raid_on_offline".to_string(),
         respect_soft_raid_blacklist: true,
+        fixed_target: None,
     }
 }
 
@@ -1258,4 +1259,93 @@ async fn fallback_filtert_nicht_partner_weiter_gegen_weiche_blacklist() {
         "der Kategorie-Fallback filtert weiche Blacklist-Eintraege unveraendert"
     );
     assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["600"]);
+}
+
+fn fixed(user_id: &str, login: &str) -> tb_raid::target_resolution::ResolvedTarget {
+    tb_raid::target_resolution::ResolvedTarget {
+        user_id: user_id.to_string(),
+        user_login: login.to_string(),
+        started_at: None,
+        is_partner_raid: false,
+        is_outreach_boost: false,
+        candidates_count: 1,
+        target_stream_data: None,
+    }
+}
+
+#[tokio::test]
+async fn wunschziel_ersetzt_auswahl() {
+    let pool = pool_or_skip!("t6w_pipe_fixed_target");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    let h = build(&pool, HashMap::new(), vec![fairness("300", "de_streamer")]);
+    let mut req = request(vec![partner("200", "partner_zu")]);
+    req.fixed_target = Some(fixed("400", "trippymelo"));
+
+    let outcome = h.pipeline.run(&req).await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "trippymelo".to_string(),
+            is_partner_raid: false,
+        }
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["400"]);
+}
+
+#[tokio::test]
+async fn abgelehntes_wunschziel_ohne_ersatz_und_strike() {
+    let pool = pool_or_skip!("t6w_pipe_fixed_target_rejected");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    let errors: HashMap<String, String> = [(
+        "400".to_string(),
+        "HTTP 400: raids are disabled".to_string(),
+    )]
+    .into();
+    let h = build(&pool, errors, vec![fairness("300", "de_streamer")]);
+    let mut req = request(vec![partner("200", "partner_zu")]);
+    req.fixed_target = Some(fixed("400", "trippymelo"));
+
+    let outcome = h.pipeline.run(&req).await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Failed {
+            error: "HTTP 400: raids are disabled".to_string()
+        }
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["400"]);
+    let strikes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_raid_disabled_strikes")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(strikes, 0);
+}
+
+#[tokio::test]
+async fn gebanntes_wunschziel_wird_blockiert() {
+    let pool = pool_or_skip!("t6w_pipe_fixed_target_banned");
+    seed_source_token(&pool, "100").await;
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) \
+         VALUES ('trippymelo', '400')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = build(&pool, HashMap::new(), vec![]);
+    let mut req = request(vec![]);
+    req.fixed_target = Some(fixed("400", "trippymelo"));
+
+    let outcome = h.pipeline.run(&req).await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Blocked {
+            error: "target_blacklisted".to_string()
+        }
+    );
+    assert!(h.api.calls.lock().unwrap().is_empty());
 }

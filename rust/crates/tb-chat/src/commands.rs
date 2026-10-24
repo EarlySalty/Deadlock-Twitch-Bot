@@ -203,6 +203,7 @@ fn raid_status_line(raid_enabled: Option<bool>) -> &'static str {
 pub struct RaidStartResult {
     pub status: String,
     pub target_login: Option<String>,
+    pub error: Option<String>,
 }
 
 /// Port für manuelle und status-basierte Raid-Operationen.
@@ -220,6 +221,7 @@ pub trait RaidCommandPort: Send + Sync {
         &self,
         broadcaster_id: &str,
         broadcaster_login: &str,
+        target_login: Option<&str>,
     ) -> Result<RaidStartResult, String>;
 
     /// Liest Raid-Aktivierungsstatus und Statistik aus.
@@ -785,7 +787,7 @@ impl CommandEngine {
             }
             "!raid" | "!traid" => {
                 if self.can_control_bot(event).await {
-                    self.cmd_raid(event).await;
+                    self.cmd_raid(event, args).await;
                 } else {
                     self.reply(
                         event,
@@ -1809,7 +1811,18 @@ impl CommandEngine {
     // !raid / !traid — commands.py:617
     // -----------------------------------------------------------------------
 
-    async fn cmd_raid(&self, event: &ChatMessageEvent) {
+    async fn cmd_raid(&self, event: &ChatMessageEvent, args: &str) {
+        let target_login = match args.split_whitespace().next() {
+            None => None,
+            Some(raw) => match tb_domain::normalize_twitch_login(raw) {
+                Some(login) => Some(login),
+                None => {
+                    self.reply(event, "Das ist kein gültiger Twitch-Name.")
+                        .await;
+                    return;
+                }
+            },
+        };
         let partner = match self.get_partner(&event.broadcaster_user_id).await {
             Err(error) => {
                 tracing::warn!(%error, "Partnerstatus nicht abrufbar");
@@ -1847,7 +1860,11 @@ impl CommandEngine {
         // Direkt an tb-raid-Schicht via Trait — kein HTTP-Proxy-Loop.
         match self
             .raid
-            .manual_raid(&partner.twitch_user_id, &partner.twitch_login)
+            .manual_raid(
+                &partner.twitch_user_id,
+                &partner.twitch_login,
+                target_login.as_deref(),
+            )
             .await
         {
             Ok(result) => {
@@ -1863,6 +1880,19 @@ impl CommandEngine {
                     "no_target" => Some(format!(
                         "@{chatter} Weder Deadlock-Partner noch andere deutsche Deadlock-Streamer live."
                     )),
+                    "target_not_live" => Some(format!(
+                        "@{chatter} {} ist gerade nicht live.",
+                        target_login.as_deref().unwrap_or("Der Kanal")
+                    )),
+                    "target_is_self" => {
+                        Some(format!("@{chatter} Du kannst nicht zu dir selbst raiden."))
+                    }
+                    "blocked" if result.error.as_deref() == Some("target_blacklisted") => Some(
+                        format!(
+                            "@{chatter} Zu {} kann ich nicht raiden.",
+                            target_login.as_deref().unwrap_or("diesem Kanal")
+                        ),
+                    ),
                     "unavailable" => Some(format!("@{chatter} Twitch-Bot nicht verfügbar.")),
                     other => Some(format!("@{chatter} Raid fehlgeschlagen: {other}")),
                 };
@@ -2765,6 +2795,7 @@ mod tests {
     struct MockRaid {
         manual_result: RaidStartResult,
         manual_calls: Mutex<usize>,
+        manual_target: Mutex<Option<String>>,
         silent_ban_calls: Mutex<usize>,
         silent_raid_calls: Mutex<usize>,
         silent_ban_val: i32,
@@ -2781,8 +2812,10 @@ mod tests {
                 manual_result: RaidStartResult {
                     status: status.to_string(),
                     target_login: target_login.map(str::to_string),
+                    error: None,
                 },
                 manual_calls: Mutex::new(0),
+                manual_target: Mutex::new(None),
                 silent_ban_calls: Mutex::new(0),
                 silent_raid_calls: Mutex::new(0),
                 silent_ban_val: 1,
@@ -2805,8 +2838,14 @@ mod tests {
 
     #[async_trait]
     impl RaidCommandPort for MockRaid {
-        async fn manual_raid(&self, _: &str, _: &str) -> Result<RaidStartResult, String> {
+        async fn manual_raid(
+            &self,
+            _: &str,
+            _: &str,
+            target_login: Option<&str>,
+        ) -> Result<RaidStartResult, String> {
             *self.manual_calls.lock().await += 1;
+            *self.manual_target.lock().await = target_login.map(str::to_string);
             Ok(self.manual_result.clone())
         }
         async fn raid_status(&self, _: &str) -> Result<RaidStatusInfo, String> {
@@ -3834,6 +3873,46 @@ mod tests {
         assert!(msg.contains("Raid auf"), "Meldung: {msg}");
         assert!(msg.contains("testuser"), "Meldung: {msg}");
         assert!(msg.contains("targetstreamer"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
+    async fn raid_with_name_passes_normalized_target() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        seed_partner(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, raid_enabled, needs_reauth) VALUES ('bc123', TRUE, FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let raid = MockRaid::with_manual("target_not_live", None);
+
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            raid.clone(),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(MockInvite { reply: None }),
+            Arc::new(MockSuperMod(false)),
+            Arc::new(MockAutoban(None)),
+        );
+
+        engine
+            .handle(&make_event("!raid @TrippyMelo", true, false))
+            .await;
+
+        assert_eq!(
+            raid.manual_target.lock().await.as_deref(),
+            Some("trippymelo")
+        );
+        let msg = api.last_message().await.unwrap();
+        assert!(
+            msg.contains("trippymelo ist gerade nicht live"),
+            "Meldung: {msg}"
+        );
     }
 
     // !raid_enable / !raidbot entfällt (Grillme Block 8 — „in oder raus"). Die

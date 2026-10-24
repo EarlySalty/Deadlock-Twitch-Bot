@@ -22,6 +22,7 @@ pub trait ManualRaidPort: Send + Sync {
         &self,
         broadcaster_id: &str,
         broadcaster_login: &str,
+        target_login: Option<&str>,
     ) -> serde_json::Value;
 }
 
@@ -63,8 +64,21 @@ pub async fn manual_raid_handler(
         return Err(ApiError::bad_request("invalid broadcaster_login"));
     };
 
+    let target_login = match body
+        .get("targetLogin")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(raw) => match tb_domain::normalize_twitch_login(raw) {
+            Some(login) => Some(login),
+            None => return Err(ApiError::bad_request("invalid target_login")),
+        },
+        None => None,
+    };
+
     let result = port
-        .start_manual_raid(broadcaster_id, &broadcaster_login)
+        .start_manual_raid(broadcaster_id, &broadcaster_login, target_login.as_deref())
         .await;
     Ok(Json(result))
 }
@@ -89,7 +103,12 @@ mod tests {
     }
     #[async_trait::async_trait]
     impl ManualRaidPort for StubPort {
-        async fn start_manual_raid(&self, _id: &str, _login: &str) -> serde_json::Value {
+        async fn start_manual_raid(
+            &self,
+            _id: &str,
+            _login: &str,
+            _target: Option<&str>,
+        ) -> serde_json::Value {
             self.calls.fetch_add(1, Ordering::SeqCst);
             serde_json::json!({"status": "started", "target_login": "ziel"})
         }
@@ -126,7 +145,10 @@ mod tests {
     async fn ohne_token_401() {
         let port = Arc::new(StubPort::default());
         let resp = router(Some(port.clone()))
-            .oneshot(req(None, r#"{"broadcasterId":"1","broadcasterLogin":"nani"}"#))
+            .oneshot(req(
+                None,
+                r#"{"broadcasterId":"1","broadcasterLogin":"nani"}"#,
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);

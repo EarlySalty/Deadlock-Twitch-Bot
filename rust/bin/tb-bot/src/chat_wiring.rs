@@ -2650,15 +2650,17 @@ impl RaidCommandPort for RaidCommandAdapter {
         &self,
         broadcaster_id: &str,
         broadcaster_login: &str,
+        target_login: Option<&str>,
     ) -> Result<RaidStartResult, String> {
         let Some(port) = &self.manual else {
             return Ok(RaidStartResult {
                 status: "unavailable".to_string(),
                 target_login: None,
+                error: None,
             });
         };
         let value = port
-            .start_manual_raid(broadcaster_id, broadcaster_login)
+            .start_manual_raid(broadcaster_id, broadcaster_login, target_login)
             .await;
         Ok(RaidStartResult {
             status: value
@@ -2668,6 +2670,10 @@ impl RaidCommandPort for RaidCommandAdapter {
                 .to_string(),
             target_login: value
                 .get("target_login")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string()),
+            error: value
+                .get("error")
                 .and_then(Value::as_str)
                 .map(|s| s.to_string()),
         })
@@ -3498,10 +3504,12 @@ mod chat_notification_tests {
             &self,
             _broadcaster_id: &str,
             _broadcaster_login: &str,
+            _target_login: Option<&str>,
         ) -> Result<RaidStartResult, String> {
             Ok(RaidStartResult {
                 status: "unavailable".to_string(),
                 target_login: None,
+                error: None,
             })
         }
 

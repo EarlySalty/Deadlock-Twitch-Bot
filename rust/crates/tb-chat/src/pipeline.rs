@@ -2252,10 +2252,12 @@ mod tests {
             &self,
             _broadcaster_id: &str,
             _broadcaster_login: &str,
+            _target_login: Option<&str>,
         ) -> Result<RaidStartResult, String> {
             Ok(RaidStartResult {
                 status: "unavailable".to_string(),
                 target_login: None,
+                error: None,
             })
         }
 
