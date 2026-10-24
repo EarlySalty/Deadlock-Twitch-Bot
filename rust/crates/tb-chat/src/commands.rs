@@ -784,7 +784,7 @@ impl CommandEngine {
                 true
             }
             "!raid" | "!traid" => {
-                if event.is_mod_or_broadcaster() {
+                if self.can_control_bot(event).await {
                     self.cmd_raid(event).await;
                 } else {
                     self.reply(
@@ -3947,6 +3947,30 @@ mod tests {
 
         assert_eq!(raid.silent_ban_call_count().await, 1);
         assert_eq!(raid.silent_raid_call_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn raid_erlaubt_super_mod_ohne_mod_badge() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        seed_partner(&pool).await;
+
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            MockRaid::default_arc(),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(MockInvite { reply: None }),
+            Arc::new(MockSuperMod(true)),
+            Arc::new(MockAutoban(None)),
+        );
+
+        engine.handle(&make_event("!raid", false, false)).await;
+
+        let msg = api.last_message().await.unwrap();
+        assert!(!msg.contains("Nur Broadcaster oder Mods"), "Meldung: {msg}");
     }
 
     #[tokio::test]
