@@ -2015,7 +2015,7 @@ impl CommandEngine {
             )
             .await
         {
-            ClipOutcome::Created { url } => {
+            ClipOutcome::Created { url } | ClipOutcome::Pending { url } => {
                 let suffix = if title.is_empty() {
                     String::new()
                 } else {
@@ -2026,10 +2026,6 @@ impl CommandEngine {
                     &format!("🎬 Clip erstellt{suffix} (ca. letzte {duration}s): {url}"),
                 )
                 .await;
-            }
-            ClipOutcome::Pending { url } => {
-                self.reply(event, &format!("Twitch verarbeitet den Clip noch. Die Erstellung ist noch nicht bestätigt: {url}"))
-                    .await;
             }
             ClipOutcome::OAuthMissing => {
                 self.reply(event, CLIP_OAUTH_MISSING_REPLY).await;
