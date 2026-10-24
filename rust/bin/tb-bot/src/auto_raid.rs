@@ -560,7 +560,7 @@ impl OfflineRaidHandler {
             partners: Vec::new(),
             category_id: None,
             offline_trigger_ts: None,
-            reason: "manual_chat_command_target".to_string(),
+            reason: "manual_chat_command".to_string(),
             respect_soft_raid_blacklist: false,
             fixed_target: Some(ResolvedTarget {
                 user_id: stream.user_id.clone(),

@@ -1812,7 +1812,11 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_raid(&self, event: &ChatMessageEvent, args: &str) {
-        let target_login = match args.split_whitespace().next() {
+        let target_login = match args
+            .split_whitespace()
+            .map(|word| word.trim_matches('\u{E0000}'))
+            .find(|word| !word.is_empty())
+        {
             None => None,
             Some(raw) => match tb_domain::normalize_twitch_login(raw) {
                 Some(login) => Some(login),
@@ -1894,7 +1898,7 @@ impl CommandEngine {
                         ),
                     ),
                     "raid_failed" if target_login.is_some() => Some(format!(
-                        "@{chatter} Raid zu {} hat nicht geklappt, Twitch hat ihn abgelehnt.",
+                        "@{chatter} Raid zu {} hat nicht geklappt.",
                         target_login.as_deref().unwrap_or("diesem Kanal")
                     )),
                     "unavailable" => Some(format!("@{chatter} Twitch-Bot nicht verfügbar.")),
@@ -3934,6 +3938,39 @@ mod tests {
         assert!(raid_status_line(Some(true)).contains("Aktiv"));
         assert!(raid_status_line(Some(false)).contains("Deaktiviert"));
         assert!(raid_status_line(None).contains("Nicht autorisiert"));
+    }
+
+    #[tokio::test]
+    async fn raid_with_invisible_repeat_char_keeps_auto_target() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        seed_partner(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, raid_enabled, needs_reauth) VALUES ('bc123', TRUE, FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let raid = MockRaid::with_manual("target_not_live", None);
+
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            raid.clone(),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(MockInvite { reply: None }),
+            Arc::new(MockSuperMod(false)),
+            Arc::new(MockAutoban(None)),
+        );
+
+        engine
+            .handle(&make_event("!raid \u{E0000}", true, false))
+            .await;
+
+        assert_eq!(raid.manual_call_count().await, 1);
+        assert_eq!(raid.manual_target.lock().await.as_deref(), None);
     }
 
     #[tokio::test]
