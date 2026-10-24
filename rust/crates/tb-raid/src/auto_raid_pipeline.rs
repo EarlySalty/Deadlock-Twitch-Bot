@@ -731,10 +731,15 @@ impl AutoRaidPipeline {
                 RaidOutcome::Failed(error) => {
                     exclude_ids.insert(target.user_id.clone());
                     if req.fixed_target.is_some() || !is_retryable_raid_error(&error) {
+                        let decision = if req.fixed_target.is_some() {
+                            "fixed_target_failed"
+                        } else {
+                            "non_retryable"
+                        };
                         self.emit_raid_observability_event(
                             &flow_id,
                             "raid_failed",
-                            "non_retryable",
+                            decision,
                             req,
                             Some(&target),
                             raid_failed_details(
@@ -752,7 +757,8 @@ impl AutoRaidPipeline {
                             to = %target.user_login,
                             attempt,
                             %error,
-                            "Raid mit nicht-wiederholbarem Fehler fehlgeschlagen"
+                            decision,
+                            "Raid fehlgeschlagen ohne weiteren Versuch"
                         );
                         return AutoRaidPipelineOutcome::Failed { error };
                     }

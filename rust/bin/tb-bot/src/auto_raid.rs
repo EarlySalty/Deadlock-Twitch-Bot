@@ -182,7 +182,8 @@ impl ManualSource {
 
 /// Antwort des manuellen Raids — Status-Strings sind der Vertrag des
 /// Python-Chat-Commands (`started`, `source_not_live`, `source_not_eligible`,
-/// `no_target`, `blocked`, `raid_failed`, `unavailable`).
+/// `no_target`, `target_not_live`, `target_is_self`, `blocked`, `raid_failed`,
+/// `unavailable`).
 #[derive(Debug, serde::Serialize)]
 pub struct ManualRaidResponse {
     pub status: String,

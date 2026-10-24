@@ -1893,6 +1893,10 @@ impl CommandEngine {
                             target_login.as_deref().unwrap_or("diesem Kanal")
                         ),
                     ),
+                    "raid_failed" if target_login.is_some() => Some(format!(
+                        "@{chatter} Raid zu {} hat nicht geklappt, Twitch hat ihn abgelehnt.",
+                        target_login.as_deref().unwrap_or("diesem Kanal")
+                    )),
                     "unavailable" => Some(format!("@{chatter} Twitch-Bot nicht verfügbar.")),
                     other => Some(format!("@{chatter} Raid fehlgeschlagen: {other}")),
                 };
