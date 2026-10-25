@@ -98,3 +98,14 @@ Write in English, into `/home/nathanael/.worktrees/twitch-reichweite/.tasks/2026
 Do not touch any other file, no git commands, no code changes, no service actions.
 Do not invent numbers. Every number in the findings must come from a query you actually ran.
 Final reply to the orchestrator: at most 20 lines with the strongest findings and their numbers.
+
+## Addendum from the orchestrator (2026-10-25 18:50)
+
+- If the Write tool is rejected for the findings file, write it with Bash instead:
+  `cat > /home/nathanael/.worktrees/twitch-reichweite/.tasks/2026-10-25-reichweite-auswertung/FINDINGS-<PKG>.md <<'MD'` ... `MD`.
+- `twitch_session_chatters` contains lurkers since 2026-02-19 (`seen_via_chatters_api = true`,
+  `messages = 0`). Chatters are rows with `messages >= 1`.
+- `twitch_stream_sessions` chat fields (`first_time_chatters`, `unique_chatters`,
+  `returning_chatters`) are zero for every session from March to May 2026; use June to October 2026
+  for those fields, or recompute from `twitch_session_chatters`. `follower_delta` is implausible in
+  January and February 2026; use it from March 2026.
