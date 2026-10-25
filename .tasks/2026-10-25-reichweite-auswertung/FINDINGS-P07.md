@@ -19,7 +19,7 @@ Which message types, newcomer entry patterns, viewer questions, commands, emotes
 - **Questions (Q4):** viewer messages labelled Question, 2026-02-01 to 2026-10-04. "Answered" = broadcaster message or mention of the asker within 2 minutes. Asker follow-up = asker's messages in the 10 minutes after, answered versus unanswered within the same session.
 - **Commands and interactivity (Q5a, Q5b):** messages starting with "!", grouped by first word. A channel is "interactive" if viewer commands appear in 20+ percent of its 3+ sessions. Size classes from median `avg_viewers`.
 - **Activation (Q5c, Q5d):** first session with a viewer command; relative activity = session human messages / channel's median week; before versus after. Placebo: 36 channels without viewer commands, split at their own midpoint.
-- **Emotes and length (Q6):** German category subset, per room: follow-up count within 2 minutes (all chatters) relative to room mean; emote versus plain messages within the room (5+ each); length buckets; rooms with 20+ messages.
+- **Emotes and length (Q6):** German category subset, per room: follow-up count within 2 minutes (all chatters) relative to room mean; messages with at least one emote (`emote_count > 0`) versus plain messages within the room (5+ each); length buckets; rooms with 20+ messages.
 - **Liveliness quartiles (Q7):** session viewer messages relative to the streamer's own median session, split into quartiles (ntile 4). Label shares per quartile.
 
 ## Results
@@ -133,7 +133,7 @@ Activation (Q5c, original, not x30): 48 channels. Median relative activity befor
 
 | Feature | Rooms | Messages | Median ratio | Share of rooms above 1 |
 |---|---|---|---|---|
-| Emote vs plain message, same room | 206 | 97,609 | 0.887 | 0.37 |
+| Message with at least one emote vs plain, same room | 206 | 97,609 | 0.887 | 0.37 |
 | 1-10 characters | 304 | 25,793 | 1.066 | 0.64 |
 | 11-25 characters | 320 | 29,801 | 1.032 | 0.62 |
 | 26-60 characters | 322 | 35,809 | 0.979 | 0.43 |
@@ -175,7 +175,7 @@ Orchestrator note: V11 in `VERIFY-ORCHESTRATOR.md` holds chat speed equal (same 
 | Greet newcomers and react to their first messages; a command as first message is the weakest entry. | First-message stay 3+: Greeting 63.9%, Question 61.0%, Game-Related 66.3% vs Command 21.8%, Other 15.4% | Association, not causal | 1,199 / 881 / 442 / 559 / 579 first messages | Medium |
 | Do not expect answers to raise a viewer's follow-up. Reply rates are low, so reply speed is a capacity problem, not a measured lever. | 2.8% broadcaster reply within 2 min; asker follow-up answered vs unanswered +0.07 messages (51% positive) | Null | 34,037 questions, 224 streamers, 827 sessions | High (reply rates); medium (null) |
 | Keep messages short if you want follow-up. Long messages (61+ characters) draw less. | Lift 1.07 (1-10 characters, 64% of rooms above 1) vs 0.87 (61+, 26%) | Ratio 1.07 vs 0.87 | 304 / 256 rooms; 25,793 / 16,183 messages | Low-medium (category data, not bot-filtered) |
-| Emote-only messages are not conversation starters: plain text in the same room draws more follow-up. | Emote vs plain median ratio 0.887, 37% of rooms above 1 | Ratio 0.89 | 206 rooms, 97,609 messages | Low-medium (same caveat) |
+| Messages with emotes are not conversation starters: plain text in the same room draws more follow-up. | Message with at least one emote (`emote_count > 0`) vs plain, median ratio 0.887, 37% of rooms above 1 | Ratio 0.89 | 206 rooms, 97,609 messages | Low-medium (same caveat) |
 | Viewer commands in use are mostly lurk, sr, gamble, watchtime and followage. Raid, setgame, title and game are broadcaster-controlled. | Message and channel counts; broadcaster share 0.56 to 0.84 for the controlled words | Usage only; no effect measured | lurk 1,081 messages / 179 channels; sr 354 / 22; gamble 213 / 28 | High (counts); effect not measured |
 | Do not promise activity gains from viewer commands. Activation is a hypothesis to test, not a result. | Channels with commands: 0.58 to 1.18 (73% higher after). Placebo: 0.375 to 0.383 | Possible, unvalidated | 48 channels (command), 36 channels (placebo) | Low (selection, no x30, no causal claim) |
 

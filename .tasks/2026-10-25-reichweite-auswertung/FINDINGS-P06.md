@@ -12,7 +12,7 @@ What makes a first-time chatter come back to the same channel and become a regul
 - A broadcaster reply within 3 minutes shows no detectable effect (-3.2 pp, CI -12.0 to +8.3). Replies are not a retention lever in this data.
 - Following the channel before the first message goes with +10.2 pp (CI +3.2 to +16.0). Following afterwards (+23.6 pp) is most likely reverse causality.
 - Lurkers (present, never wrote in their first session) return less often than chatters: 14.3% vs 26.4% by presence within 30 days, and 1.8% vs 15.8% by writing. Lurkers who later write return more, but that group is selected.
-- In the German category sample, the gap in 7-day return (15.6% vs 28.9% for all languages) comes mostly from opportunity: only 46.1% of German newcomers have any later chat day in their room within 7 days, against 85.0% overall. Among newcomers with opportunity, return is nearly equal (33.8% vs 34.0%).
+- In the category sample with live days checked (first day 2026-10-09 to 10-17), German newcomers return within 7 days as often as all newcomers (23.3% vs 23.4%). The German difference is fewer later live days: the room is live in Deadlock again within 7 days for 72.1% of German newcomers, against 83.0% overall (median 1 vs 4 live days), and return is highest with 5 to 7 live days. The wider window from 2026-09-28 shows a larger German gap (15.9% vs 29.6%), but it mixes in the growth of the chat collector (section 7).
 - Returns are fast. The median time to a later presence is about 3 days for both lurkers and chatters, and the median time to a later chat day in the German category sample is 2 days.
 
 ## Data used
@@ -20,8 +20,8 @@ What makes a first-time chatter come back to the same channel and become a regul
 - `twitch_chat_messages`: 466,839 rows, 1,025 streamers, 5,740 sessions, 2026-01-31 to 2026-10-25.
 - `twitch_session_chatters`: 165,095 rows, 1,312 streamers, 9,173 sessions. Lurkers are rows with `messages = 0` (`seen_via_chatters_api`), 130,457 rows in total. Presence analyses use sessions since 2026-02-19 (163,666 rows).
 - `twitch_chat_message_labels` (first-message label), `twitch_greeted_chatters` (greeting bot).
-- `category_chat_messages` since 2026-09-27: 2,052,871 room-day rows, 990,524 room-chatter pairs, 29 days.
-- Bots: 77 logins seen in 30 or more channels, excluded from all populations. Names are not recorded here. Exclusions: 1,660 lurker rows and 10,633 category pairs.
+- `category_chat_messages` since 2026-09-27, shared-chat copies excluded: 1,990,755 room-day rows, 942,648 room-chatter pairs, 29 days. `category_snapshots_normalized` from 2026-10-09 for live days per room.
+- Bots: 77 logins seen in 30 or more channels, excluded from all populations. Names are not recorded here. Exclusions: 1,660 lurker rows and 10,608 category pairs.
 - Size classes from each streamer's median average viewers (Jul to Oct): 0-4, 5-19, 20-99, 100+. The 100+ class (9 streamers among Jul-Sep newcomers, 15 overall) consists of one-off event streams and is excluded from the main estimates.
 - Coverage burn-in: a newcomer counts only if their first chat is at least 30 days after the streamer's first logged session (1,310 streamers in coverage).
 
@@ -36,7 +36,7 @@ What makes a first-time chatter come back to the same channel and become a regul
   - `ret7` (category): any later chat day in the same room within 7 days.
   - Opportunity (category): the room had any chat on a later day within 7 days.
 - Within-channel estimator: Mantel-Haenszel risk difference, stratified by streamer. The strata count and positive-stratum share use strata with at least 3 newcomers per arm (`mh.py`). The CIs are a cluster bootstrap over streamer strata, 2,000 resamples, seed 20261025, using all strata with both arms (`boot.py`). Point estimates agree between the two scripts; the strata counts do not.
-- Category window: first observation 2026-09-28 to 2026-10-17 (main). Lookback check: first observation 2026-10-04 to 2026-10-17.
+- Category window: first observation 2026-09-28 to 2026-10-17 (main). Lookback check: first observation 2026-10-04 to 2026-10-17. Live-days check: first day 2026-10-09 to 2026-10-17 with live days from the snapshots (`p06-live-days.py`).
 - All queries are in `queries-P06.sql`. Raw extracts are in `/tmp/reichweite-scratch/P06/` only.
 
 ## Results
@@ -129,34 +129,49 @@ No detectable effect (CI includes zero, or positive share near 0.5): mention, ar
 
 Robustness of the first-session message effect without burn-in (Jul-Sep newcomers, n=3,631): +11.4 pp (CI +9.2 to +13.5, 218 strata).
 
-### 7. Category: German vs all rooms (bots excluded; first observation 2026-09-28 to 2026-10-17)
+### 7. Category: German vs all rooms (bots and shared-chat copies excluded)
+
+Main window, first observation 2026-09-28 to 2026-10-17:
 
 | Scope | Newcomers | Rooms | ret7 % | With opportunity: n (share) | ret7 % among opportunity |
 |---|---|---|---|---|---|
-| All languages | 698,013 | 26,214 | 28.9 | 593,235 (85.0%) | 34.0 |
-| German | 5,041 | 360 | 15.6 | 2,323 (46.1%) | 33.8 |
-| English | 487,320 | 17,108 | 29.5 | 416,894 (85.5%) | 34.5 |
+| All languages | 664,082 | 26,116 | 29.6 | 567,424 (85.4%) | 34.6 |
+| German | 4,775 | 352 | 15.9 | 2,129 (44.6%) | 35.7 |
+| English | 459,578 | 17,036 | 30.3 | 395,667 (86.1%) | 35.2 |
 
 Among newcomers with opportunity:
 
 | Predicate (first day) | All languages: yes / no ret7 % (MH pp, strata, positive share) | German: yes / no ret7 % (MH pp, strata, positive share) |
 |---|---|---|
-| 2+ messages | 40.7 / 23.8 (+16.9, 10,518, 0.65) | 39.3 / 19.5 (+14.9, 129, 0.63) |
-| 5+ messages | 49.1 / 27.8 (+21.9, 11,180, 0.65) | 45.5 / 25.2 (+16.9, 145, 0.59) |
-| Broadcaster message within 2 min | 34.2 / 34.0 (-1.0, 2,999, 0.39) | 25.5 / 34.0 (-10.8, 26, 0.27; n=51) |
+| 2+ messages | 41.6 / 24.2 (+17.2, 10,373, 0.65) | 40.9 / 21.1 (+15.1, 126, 0.61) |
+| 5+ messages | 50.2 / 28.4 (+22.4, 11,044, 0.65) | 47.5 / 26.7 (+17.9, 138, 0.62) |
+| Broadcaster message within 2 min | 34.5 / 34.6 (-1.6, 2,916, 0.39) | 24.4 / 35.9 (-14.7, 23, 0.26; n=45) |
 
-- German return gap, newcomers who return within 7 days (n=789): median 2 days, p25 1, p75 5, next-day share 38.0%.
-- Lookback (first observation 2026-10-04 to 2026-10-17): German n=2,578, ret7 21.8%, opportunity 65.1% (ret7 33.5%). 2+ messages: 39.0 vs 19.7 (+15.9, 109 strata). 5+ messages: 45.9 vs 24.6 (+19.2, 128 strata). All languages: n=449,293, ret7 24.3%, opportunity 82.8% (ret7 29.3%), 2+ messages +14.2, 5+ messages +18.9.
-- The first-day message effect holds in both windows. Absolute ret7 levels move with the window (German 15.6% vs 21.8%; all languages 28.9% vs 24.3%), so compare within a window only.
+- German return gap, newcomers who return within 7 days (n=761): median 2 days, p25 1, p75 4, next-day share 38.2%.
+- Lookback (first observation 2026-10-04 to 2026-10-17): German n=2,357, ret7 22.9%, opportunity 64.7% (ret7 35.4%). 2+ messages +16.5 pp (103 strata), 5+ messages +20.7 pp (120 strata). All languages: n=424,634, ret7 24.9%, opportunity 83.3% (ret7 29.9%), 2+ messages +14.5, 5+ messages +19.3.
+- The first-day message effect holds in both windows. Absolute ret7 levels move with the window (German 15.9% vs 22.9%; all languages 29.6% vs 24.9%), so compare within a window only.
+- Collector coverage explains much of the German opportunity gap in the main window. Rooms with chat per day: about 1,900 on 09-27, 4,200 on 10-09, 5,600 on 10-24. German rooms per day: 18 to 54 in late September and early October, 45 to 76 from 10-09 to 10-17, 77 to 94 from 10-18. A room the collector did not yet follow shows no later chat day, so "no opportunity" partly means "not yet collected".
+
+Live-days check (`p06-live-days.py`, live days from `category_snapshots_normalized`, a day counts as live with at least 10 snapshots; first day 2026-10-09 to 10-17, when snapshots exist for every day of the 7-day window):
+
+| Scope | Newcomers | Rooms | ret7 % | Room live on a later day within 7 d (ret7 %) | Later chat day within 7 d (ret7 %) | Median later live days (mean) | ret7 % by later live days 0 / 1-2 / 3-4 / 5-7 |
+|---|---|---|---|---|---|---|---|
+| All languages | 276,854 | 18,011 | 23.4 | 83.0% (28.2) | 82.3% (28.5) | 4 (3.59) | 0.2 / 23.7 / 29.8 / 30.0 |
+| German | 1,648 | 245 | 23.3 | 72.1% (32.3) | 69.3% (33.6) | 1 (2.13) | 0.0 / 28.6 / 27.7 / 45.4 |
+| English | 187,341 | 11,623 | 23.8 | 83.6% (28.4) | | 4 | 0.2 / 24.8 / 29.2 / 30.0 |
+
+- The room was live in the category on the newcomer's first day for 99.7% of German and 97.9% of all newcomers. Live later but no recorded chat later: 4.4% of German and 1.3% of all live-opportunity newcomers. German newcomers by later live days: 27.9% at 0, 37.0% at 1-2, 18.2% at 3-4, 17.0% at 5-7.
+- With a 7-day room burn-in (room in the chat data at least 7 days before the first day): German n=510 in 72 rooms, ret7 20.2%, live later 82.4% (ret7 24.5%), median 3 live days (mean 2.96), ret7 14.5 / 22.4 / 37.5% at 1-2 / 3-4 / 5-7 live days. All languages n=162,350 in 6,996 rooms, ret7 22.8%, live later 93.7%, median 5 live days, 16.0 / 22.5 / 26.9%. English ret7 23.2%.
+- Reading: once the window has full coverage, German newcomers return as often as all newcomers. The German difference is fewer later live days. Return is highest with 5 to 7 live days (German 45.4% against 28.6% and 27.7% at 1-2 and 3-4), but return is measured through category chat, which only exists while the room is live in Deadlock: "not live later, 0% return" is mechanical (459 German newcomers), and part of the rise is more chances to be observed. The earlier figures for this section (German 15.6% vs 28.9% ret7, opportunity 46.1% vs 85.0%) mixed collector growth into the gap and are withdrawn.
 
 ## Actionable tips
 
 | Tip | Evidence | Effect | Support | Confidence |
 |---|---|---|---|---|
 | Treat the newcomer's second message in the first session as the signal that matters. The data do not show which streamer behaviour produces it. | Chat, burn-in 30 d | 1 msg 4.2%, 2-4 10.7%, 5+ 27.4% ret30; MH +14.1 pp (2+), +17.9 pp (5+) | 1,945 newcomers, 126 streamers, 41 strata | Medium. Partly the same engagement, so a nudge may not deliver the full effect. |
-| Do not expect a broadcaster reply to change return. | Chat, 3-minute reply | -3.2 pp (CI -12.0 to +8.3); Jul-Sep +2.8 (CI -4.8 to +12.6); category German -10.8 (n=51) | 141 replies in the burn-in set | Medium for "no large effect"; low for direction. |
-| Keep the room active on consecutive days. Unconditional German return is limited by opportunity, not newcomer behaviour. | Category | German opportunity 46.1% vs 85.0% overall; ret7 among opportunity 33.8% vs 34.0% | 5,041 German newcomers, 360 rooms | Medium. Opportunity share moves with the window (65.1% in the lookback). |
-| Use the 1-3 day window after a first visit, which is when returns cluster. | Presence and category | Median time to later presence about 3 days; German chat return median 2 days, next-day 38% | 3,033 lurkers, 626 chatters, 789 German returners | Medium on timing. The effect of an action in that window is untested. |
+| Do not expect a broadcaster reply to change return. | Chat, 3-minute reply | -3.2 pp (CI -12.0 to +8.3); Jul-Sep +2.8 (CI -4.8 to +12.6); category German -14.7 (n=45) | 141 replies in the burn-in set | Medium for "no large effect"; low for direction. |
+| Stream on more days, ideally consecutive. German newcomers return as often as others; their rooms are live on fewer later days. | Category, live days from snapshots | ret7 23.3% German vs 23.4% all; room live again within 7 days 72.1% vs 83.0%; German ret7 28.6% at 1-2 later live days, 27.7% at 3-4, 45.4% at 5-7 | 1,648 German newcomers, 245 rooms | Medium. Return is only observable while the room is live, so part of the rise is more chances to be seen. |
+| Use the 1-3 day window after a first visit, which is when returns cluster. | Presence and category | Median time to later presence about 3 days; German chat return median 2 days, next-day 38% | 3,033 lurkers, 626 chatters, 761 German returners | Medium on timing. The effect of an action in that window is untested. |
 | Test a follow prompt before the first message only as an experiment. | Chat, follows | Followed before first chat +10.2 pp (CI +3.2 to +16.0); after +23.6 pp, likely reverse causality | 140 and 207 newcomers, 14 and 20 strata | Low to medium. Not a proven lever. |
 | Do not optimise for questions as first messages. | Chat, labels | Question -3.4 pp (positive share 0.28); Statement +7.6, Greeting +6.7 | 218 question newcomers | Low. |
 | Do not optimise for mentions or viewer level. | Chat | Mention +1.8 (CI -2.7 to +6.4); viewers at or above median +1.8 (positive share 0.33) | 294 mention cases, 1,042 above median | Medium that the effect is small. |
@@ -170,7 +185,7 @@ Among newcomers with opportunity:
 - The lurker-writer comparison is selected (1.8% of lurkers ever write), and presence among writers is 98.6% by construction.
 - `is_first_time_streamer` has an unverified meaning. It is set for 95.6% of chatters vs 28.1% of lurkers, so it tracks writing and is not a clean predictor. Unflagged lurker rows (26,965 across 570 streamers) are concentrated: the top 10 streamers hold 45.7%, which points to per-streamer data gaps for the flag.
 - Chat-speed predictor: the split is weak because counts are small integers and tie easily at the median (1,530 yes vs 415 no).
-- Category: the first-observation window is sensitive (see section 7). The data start 2026-09-27, so earlier history is missing. The broadcaster-reply proxy counts any message from the broadcaster account.
+- Category: the first-observation window is sensitive (see section 7). The data start 2026-09-27, so earlier history is missing, and the collector followed far fewer rooms in late September than in October. The broadcaster-reply proxy counts any message from the broadcaster account. Shared-chat copies are excluded from the per-room counts.
 - 100+ event streams: 1.1% ret30 among Jul-Sep newcomers (9 streamers). Excluded from main estimates.
-- Figures in the brief that were not reproduced: 602 broadcaster-reply cases (nearest 247 and 974); within-channel baseline of 20.1 / 9.1 / 30.0% (my medians are 15.7 / 21.2% and 11.3 / 31.0% on other channel sets); "about 25% of arrivals after minute 15" (measured 90.8% after minute 15, 67.1% after minute 60, median 105 minutes into the stream); the 3-day / 33.0% German return gap (n=1,108), replaced by the verified 2 days / 38.0% (n=789).
+- Figures in the brief that were not reproduced: 602 broadcaster-reply cases (nearest 247 and 974); within-channel baseline of 20.1 / 9.1 / 30.0% (my medians are 15.7 / 21.2% and 11.3 / 31.0% on other channel sets); "about 25% of arrivals after minute 15" (measured 90.8% after minute 15, 67.1% after minute 60, median 105 minutes into the stream); the 3-day / 33.0% German return gap (n=1,108), replaced by 2 days / 38.2% (n=761, shared-chat copies excluded).
 - Dead ends: `confirmed_first_ever` is always false. The `chatter_login` fallback is unusable. The greeting bot table has 148 rows and 38 matches, so greeting-bot results rest on 33 newcomers. Question-answered cases are only 19. `nc_features.sql` timed out at 180 s (correlated subqueries) and was replaced by the set-based CTEs in `queries-P06.sql`. `presence_lurk.sql` is superseded.

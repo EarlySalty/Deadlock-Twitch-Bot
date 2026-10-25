@@ -28,8 +28,8 @@ Bot-like logins: 77 logins seen in 30+ distinct channels in twitch_session_chatt
 ## Method
 
 - Follow to session mapping: session with started_at <= followed_at <= coalesce(ended_at, started_at + duration); ties broken by latest start, then shortest duration (29 follows overlapped two sessions).
-- Exposure: viewer-seconds from sample gaps capped at 300 s, per stream minute and per viewer band. Conversion = follows / viewer-hours.
-- Tracked exposure starts at each streamer's first follow event (t0), so only follow-tracked streamers count.
+- Exposure: each viewer sample counts its viewers from max(sample time, t0) to the earliest of the next sample, the session end and 300 s later, per stream minute and per viewer band. Conversion = follows / viewer-hours.
+- Tracked exposure starts at each streamer's first follow event (t0), so only follow-tracked streamers count. Every session that ends at or after t0 is included, so the session holding the first follow counts from t0 on. Peak and raid exposure use the same rule.
 - Within-streamer comparisons: for each streamer, feature sessions vs other sessions. Reported: median of per-streamer differences, share of streamers positive, number of streamers and sessions. Size classes 0-4, 5-19, 20-99, 100+ average viewers.
 - Outcome for session comparisons: gain share (follower_delta >= 1), mean of follower_delta clipped to [-5, 50], and per hour. follower_delta is discrete (median 0, p95 2), so raw median differences are 0.
 - Lurker: a silent sighting is a chatters-API row with messages = 0; a chatter is messages >= 1. A follower counts as having a silent sighting before following if a sampled session started before the follow and the last silent sighting was before the follow.
@@ -44,35 +44,35 @@ Tracked exposure and follows by stream minute (per 100 viewer-hours; n = follows
 
 | Stream minute | n | per 100 vh |
 |---|---|---|
-| 0-10 | 62 | 3.0 |
-| 10-20 | 64 | 5.7 |
-| 20-30 | 58 | 4.5 |
+| 0-10 | 62 | 3.1 |
+| 10-20 | 64 | 5.9 |
+| 20-30 | 58 | 4.6 |
 | 30-45 | 95 | 3.2 |
 | 45-60 | 83 | 5.2 |
-| 60-90 | 123 | 2.4 |
+| 60-90 | 123 | 2.5 |
 | 90-120 | 112 | 2.3 |
 | 120-180 | 186 | 2.0 |
-| 180-240 | 132 | 1.7 |
+| 180-240 | 132 | 1.8 |
 | 240-360 | 126 | 1.3 |
-| 360+ | 237 | 2.2 |
+| 360+ | 237 | 2.3 |
 
 Viewer band at follow (tracked exposure):
 
 | Viewers | n | per 100 vh |
 |---|---|---|
 | 0-4 | 417 | 2.7 |
-| 5-9 | 374 | 2.25 |
+| 5-9 | 374 | 2.3 |
 | 10-19 | 292 | 2.3 |
 | 20-49 | 151 | 1.6 |
 | 50-99 | 18 | 3.9 |
 | 100-299 | 1 | 0.1 |
-| 300+ | 0 (757 vh) | 0.0 |
+| 300+ | 0 (721 vh) | 0.0 |
 
 - Follows mapped to sessions: median 129.7 minutes into the stream; 7.5% in the first 15 minutes; 71.7% after minute 60.
 - Viewers at follow: median 7.0; 33.1% at 4 or fewer.
 - Follows with an incoming raid earlier in the same session: 264 of 1,278 (20.7%); with a raid in the last 10 minutes: 63 (4.9%).
-- Raid window (10 minutes after an incoming raid): 63 follows, 939 viewer-hours, 6.7 per 100 vh, against 2.2 per 100 vh outside (1,215 follows, 55,059 vh).
-- Peak timing (ex-post sample maximum): median follow 3.6 minutes before the session peak; 14.1% within +-5 minutes. Bin [-5, 0) relative to peak (0 to 5 minutes before): 109 follows, 9.5 per 100 vh; bin [0, 5) (0 to 5 minutes after): 69 follows, 3.6 per 100 vh; bin [5, 10): 27 follows, 1.9 per 100 vh.
+- Raid window (10 minutes after an incoming raid): 63 follows, 939 viewer-hours, 6.7 per 100 vh, against 2.2 per 100 vh outside (1,215 follows, 54,542 vh).
+- Peak timing (ex-post sample maximum): median follow 3.6 minutes before the session peak; 14.1% within +-5 minutes. Bin [-5, 0) relative to peak (0 to 5 minutes before): 109 follows, 9.5 per 100 vh; bin [0, 5) (0 to 5 minutes after): 69 follows, 3.8 per 100 vh; bin [5, 10): 27 follows, 2.0 per 100 vh; bin [-10, -5): 42 follows, 4.0 per 100 vh.
 - Offline follows (no session covers the time): 214 (14.3%). Excluded from rates.
 
 ### Part 2: follow and chat relation
@@ -93,9 +93,9 @@ Exclusive categories (1,492 follows):
 ### Part 3: conversion and within-streamer session features
 
 Conversion (follows / tracked viewer-hours):
-- Online follows (1,278) / online tracked viewer-hours without April and May (55,983 - 7,422 = 48,561): **2.63 per 100 vh**. Including April and May: 2.28 per 100 vh.
+- Online follows (1,278) / online tracked viewer-hours without April and May (55,471 - 7,291 = 48,180): **2.65 per 100 vh**. Including April and May: 2.30 per 100 vh.
 - April and May have no follow rows at all, while chat is still recorded for them. Treated as a collection gap (see Caveats).
-- Monthly (all follows incl. offline / tracked vh): Feb 16.6 (157 vh, tracking start); Mar 3.0; Jun 2.0; Jul 3.7; Aug 2.6; Sep 2.2; Oct 4.0 (partial month, through 2026-10-25).
+- Monthly (all follows incl. offline / tracked vh): Feb 13.7 (190 vh, tracking start); Mar 3.0; Jun 2.0; Jul 3.75; Aug 2.6; Sep 2.2; Oct 4.1 (partial month, through 2026-10-25).
 
 Within-streamer comparisons (follower_delta from March 2026):
 - 22.0% of sessions gained at least one follower; mean clipped delta 0.39; 5.2% of sessions had a negative delta.
@@ -179,7 +179,7 @@ Late-sampling check (orchestrator expected about 25% after minute 15): not repro
 ### Actionable tips
 
 1. (Medium confidence) Greet and reply to first-time chatters within minutes. Follow within 60 minutes: 9.3% after a broadcaster reply within 3 minutes vs 3.0% without (n 719 vs 11,398). Association only; active streams get more replies.
-   Orchestrator note: withdrawn as a follow lever. V7 in `VERIFY-ORCHESTRATOR.md` shows 52 of 57 quick follows in the reply arm fall inside the same 3 minutes (the follow alert prompts the thank-you). Without them, within channel: -0.9 pp (-1.6 to -0.2).
+   Orchestrator note: downgraded to an association. V7 in `VERIFY-ORCHESTRATOR.md` respects the order of message, reply and follow: most quick follows in the reply arm come before the broadcaster message (38 of 52), so the raw 3x gap is largely the alert thank-you. Measured from the reply on, a smaller lift remains: +2.3 pp within 60 minutes for a first message in a session (CI -0.2 to +4.7) and +11.4 pp for a first message ever in the channel (CI +4.1 to +16.8, 81 replies); the placebo is null. Answering a first line soon is a likely-helpful habit, not a measured lever.
 2. (Medium confidence) Use incoming raids as a conversion moment. Follows in the 10 minutes after a raid: 6.7 per 100 vh vs 2.2 outside (63 follows, 939 vh). Raids overlap with peaks, so this is not isolated.
 3. (Medium confidence) Chat activity and raids go with more follower gains in 5 to 19 viewer streams (raid +0.25, 21 streamers, 76% positive; high chat activation +0.25, 35 streamers, 74% positive). Weak in 0 to 4 viewer streams (chat +0.07, 54% positive).
 4. (Medium confidence) Silent viewers rarely convert on their own: 7.95 follows per 1,000 silent presences vs 73.8 for chatters. Bring viewers into chat with direct questions; chat is the step that precedes follows.
@@ -190,11 +190,11 @@ Not actionable (null or unsupported): start time bands (median diff 0, 32 to 36%
 
 ## Caveats and dead ends
 
-- April and May 2026: no follow events at all, while chat is still recorded (6,229 and 6,333 messages from 27 and 25 streamers, against 32,497 in March). Treated as a follow collection gap, not zero conversion. Excluded from the conversion denominator (7,422 viewer-hours).
+- April and May 2026: no follow events at all, while chat is still recorded (6,229 and 6,333 messages from 27 and 25 streamers, against 32,497 in March). Treated as a follow collection gap, not zero conversion. Excluded from the conversion denominator (7,291 viewer-hours).
 - twitch_follow_events.id is not unique (1,476 distinct ids of 1,492 rows). All joins keyed on (streamer, follower, followed_at) with row_number() keys.
 - Raw follow rows since 2026-01-01: 1,494. The analysis set is 1,492; the 2-row difference was not investigated.
-- Exposure: the monthly files sum to 55,993 viewer-hours vs 55,983 in the mapped total (10 vh difference, not investigated).
-- Tracked exposure starts at each streamer's first follow event (t0), so that first follow is counted in the numerator with exposure starting at it. Excluding the first follow per streamer: 2.53 instead of 2.63 per 100 vh (51 of 63 first follows are online).
+- Exposure: the monthly files sum to 55,481 viewer-hours vs 55,471 in the per-minute total (10 vh difference, not investigated).
+- Tracked exposure starts at each streamer's first follow event (t0), so that first follow is counted in the numerator with exposure starting at it. Excluding the first follow per streamer: 2.55 instead of 2.65 per 100 vh (51 of 63 first follows are online). The first version dropped sessions that started before t0 and did not cut sample gaps at t0 or the session end (55,983 instead of 55,471 viewer-hours); the figures here use the corrected exposure.
 - Peak timing is an ex-post sample maximum, so follows near the peak are partly selection. Raids co-occur with peaks; the raid effect is not separated from the peak.
 - Per-band rates above 50 viewers rest on 18 follows (50-99) and one streamer (100+). Poisson relative SE is about 13% at 62 follows per bucket and larger for smaller buckets.
 - Top 5 streamers hold 48.6% of follows.
@@ -212,5 +212,5 @@ Not actionable (null or unsupported): start time bands (median diff 0, 32 to 36%
 ## Reproduction
 
 - SQL: queries-P08.sql in this folder (16 statements plus the bot-login query). Run via /tmp/tq.sh, read-only, 180 s timeout.
-- Post-processing: python3 -I stdlib scripts in /tmp/reichweite-scratch/P08/ (a1b_timing_tracked.py, a2_peak_raid.py, a3b_lurker_nobots.py, a4_conversion.py, a5_conversion2.py, a6_titles_perhour.py, f1_numbers.py, f2_numbers.py, f3_numbers.py, f4_cp_covered.py, f5_sub_numbers.py, f6_checks.py) on the CSV extracts in the same folder.
+- Post-processing: python3 -I stdlib scripts in /tmp/reichweite-scratch/P08/ (a1c_timing_tracked.py, a2b_peak_raid.py, a3b_lurker_nobots.py, a4_conversion.py, a5_conversion2.py, a6_titles_perhour.py, f1_numbers.py, f2b_numbers.py, f3_numbers.py, f4_cp_covered.py, f5_sub_numbers.py, f6_checks.py) on the CSV extracts in the same folder.
 - Scratch CSVs are not committed (they hold chatter and streamer identifiers).

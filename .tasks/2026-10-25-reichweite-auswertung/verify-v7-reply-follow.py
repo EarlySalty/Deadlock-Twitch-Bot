@@ -1,75 +1,94 @@
 import csv, random, sys
 from collections import defaultdict
 
-rows = list(csv.DictReader(open(sys.argv[1])))
-cells = defaultdict(dict)
-for r in rows:
-    cells[(r["stratum_streamer"], r["act"])][r["reply3"]] = (int(r["n"]), int(r["fol60"]), int(r["fol24h"]))
+rows = []
+for r in csv.DictReader(open(sys.argv[1])):
+    rows.append(dict(st=r["st"], act=r["act"], first_ever=r["first_ever"] == "t", pre=r["bc_pre"] == "t",
+                     bc=float(r["bc_delay"]) if r["bc_delay"] else None,
+                     fol=float(r["fol_delay"]) if r["fol_delay"] else None))
 
 
-def pooled(col):
-    t = {"t": [0, 0], "f": [0, 0]}
-    for d in cells.values():
-        for k, v in d.items():
-            t[k][0] += v[0]
-            t[k][1] += v[col]
-    return {k: (v[0], v[1], round(100 * v[1] / v[0], 2) if v[0] else None) for k, v in t.items()}
+def deciles(xs):
+    xs = sorted(xs)
+    return [xs[min(len(xs) - 1, int(len(xs) * q / 10))] for q in range(1, 10)]
 
 
-def mh_rd(keys, col):
+def landmarks(sub):
+    by_act = defaultdict(list)
+    for x in sub:
+        if x["bc"] is not None:
+            by_act[x["act"]].append(x["bc"])
+    return {a: deciles(v) for a, v in by_act.items() if v}
+
+
+def control(f, qs, horizon):
+    inc = sum(1 for q in qs if f is None or f > q) / len(qs)
+    out = sum(1 for q in qs if f is not None and q < f <= q + horizon) / len(qs)
+    return inc, out
+
+
+def reply_cells(sub, horizon):
+    land = landmarks(sub)
+    c = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])
+    for x in sub:
+        k = (x["st"], x["act"])
+        f = x["fol"]
+        if x["bc"] is not None:
+            if f is not None and f <= x["bc"]:
+                continue
+            c[k][0] += 1
+            c[k][1] += 1 if f is not None and f <= x["bc"] + horizon else 0
+        elif x["act"] in land:
+            inc, out = control(f, land[x["act"]], horizon)
+            c[k][2] += inc
+            c[k][3] += out
+    return c
+
+
+def placebo_cells(sub, horizon):
+    land = landmarks(sub)
+    c = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])
+    for x in sub:
+        if x["bc"] is not None or x["act"] not in land:
+            continue
+        inc, out = control(x["fol"], land[x["act"]], horizon)
+        j = 0 if x["pre"] else 2
+        c[(x["st"], x["act"])][j] += inc
+        c[(x["st"], x["act"])][j + 1] += out
+    return c
+
+
+def mh(c, keys):
     num = den = 0.0
     for k in keys:
-        d = cells[k]
-        if "t" not in d or "f" not in d:
+        n1, a1, n0, a0 = c[k]
+        if n1 <= 0 or n0 <= 0:
             continue
-        n1, a1 = d["t"][0], d["t"][col]
-        n0, a0 = d["f"][0], d["f"][col]
         w = n1 * n0 / (n1 + n0)
         num += w * (a1 / n1 - a0 / n0)
         den += w
-    return num / den if den else None
+    return num / den if den else float("nan")
 
 
-def mh_or(keys, col):
-    num = den = 0.0
+def report(label, c, horizon):
+    keys = list(c)
+    n1 = sum(c[k][0] for k in keys); a1 = sum(c[k][1] for k in keys)
+    n0 = sum(c[k][2] for k in keys); a0 = sum(c[k][3] for k in keys)
+    by = defaultdict(list)
     for k in keys:
-        d = cells[k]
-        if "t" not in d or "f" not in d:
-            continue
-        n1, a1 = d["t"][0], d["t"][col]
-        n0, a0 = d["f"][0], d["f"][col]
-        n = n1 + n0
-        num += a1 * (n0 - a0) / n
-        den += a0 * (n1 - a1) / n
-    return num / den if den else None
+        by[k[0]].append(k)
+    sts = list(by)
+    rnd = random.Random(7)
+    bs = sorted(b for b in (mh(c, [k for s in rnd.choices(sts, k=len(sts)) for k in by[s]]) for _ in range(1000)) if b == b)
+    lo, hi = bs[int(0.025 * len(bs))], bs[int(0.975 * len(bs)) - 1]
+    print(f"{label} horizon {horizon // 60} min: arm n={n1:.0f} follow {100 * a1 / n1:.2f}% | comparison n={n0:.0f} follow {100 * a0 / n0:.2f}% | MH {100 * mh(c, keys):+.2f} pp (CI {100 * lo:+.2f} to {100 * hi:+.2f}) streamers {len(sts)}")
 
 
-keys = [k for k, d in cells.items() if "t" in d and "f" in d]
-streamers = sorted({k[0] for k in keys})
-by_s = defaultdict(list)
-for k in keys:
-    by_s[k[0]].append(k)
-print("strata with both arms", len(keys), "streamers", len(streamers))
-print("treated n in informative strata", sum(cells[k]["t"][0] for k in keys))
-for col, lab in ((1, "follow 60m"), (2, "follow 24h")):
-    print(f"\n{lab}: pooled", pooled(col))
-    rd = mh_rd(keys, col)
-    orr = mh_or(keys, col)
-    rnd = random.Random(11)
-    bs_rd, bs_or = [], []
-    for _ in range(2000):
-        ks = [k for s in rnd.choices(streamers, k=len(streamers)) for k in by_s[s]]
-        x = mh_rd(ks, col)
-        y = mh_or(ks, col)
-        if x is not None:
-            bs_rd.append(x)
-        if y is not None:
-            bs_or.append(y)
-    bs_rd.sort()
-    bs_or.sort()
-    q = lambda L, p: L[int(p * len(L))]
-    print(f"  MH risk diff {100 * rd:.2f} pp, CI {100 * q(bs_rd, .025):.2f} to {100 * q(bs_rd, .975):.2f}")
-    print(f"  MH OR {orr:.2f}, CI {q(bs_or, .025):.2f} to {q(bs_or, .975):.2f}")
-    top = sorted(by_s, key=lambda s: -sum(cells[k]["t"][0] for k in by_s[s]))[:3]
-    rest = [k for s in streamers if s not in top for k in by_s[s]]
-    print(f"  without top 3 treated streamers: MH RD {100 * mh_rd(rest, col):.2f} pp, OR {mh_or(rest, col):.2f}")
+for label, sub in (("V7b per-session first message", rows), ("V7a first message ever in channel", [x for x in rows if x["first_ever"]])):
+    rep = [x for x in sub if x["bc"] is not None]
+    quick = [x for x in rep if x["fol"] is not None and x["fol"] <= 180]
+    before = sum(1 for x in quick if x["fol"] <= x["bc"])
+    print(f"\n{label}: events {len(sub)}, broadcaster message within 3 min {len(rep)}; follows within 3 min of the first message in that arm {len(quick)}: {before} before the broadcaster message, {len(quick) - before} after")
+    for h in (3600, 86400):
+        report(f"{label} reply vs none", reply_cells(sub, h), h)
+    report(f"{label} placebo: broadcaster wrote in the 3 min before, no reply after", placebo_cells(sub, 3600), 3600)

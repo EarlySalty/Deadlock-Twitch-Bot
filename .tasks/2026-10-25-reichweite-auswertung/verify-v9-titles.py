@@ -39,7 +39,7 @@ def summarize(xs):
     rnd = random.Random(3)
     bs = sorted(sorted(rnd.choices(xs, k=n))[n // 2] for _ in range(2000))
     pct = lambda d: 100 * (2 ** d - 1)
-    return f"streamers {n} median {pct(med):+.1f}% CI {pct(bs[50]):+.1f}% to {pct(bs[1950]):+.1f}% share+ {pos / n:.2f} sign p {p:.3f}"
+    return f"streamers {n} median ratio of (avg viewers + 1) {pct(med):+.1f}% CI {pct(bs[50]):+.1f}% to {pct(bs[1950]):+.1f}% share+ {pos / n:.2f} sign p {p:.3f}"
 
 
 for feat in ("bang", "discord", "bracket", "short", "chill"):

@@ -359,6 +359,7 @@ WITH m AS (
          stream_language, (chatter_user_id = room_user_id) AS is_bc
   FROM category_chat_messages
   WHERE sent_at >= :'D'::timestamptz AND sent_at < :'D'::timestamptz + interval '1 day'
+    AND NOT coalesce(shared_chat_copy, false)
 ), fp AS (
   SELECT room_user_id, chatter_user_id, min(chatter_login) AS login, min(sent_at) AS first_ts,
          count(*) AS n, max(stream_language) AS lang
@@ -371,6 +372,12 @@ SELECT :'D'::date AS day, f.room_user_id, f.chatter_user_id, f.login, f.first_ts
        coalesce(bool_or(true) FILTER (WHERE b.sent_at > f.first_ts AND b.sent_at <= f.first_ts + interval '2 minutes'), false) AS bc2
 FROM fp f LEFT JOIN bc b ON b.room_user_id = f.room_user_id
 GROUP BY f.room_user_id, f.chatter_user_id, f.login, f.first_ts, f.n, f.lang;
+
+-- Live days per room in the Deadlock category (all languages), for p06-live-days.py
+SELECT user_id, snapshot_at::date AS day, count(*) AS samples
+FROM category_snapshots_normalized
+WHERE snapshot_at >= '2026-10-09'
+GROUP BY 1, 2;
 
 SELECT count(*), min(message_ts)::date, max(message_ts)::date, count(distinct streamer_login), count(distinct session_id) FROM twitch_chat_messages;
 

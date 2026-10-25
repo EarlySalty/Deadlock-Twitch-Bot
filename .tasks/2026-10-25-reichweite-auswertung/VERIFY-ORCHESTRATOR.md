@@ -65,28 +65,29 @@ Baseline at 1-5 live: 0.11 new presences per 15 min for 1-2 viewers, 0.21 for 5-
 
 ## V6. Early-stream jumps are returning viewers, not new discovery
 
-P12 found that unexplained viewer jumps cluster in the first 20 to 100 minutes of a stream. Check: Deadlock sessions of at least 2 h since 2026-03-11 whose first chatter-list sample is within 5 minutes of the start (1,777 sessions). Each arrival (first time a login appears in the session, chatters and lurkers, logins seen in fewer than 10 channels, broadcaster excluded) is classed as returning if the login appeared in an earlier session of the same channel.
+P12 found that unexplained viewer jumps cluster in the first 20 to 100 minutes of a stream. Check on the 30-second chatter-list poll (`twitch_viewer_presence_ticks`, data from 2026-04-04; `queries-VERIFY.sql` V6, run per month): Deadlock sessions of at least 2 h from 2026-05-04, in channels with at least 30 days of earlier chatter data, whose first poll is within 5 minutes of the start and which have polls in at least 20 of the 24 five-minute blocks of the first 2 hours. 1,123 sessions, 42 channels, first poll on average 47 s after the start. An arrival is the first poll that lists a login (chatters and lurkers, logins seen in fewer than 10 channels, broadcaster excluded). It is returning if the login appeared in an earlier session of the same channel.
 
-| Minutes since start | New to channel, per 100 session-minutes | Returning, per 100 session-minutes |
-|---|---|---|
-| 0-10 | 1.5 | 14.0 |
-| 10-30 | 2.1 | 3.3 |
-| 30-60 | 2.3 | 2.1 |
-| 60-120 | 1.9 | 1.6 |
-
-The opening burst is almost entirely regulars arriving after the go-live notification (90 % of first-10-minute arrivals are returning). New people arrive at a flat 1.5 to 2.3 per 100 session-minutes over the first two hours, with no early exposure peak. The 0-10 bucket also holds viewers already present at the first sample. Tips must not claim that Twitch pushes new streams to new viewers in the first minutes; the start matters for regulars, and new viewers accrue with time live.
-
-## V7. The reply-to-follow effect from P08 is reverse causation
-
-P08 reported a follow within 60 minutes for 9.3 % of first messages with a broadcaster message within 3 minutes, against 3.0 % without. Recomputed in three steps (`queries-VERIFY.sql`, V7a to V7c). Logins seen in 10+ channels are excluded, follow-tracked channels only, April and May 2026 skipped (no follow rows), strata are channel x chat activity in the 10 minutes before the message (0-4, 5-19, 20+ messages), Mantel-Haenszel with bootstrap over channels.
-
-| Check | Reply arm n | Follow 60 min, reply vs none | MH difference (95 % CI) |
+| Minutes since start | New to channel, per 100 session-minutes | Returning, per 100 session-minutes | Returning share of arrivals |
 |---|---|---|---|
-| V7c: per-session first message, follows before the message dropped | 394 | 57 follows, 52 of them inside the 3-minute window | |
-| V7b: same, follows inside the 3-minute window also dropped | 342 | 1.5 % vs 2.2 % | -0.9 pp (-1.6 to -0.2) |
-| V7a: first message ever in the channel, same exclusions | 70 | 5.7 % vs 5.8 % | -2.3 pp (-4.4 to +0.2) |
+| 0-10 | 1.3 | 17.2 | 92.9 % |
+| 10-30 | 1.8 | 3.8 | 68.1 % |
+| 30-60 | 2.2 | 2.5 | 53.3 % |
+| 60-120 | 1.8 | 1.8 | 50.1 % |
 
-52 of the 57 quick follows in the reply arm happen in the same 3 minutes as the broadcaster message: the follow alert prompts the thank-you, not the other way round. Once those are removed, a broadcaster message after a first chat line shows no follow lift inside the same channel. Greeting newcomers stays sensible for retention reasons (V2 shows conversation depth matters), but the synthesis must not promise more follows from a quick reply.
+The opening burst is almost entirely regulars arriving after the go-live notification (93 % of first-10-minute arrivals are returning). New people arrive at a flat 1.3 to 2.2 per 100 session-minutes over the first two hours, with no early exposure peak; in 5 of the 6 months the first 10 minutes bring the fewest new arrivals (May, 120 sessions, is the exception). The 0-10 bucket includes the 308 logins already listed at the first poll (30 new, 278 returning, about 0.3 per session); without them it reads 1.05 new and 14.7 returning (93.3 % returning). Arrival times are poll times of the chatter list, not exact join times. An earlier version of this check used `first_message_at` in `twitch_session_chatters` as the arrival time (1,777 sessions since 2026-03-11) and gave the same picture (90 % returning, new 1.5 to 2.3). Tips must not claim that Twitch pushes new streams to new viewers in the first minutes; the start matters for regulars, and new viewers accrue with time live.
+
+## V7. The reply-to-follow gap from P08 is mostly reverse causation; a smaller association remains
+
+P08 reported a follow within 60 minutes for 9.3 % of first messages with a broadcaster message within 3 minutes, against 3.0 % without. Recheck with the order of message, reply and follow respected (`queries-VERIFY.sql` V7, `verify-v7-reply-follow.py`). Logins seen in 10+ channels are excluded, follow-tracked channels only, April and May 2026 skipped (no follow rows), strata are channel x chat activity in the 10 minutes before the message (0-4, 5-19, 20+ messages). In the reply arm the clock starts at the broadcaster message, and events whose follow came at or before it are dropped. Messages without a reply get the same landmark: each is evaluated at the nine deciles of the reply delays in its activity stratum, counting only at landmarks it reaches without having followed (fractional weights). Mantel-Haenszel, 1,000 bootstrap draws over channels. Placebo: among messages without a reply, those where the broadcaster had written in the 3 minutes before, against those where not.
+
+| Check | Events (broadcaster message within 3 min) | Quick follows in the reply arm: before / after the broadcaster message | Follow within 60 min from the landmark, reply vs none | MH 60 min (95 % CI) | MH 24 h (95 % CI) | Placebo MH 60 min (95 % CI) |
+|---|---|---|---|---|---|---|
+| V7b: first message in a session, 58 channels | 6,386 (394) | 38 / 14 of 52 | 5.34 % (356) vs 2.92 % (5,918) | +2.26 pp (-0.19 to +4.69) | +2.40 pp (-0.22 to +4.88) | +0.10 pp (-2.37 to +3.59) |
+| V7a: first message ever in the channel, 46 channels | 2,074 (113) | 32 / 14 of 46 | 22.22 % (81) vs 8.16 % (1,906) | +11.39 pp (+4.08 to +16.82) | +10.96 pp (+2.10 to +16.55) | -0.72 pp (-7.75 to +13.75) |
+
+Quick follows are follows within 3 minutes of the first message. Placebo rates: V7b 3.40 % (weighted n 255) vs 2.90 % (5,663); V7a 10.69 % (73) vs 8.06 % (1,833).
+
+Most quick follows in the reply arm come before the broadcaster message: the follow alert prompts the thank-you, so the raw 3x gap is largely reverse causation. Measured from the reply on, a smaller lift remains: +2.3 pp for any first message in a session (the interval touches zero) and +11 pp for a first message ever in the channel (81 replies). The placebo is null, so the lift is not just the broadcaster reading chat at that moment. It is still an association from a small arm: streamers answer some newcomers and not others for reasons the data does not see (a line that invites a reply, a quiet moment). The synthesis may call answering a newcomer's first line soon a likely-helpful habit, not a measured lever. An earlier version of this check dropped every follow inside the 3-minute window regardless of order and found no lift; that design also removed follows that came after the reply and is replaced.
 
 ## V8. Ending near the peak and the next start: smaller, but it holds
 
@@ -104,7 +105,7 @@ The effect is about half of P11's figure but survives level, duration and peak c
 
 ## V9. Title effects from P01 shrink to near zero against nearby sessions
 
-P01 compared all of a streamer's sessions with and without a title feature. A streamer who adds "!discord" or brackets during a growth phase gets credited with that growth. Recheck (`queries-VERIFY.sql` V9, `verify-v9-titles.py`): German Deadlock sessions of at least 30 min since 2026-01-09 (10,917 sessions). Each session with the feature is compared with the same streamer's sessions without it inside plus or minus 14 days (at least 2 such sessions), log2 average viewers, median across streamers, bootstrap CI and sign test.
+P01 compared all of a streamer's sessions with and without a title feature. A streamer who adds "!discord" or brackets during a growth phase gets credited with that growth. Recheck (`queries-VERIFY.sql` V9, `verify-v9-titles.py`): German Deadlock sessions of at least 30 min since 2026-01-09 (10,917 sessions). Each session with the feature is compared with the same streamer's sessions without it inside plus or minus 14 days (at least 2 such sessions), log2(average viewers + 1), median across streamers, bootstrap CI and sign test. Percentages are ratios of (average viewers + 1), which slightly understates relative changes for very small channels.
 
 | Feature | All sessions (reproduces P01) | Matched within 14 days |
 |---|---|---|
@@ -144,4 +145,4 @@ P07 reported a 2-minute follow-up lift of 1.12 for Social viewer messages (62 % 
 | Game-Related | 0.87 (0.32) | -19.2 % (-23.6 to -4.1) |
 | Statement | 0.97 (0.40) | -19.4 % (-25.7 to -3.8) |
 
-The naive lift reproduces the direction. Holding chat speed equal, Social messages draw no more follow-up than other messages; the 1.12 is when they are posted, not what they do. Game talk and longer statements stay below other messages at equal speed, short reactions slightly above. Practical reading: chat replies follow the room's tempo; there is no message type a streamer could prompt to make chat answer more. The confidence intervals are wide and skewed because a few large channels carry much of the weight.
+The naive lift reproduces the direction. Holding chat speed equal, Social messages draw no more follow-up than other messages; the 1.12 is when they are posted, not what they do. Game talk and longer statements stay below other messages at equal speed, short reactions slightly above. Practical reading: chat replies follow the room's tempo. Only short reactions sit slightly above other messages at equal speed (+4.7 %, CI +0.4 to +6.4), too small to build a tip on; no tested message type is a reply lever. The confidence intervals are wide and skewed because a few large channels carry much of the weight.

@@ -11,7 +11,7 @@ select date_trunc('month',started_at)::date m, count(*) n, count(*) filter (wher
 with f as (select session_id, min(minutes_from_start) mn0, max(minutes_from_start) mx, count(*) n from twitch_session_viewers where ts_utc >= '2026-01-09' group by 1) select 'first_min_bucket', case when mn0=0 then '0' when mn0<=4 then '1-4' when mn0<=15 then '5-15' when mn0<=60 then '16-60' else '>60' end b, count(*), round(avg(n)) from f group by 2 order by 2;
 
 \echo Q0 size class counts (Deadlock sessions >= 60 min since 2026-01-09)
-select case when m<5 then '0-4' when m<20 then '5-19' when m<100 then '20-99' else '100+' end c, count(*) from (select streamer_login, percentile_cont(0.5) within group (order by avg_viewers) m from twitch_stream_sessions where started_at >= '2026-01-09' and game_name='Deadlock' and duration_seconds>=3600 group by 1) x group by 2 order by 2;
+select case when m<5 then '0-4' when m<20 then '5-19' when m<100 then '20-99' else '100+' end c, count(*) from (select streamer_login, percentile_cont(0.5) within group (order by avg_viewers) m from twitch_stream_sessions where started_at >= '2026-01-09' and game_name='Deadlock' and duration_seconds>=3600 group by 1) x group by 1 order by 1;
 
 \echo Q1a curve summary per session (size class, peak timing, hour means)
 with sess as (

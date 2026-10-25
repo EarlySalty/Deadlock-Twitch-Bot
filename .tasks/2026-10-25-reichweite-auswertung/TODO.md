@@ -1,4 +1,4 @@
-# TODO: Twitch reach analysis (state 2026-10-25 21:05 CET)
+# TODO: Twitch reach analysis (state 2026-10-25, after gate round 1)
 
 User goal: deep analysis of all Twitch data on how German Deadlock streams win new viewers, turn
 lurkers into chatters and newcomers into followers, subs and regulars; also when Twitch shows a
@@ -19,7 +19,7 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
 | P05 | lurkers vs chatters | done, FINDINGS-P05.md (tips 1 and 3 withdrawn by V10) |
 | P06 | first-time chatter loyalty | done, FINDINGS-P06.md |
 | P07 | chat content | done, FINDINGS-P07.md (tips 1 and 2 downgraded by V11) |
-| P08 | follows and subs | done, FINDINGS-P08.md (tip 1 withdrawn by V7) |
+| P08 | follows and subs | done, FINDINGS-P08.md (tip 1 downgraded to an association by V7) |
 | P09 | raids, shared chat | done, FINDINGS-P09.md |
 | P10 | global category benchmark | done, FINDINGS-P10.md |
 | P11 | stream opening, games | done, FINDINGS-P11.md (tip 8 annotated by V8) |
@@ -38,8 +38,9 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
 - Lurker baselines must exclude logins seen in 30+ channels (bots, scene surfers): they return
   at 52 %; ordinary lurkers at 15.5 % (VERIFY-ORCHESTRATOR.md V4). About 30 % of one-message
   newcomers are commands, spam or moderated (V3).
-- Broadcaster chat replies show no within-channel effect on return (V2) or on follows (V7: the
-  follow alert prompts the thank-you); tips must not claim either.
+- Broadcaster chat replies show no within-channel effect on return (V2). For follows the raw gap is
+  mostly the alert thank-you; with the order respected a smaller association remains (V7). Tips may
+  call a quick reply a likely-helpful habit, not a lever.
 - More German streams live costs no new viewers within streamer (V5). Early-stream jumps are
   returning regulars, not discovery (V6).
 - Ending near the peak lifts the next start by about +0.07 of the streamer median, placebo null
@@ -51,7 +52,9 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
 
 ## Next steps
 
-1. All packages are in and verified; `SYNTHESE.md` and `SYNTHESE.html` are final.
-2. Commit only this folder, run `gate_hook.py --review` (skill rolle-merge-schleuse), merge to
-   main on ALLOW, clean up branch and worktree, cancel wakeup `reichweite`. Report to the user in
-   English.
+1. Gate round 1 (BLOCK, 11 findings) is fixed: P06 shared-chat copies removed and the German
+   return gap rechecked against live days (`p06-live-days.py`); P08 exposure cut at t0, next
+   sample and session end; V6 rerun on the 30-second presence poll; V7 rerun with the order of
+   message, reply and follow respected; wording fixes in P07, P10, V9, V11 and the synthesis.
+2. Re-run `gate_hook.py --review` (skill rolle-merge-schleuse) until ALLOW, merge to main, clean
+   up branch and worktree, cancel wakeup `reichweite`. Report to the user in English.

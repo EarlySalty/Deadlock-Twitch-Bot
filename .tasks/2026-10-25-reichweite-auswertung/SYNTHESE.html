@@ -83,8 +83,8 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
   <p class="sub">Comparisons inside the same streamer or session, January to October 2026. Bots and scene-wide logins (30+ channels) excluded. Aggregates only.</p>
 
   <div class="tiles">
-    <div class="tile"><div class="l">First-10-minute arrivals who are regulars</div><div class="v">90 %</div><div class="s">No early discovery push; new people trickle in at about 2 per 100 stream minutes</div></div>
-    <div class="tile"><div class="l">German newcomers with a next live day within 7 days</div><div class="v">46 %</div><div class="s">All languages 85 %. Given that chance, return is equal (34 %)</div></div>
+    <div class="tile"><div class="l">First-10-minute arrivals who are regulars</div><div class="v">93 %</div><div class="s">No early discovery push; new people trickle in at about 2 per 100 stream minutes</div></div>
+    <div class="tile"><div class="l">German newcomers whose room is live again within 7 days</div><div class="v">72 %</div><div class="s">All languages 83 %. Return is equal (23 %) and highest at 5 to 7 live days</div></div>
     <div class="tile"><div class="l">Viewers kept per raider after 1 hour (1 to 4 viewer channels)</div><div class="v">+0.19</div><div class="s">257 raids; gone by the next stream</div></div>
     <div class="tile"><div class="l">Next start after ending near the peak</div><div class="v">+6 to 9 %</div><div class="s">of the usual audience; placebo null (80 streamers)</div></div>
   </div>
@@ -92,7 +92,7 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
   <div class="grid2">
     <div class="card">
       <h2>Who arrives when</h2>
-      <p class="note">Arrivals per 100 stream minutes, Deadlock sessions of 2 h+ sampled from the start (1,777 sessions)</p>
+      <p class="note">Arrivals per 100 stream minutes on the 30-second chatter poll, Deadlock sessions of 2 h+ polled from the start (1,123 sessions, 42 channels)</p>
       <div class="legend"><span><i style="background:var(--series-1)"></i>Returning to the channel</span><span><i style="background:var(--series-2)"></i>New to the channel</span></div>
       <div class="chart" id="c-arrivals"></div>
       <div class="src">Check V6</div>
@@ -107,11 +107,11 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 
   <div class="grid2">
     <div class="card">
-      <h2>German newcomers lack a next stream, not loyalty</h2>
-      <p class="note">Share of newcomers in %. Category newcomers, first seen 2026-09-28 to 2026-10-17 (German 5,041 in 360 rooms; all languages 698,013)</p>
+      <h2>German newcomers come back as often; their room is live on fewer days</h2>
+      <p class="note">Share of newcomers in %. Category newcomers first seen 2026-10-09 to 2026-10-17, live days from the category snapshots (German 1,648 in 245 rooms; all languages 276,854). Return is only visible while the room is live</p>
       <div class="legend"><span><i style="background:var(--series-1)"></i>German</span><span><i style="background:var(--series-2)"></i>All languages</span></div>
       <div class="chart" id="c-opp"></div>
-      <div class="src">Package P06</div>
+      <div class="src">Package P06; German return 29 % at 1 to 2 later live days, 28 % at 3 to 4, 45 % at 5 to 7</div>
     </div>
     <div class="card">
       <h2>What does not move reach</h2>
@@ -125,7 +125,7 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
         <li>Go-live notification</li>
         <li>Shared chat</li>
         <li>Outgoing raids for own growth</li>
-        <li>Typed reply to a newcomer (return, follows)</li>
+        <li>Typed reply to a newcomer (return)</li>
         <li>Typing in chat, also to fill silence</li>
         <li>A moving chat or a chat-speed target</li>
         <li>Social talk as reply bait (equal chat speed)</li>
@@ -142,13 +142,13 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
     <table>
       <thead><tr><th>#</th><th>Lever</th><th>Evidence</th><th>Confidence</th></tr></thead>
       <tbody>
-        <tr><td class="num">1</td><td>Stream more days per week, ideally consecutive, so a newcomer finds a next stream within 1 to 3 days</td><td>German opportunity 46 % vs 85 %; returns cluster 2 to 3 days after the first visit</td><td><span class="pill">medium</span></td></tr>
+        <tr><td class="num">1</td><td>Stream more days per week, ideally consecutive, so a newcomer finds a next stream within 1 to 4 days</td><td>Room live again within 7 days for 72 % of German newcomers vs 83 %; return equal (23 %) and highest at 5 to 7 live days; German returns a median 2 days after the first visit</td><td><span class="pill">medium</span></td></tr>
         <tr><td class="num">2</td><td>Longer sessions (4 h+) instead of several short ones</td><td>1.14x own average viewers; hour 5 holds 1.17 to 1.24x hour 2 at 5 to 19 viewers; new people arrive per minute live</td><td><span class="pill">medium, self-selection</span></td></tr>
         <tr><td class="num">3</td><td>Get raided: raid ties with channels of similar or larger size</td><td>+0.185 viewers per raider after 1 h at 1 to 4 viewers; follows 6.7 vs 2.2 per 100 viewer-hours in the 10 minutes after a raid</td><td><span class="pill">medium</span></td></tr>
         <tr><td class="num">4</td><td>End while the room is still full; do not cut streams short for it</td><td>+0.067 of the median at the next start (CI +0.040 to +0.101), placebo null</td><td><span class="pill">medium</span></td></tr>
-        <tr><td class="num">5</td><td>Draw newcomers into a back-and-forth; the second and third message matter</td><td>2+ messages +14 pp 30-day return; 5+ messages 31 % vs 15.5 % silent</td><td><span class="pill">medium association</span></td></tr>
+        <tr><td class="num">5</td><td>Draw newcomers into a back-and-forth; the second and third message matter</td><td>2+ messages +14 pp 30-day return; 5+ messages 31 % vs 15.5 % silent; a typed reply soon after a first message ever goes with more follows (association)</td><td><span class="pill">medium association</span></td></tr>
         <tr><td class="num">6</td><td>Expect follows late and at high points</td><td>Median follow at minute 130; chatters follow about 9x as often per session as silent viewers</td><td><span class="pill">low to medium</span></td></tr>
-        <tr><td class="num">7</td><td>Titles of 30+ characters, otherwise free</td><td>Under 30 characters -1.7 % against sessions within 14 days</td><td><span class="pill">medium, small</span></td></tr>
+        <tr><td class="num">7</td><td>Titles of 30+ characters, otherwise free</td><td>Under 30 characters -1.7 % in (average viewers + 1) against sessions within 14 days</td><td><span class="pill">medium, small</span></td></tr>
       </tbody>
     </table>
   </div>
@@ -239,19 +239,19 @@ function hbars(id, rows, opt) {
 }
 function draw() {
   grouped("c-arrivals", ["0-10 min", "10-30 min", "30-60 min", "60-120 min"], [
-    { name: "Returning to the channel", color: "--series-1", values: [14.0, 3.3, 2.1, 1.6] },
-    { name: "New to the channel", color: "--series-2", values: [1.5, 2.1, 2.3, 1.9] }
-  ], { max: 15, ticks: [0, 5, 10, 15], tipUnit: " per 100 stream minutes", aria: "Arrivals per 100 stream minutes by minute since start, returning versus new viewers" });
+    { name: "Returning to the channel", color: "--series-1", values: [17.2, 3.8, 2.5, 1.8] },
+    { name: "New to the channel", color: "--series-2", values: [1.3, 1.8, 2.2, 1.8] }
+  ], { max: 20, ticks: [0, 5, 10, 15, 20], tipUnit: " per 100 stream minutes", aria: "Arrivals per 100 stream minutes by minute since start, returning versus new viewers" });
   hbars("c-return", [
     { label: "Silent", v: 15.5, n: 9272 },
     { label: "1 message", v: 9.1, n: 2868 },
     { label: "2-4 messages", v: 17.4, n: 2140 },
     { label: "5+ messages", v: 31.3, n: 2574 }
   ], { max: 35, aria: "30-day return share by messages in the first session" });
-  grouped("c-opp", ["Next live day with\nchat within 7 days", "Back within\n7 days", "Back within 7 days,\ngiven a next live day"], [
-    { name: "German", color: "--series-1", values: [46.1, 15.6, 33.8] },
-    { name: "All languages", color: "--series-2", values: [85.0, 28.9, 34.0] }
-  ], { max: 100, ticks: [0, 25, 50, 75, 100], tipUnit: " %", aria: "German versus all-language newcomers: opportunity, return, and return given opportunity" });
+  grouped("c-opp", ["Room live again\nwithin 7 days", "Back within\n7 days", "Back within 7 days,\ngiven a live day"], [
+    { name: "German", color: "--series-1", values: [72.1, 23.3, 32.3] },
+    { name: "All languages", color: "--series-2", values: [83.0, 23.4, 28.2] }
+  ], { max: 100, ticks: [0, 25, 50, 75, 100], tipUnit: " %", aria: "German versus all-language newcomers: room live again, return, and return given a live day" });
 }
 draw();
 let rt;

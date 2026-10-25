@@ -105,53 +105,76 @@ select case when messages = 0 then 'lurker' when messages = 1 then 'chat1' when 
        count(*), round(avg(back30::int)::numeric, 3)
 from k group by 1, 2 order by 1, 2;
 
--- V6 arrivals by minute since start, new vs returning to the channel (logins in fewer than 10 channels)
+-- V6 arrivals by minute since start on the 30-second presence poll, new vs returning to the channel (logins in fewer than 10 channels); run with -v m1=2026-05-01 -v m2=2026-11-01
 with s as (
-  select id, streamer_login, started_at, ended_at
+  select id, streamer_login, started_at
   from twitch_stream_sessions
-  where started_at >= '2026-03-11' and ended_at is not null
+  where started_at >= :'m1'::timestamptz and started_at < :'m2'::timestamptz and ended_at is not null
     and (game_name = 'Deadlock' or had_deadlock_in_session)
     and duration_seconds >= 7200
 ),
+obs as (
+  select c.streamer_login, min(ss.started_at) as first_obs
+  from twitch_session_chatters c join twitch_stream_sessions ss on ss.id = c.session_id
+  group by 1
+),
+s2 as (
+  select s.* from s join obs o on o.streamer_login = s.streamer_login
+  where s.started_at >= greatest(o.first_obs, '2026-04-04 23:00+00'::timestamptz) + interval '30 days'
+),
+tk as (
+  select t.session_id, t.viewer_login, t.tick_at
+  from twitch_viewer_presence_ticks t join s2 on s2.id = t.session_id
+  where t.tick_at >= s2.started_at - interval '10 minutes' and t.tick_at < s2.started_at + interval '2 hours'
+),
+cov as (
+  select tk.session_id, min(tk.tick_at) as first_tick
+  from tk join s2 on s2.id = tk.session_id
+  group by tk.session_id, s2.started_at
+  having min(tk.tick_at) <= s2.started_at + interval '5 minutes'
+     and count(distinct floor(extract(epoch from tk.tick_at - s2.started_at) / 300)) filter (where tk.tick_at >= s2.started_at) >= 20
+),
+arr as (
+  select tk.session_id, tk.viewer_login, min(tk.tick_at) as first_tick
+  from tk join cov using (session_id)
+  group by 1, 2
+),
 reach as (
-  select c.chatter_login, count(distinct c.streamer_login) as n_ch
-  from twitch_session_chatters c
-  where c.first_message_at >= '2026-02-20'
+  select chatter_login, count(distinct streamer_login) as n_ch
+  from twitch_session_chatters
+  where first_message_at >= '2026-02-20'
   group by 1
 ),
 firstseen as (
   select c.streamer_login, c.chatter_login, min(ss.started_at) as first_start
-  from twitch_session_chatters c
-  join twitch_stream_sessions ss on ss.id = c.session_id
+  from twitch_session_chatters c join twitch_stream_sessions ss on ss.id = c.session_id
   group by 1, 2
 ),
-early as (
-  select c.session_id
-  from twitch_session_chatters c join s on s.id = c.session_id
-  group by c.session_id, s.started_at
-  having min(c.first_message_at) <= min(s.started_at) + interval '5 minutes'
-),
 a as (
-  select s.id, extract(epoch from c.first_message_at - s.started_at) / 60 as amin,
-         (f.first_start < s.started_at) as is_ret,
-         (c.messages > 0) as chatter
-  from s
-  join early e on e.session_id = s.id
-  join twitch_session_chatters c on c.session_id = s.id
-  join reach r on r.chatter_login = c.chatter_login and r.n_ch < 10
-  join firstseen f on f.streamer_login = c.streamer_login and f.chatter_login = c.chatter_login
-  where c.chatter_login <> s.streamer_login
+  select arr.session_id,
+         arr.first_tick = cov.first_tick as at_first,
+         greatest(extract(epoch from arr.first_tick - s2.started_at), 0) / 60 as amin,
+         coalesce(f.first_start < s2.started_at, false) as is_ret
+  from arr
+  join cov using (session_id)
+  join s2 on s2.id = arr.session_id
+  left join reach r on r.chatter_login = arr.viewer_login
+  left join firstseen f on f.streamer_login = s2.streamer_login and f.chatter_login = arr.viewer_login
+  where lower(arr.viewer_login) <> lower(s2.streamer_login)
+    and coalesce(r.n_ch, 0) < 10
 )
-select case when amin < 10 then '0-10' when amin < 30 then '10-30' when amin < 60 then '30-60'
-            when amin < 120 then '60-120' else '120+' end as bucket,
+select case when at_first then 'first_tick' when amin < 10 then '0-10' when amin < 30 then '10-30'
+            when amin < 60 then '30-60' else '60-120' end as bucket,
        count(*) filter (where not is_ret) as new_arr,
        count(*) filter (where is_ret) as ret_arr,
-       (select count(*) from early e join s on s.id = e.session_id) as n_sessions
+       (select count(*) from cov) as n_sessions,
+       (select count(distinct s2.streamer_login) from cov join s2 on s2.id = cov.session_id) as n_channels,
+       (select round(avg(extract(epoch from cov.first_tick - s2.started_at))::numeric, 1) from cov join s2 on s2.id = cov.session_id) as avg_first_tick_s
 from a
 group by 1
-order by min(amin);
+order by min(case when at_first then -1 else amin end);
 
--- V7a reply within 3 min to follow, first message ever per channel
+-- V7 first messages with broadcaster message and follow delays, order-respecting landmark test in verify-v7-reply-follow.py
 with trk as (
   select lower(streamer_login) as login, min(followed_at) as t0
   from twitch_follow_events group by 1
@@ -162,60 +185,14 @@ reach as (
   where first_message_at >= '2026-02-20'
   group by 1
 ),
-firstever as (
-  select distinct on (m.streamer_login, m.chatter_login)
-         m.streamer_login, m.chatter_login, m.session_id, m.message_ts as first_ts
+firstall as (
+  select m.streamer_login, m.chatter_login, min(m.message_ts) as first_any
   from twitch_chat_messages m
   where m.chatter_login is not null and m.chatter_login <> m.streamer_login
     and m.message_ts >= '2026-01-31'
-  order by m.streamer_login, m.chatter_login, m.message_ts
+  group by 1, 2
 ),
-ev as (
-  select fe.*,
-    (select min(f.followed_at) from twitch_follow_events f
-      where lower(f.streamer_login) = fe.streamer_login and f.follower_login = fe.chatter_login
-        and f.followed_at >= fe.first_ts - interval '30 days') as fol_at,
-    exists (select 1 from twitch_chat_messages b
-      where b.session_id = fe.session_id and b.chatter_login = fe.streamer_login
-        and b.message_ts > fe.first_ts and b.message_ts <= fe.first_ts + interval '3 minutes') as reply3,
-    (select count(*) from twitch_chat_messages o
-      where o.session_id = fe.session_id and o.chatter_login <> fe.chatter_login
-        and o.message_ts >= fe.first_ts - interval '10 minutes' and o.message_ts < fe.first_ts) as act10
-  from firstever fe
-  join trk on trk.login = fe.streamer_login
-  where fe.first_ts >= trk.t0 + interval '14 days'
-    and fe.first_ts < now() - interval '1 day'
-    and not (extract(month from fe.first_ts) in (4, 5) and extract(year from fe.first_ts) = 2026)
-),
-clean as (
-  select ev.*
-  from ev
-  left join reach r on r.chatter_login = ev.chatter_login
-  where coalesce(r.n_ch, 0) < 10
-    and (fol_at is null or fol_at > first_ts + interval '3 minutes')
-)
-select md5(streamer_login) as stratum_streamer,
-       case when act10 < 5 then 'a0-4' when act10 < 20 then 'b5-19' else 'c20+' end as act,
-       reply3,
-       count(*) as n,
-       count(*) filter (where fol_at <= first_ts + interval '60 minutes') as fol60,
-       count(*) filter (where fol_at <= first_ts + interval '24 hours') as fol24h
-from clean
-group by 1, 2, 3
-order by 1, 2, 3;
-
--- V7b same, per-session first message (P08 unit), non-command, all earlier follows dropped
-with trk as (
-  select lower(streamer_login) as login, min(followed_at) as t0
-  from twitch_follow_events group by 1
-),
-reach as (
-  select chatter_login, count(distinct streamer_login) as n_ch
-  from twitch_session_chatters
-  where first_message_at >= '2026-02-20'
-  group by 1
-),
-firstever as (
+fe as (
   select distinct on (m.session_id, m.chatter_login)
          m.streamer_login, m.chatter_login, m.session_id, m.message_ts as first_ts
   from twitch_chat_messages m
@@ -223,87 +200,39 @@ firstever as (
     and m.message_ts >= '2026-02-01' and not coalesce(m.is_command, false)
   order by m.session_id, m.chatter_login, m.message_ts
 ),
+fol as (
+  select lower(streamer_login) as login, follower_login, min(followed_at) as fol_at
+  from twitch_follow_events group by 1, 2
+),
 ev as (
-  select fe.*,
-    (select min(f.followed_at) from twitch_follow_events f
-      where lower(f.streamer_login) = fe.streamer_login and f.follower_login = fe.chatter_login
-        ) as fol_at,
-    exists (select 1 from twitch_chat_messages b
+  select fe.*, trk.t0, fa.first_any, fol.fol_at,
+    (select min(b.message_ts) from twitch_chat_messages b
       where b.session_id = fe.session_id and b.chatter_login = fe.streamer_login
-        and b.message_ts > fe.first_ts and b.message_ts <= fe.first_ts + interval '3 minutes') as reply3,
+        and b.message_ts > fe.first_ts and b.message_ts <= fe.first_ts + interval '3 minutes') as bc_at,
+    exists (select 1 from twitch_chat_messages p
+      where p.session_id = fe.session_id and p.chatter_login = fe.streamer_login
+        and p.message_ts >= fe.first_ts - interval '3 minutes' and p.message_ts < fe.first_ts) as bc_pre,
     (select count(*) from twitch_chat_messages o
       where o.session_id = fe.session_id and o.chatter_login <> fe.chatter_login
         and o.message_ts >= fe.first_ts - interval '10 minutes' and o.message_ts < fe.first_ts) as act10
-  from firstever fe
+  from fe
   join trk on trk.login = fe.streamer_login
+  join firstall fa on fa.streamer_login = fe.streamer_login and fa.chatter_login = fe.chatter_login
+  left join fol on fol.login = fe.streamer_login and fol.follower_login = fe.chatter_login
+  left join reach r on r.chatter_login = fe.chatter_login
   where fe.first_ts >= trk.t0
     and fe.first_ts < now() - interval '1 day'
     and not (extract(month from fe.first_ts) in (4, 5) and extract(year from fe.first_ts) = 2026)
-),
-clean as (
-  select ev.*
-  from ev
-  left join reach r on r.chatter_login = ev.chatter_login
-  where coalesce(r.n_ch, 0) < 10
-    and (fol_at is null or fol_at > first_ts + interval '3 minutes')
+    and coalesce(r.n_ch, 0) < 10
+    and (fol.fol_at is null or fol.fol_at >= fe.first_ts)
 )
-select md5(streamer_login) as stratum_streamer,
+select md5(streamer_login) as st,
        case when act10 < 5 then 'a0-4' when act10 < 20 then 'b5-19' else 'c20+' end as act,
-       reply3,
-       count(*) as n,
-       count(*) filter (where fol_at <= first_ts + interval '60 minutes') as fol60,
-       count(*) filter (where fol_at <= first_ts + interval '24 hours') as fol24h
-from clean
-group by 1, 2, 3
-order by 1, 2, 3;
-
--- V7c reverse-causation check: follows inside the 3-minute window
-with trk as (
-  select lower(streamer_login) as login, min(followed_at) as t0
-  from twitch_follow_events group by 1
-),
-reach as (
-  select chatter_login, count(distinct streamer_login) as n_ch
-  from twitch_session_chatters
-  where first_message_at >= '2026-02-20'
-  group by 1
-),
-firstever as (
-  select distinct on (m.session_id, m.chatter_login)
-         m.streamer_login, m.chatter_login, m.session_id, m.message_ts as first_ts
-  from twitch_chat_messages m
-  where m.chatter_login is not null and m.chatter_login <> m.streamer_login
-    and m.message_ts >= '2026-02-01' and not coalesce(m.is_command, false)
-  order by m.session_id, m.chatter_login, m.message_ts
-),
-ev as (
-  select fe.*,
-    (select min(f.followed_at) from twitch_follow_events f
-      where lower(f.streamer_login) = fe.streamer_login and f.follower_login = fe.chatter_login
-        ) as fol_at,
-    exists (select 1 from twitch_chat_messages b
-      where b.session_id = fe.session_id and b.chatter_login = fe.streamer_login
-        and b.message_ts > fe.first_ts and b.message_ts <= fe.first_ts + interval '3 minutes') as reply3,
-    (select count(*) from twitch_chat_messages o
-      where o.session_id = fe.session_id and o.chatter_login <> fe.chatter_login
-        and o.message_ts >= fe.first_ts - interval '10 minutes' and o.message_ts < fe.first_ts) as act10
-  from firstever fe
-  join trk on trk.login = fe.streamer_login
-  where fe.first_ts >= trk.t0
-    and fe.first_ts < now() - interval '1 day'
-    and not (extract(month from fe.first_ts) in (4, 5) and extract(year from fe.first_ts) = 2026)
-),
-clean as (
-  select ev.*
-  from ev
-  left join reach r on r.chatter_login = ev.chatter_login
-  where coalesce(r.n_ch, 0) < 10
-    and (fol_at is null or fol_at >= first_ts)
-)
-select reply3, count(*) as n,
-       count(*) filter (where fol_at <= first_ts + interval '3 minutes') as fol_0_3m,
-       count(*) filter (where fol_at <= first_ts + interval '60 minutes') as fol60
-from clean group by 1 order by 1;
+       (first_any = first_ts and first_ts >= t0 + interval '14 days') as first_ever,
+       round(extract(epoch from (bc_at - first_ts))::numeric, 1) as bc_delay,
+       round(extract(epoch from (fol_at - first_ts))::numeric, 1) as fol_delay,
+       bc_pre
+from ev;
 
 -- V8 end-to-peak ratio and the next start, session pairs within 48 h (streamer fixed effects in verify-v8-end-next.py)
 with s as (

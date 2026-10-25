@@ -130,7 +130,7 @@ Reading: at the same size, German small channels sit a little below English (50.
 - Growth in the small band is not explained by schedule, session length, tags or title wording. Evidence: moderate, German samples are small.
 - Lively chat goes with the streamer writing in chat. Evidence: correlational only.
 - No title word or tag shows a robust lift. Keep titles clear; the data offers no specific wording to copy.
-- Followers per average viewer among small channels are close to English (50 vs 58), so conversion is not a German-specific gap.
+- Small German channels hold about as many followers per average viewer as English ones (50 vs 58). This is a follower stock built up over each channel's life, not a conversion rate; the category data has no follow events, so conversion by language is not measured.
 
 **Caveats**
 - 16-day window; week 3 has 3 days; channels already live before 10-09 have no earlier baseline.
