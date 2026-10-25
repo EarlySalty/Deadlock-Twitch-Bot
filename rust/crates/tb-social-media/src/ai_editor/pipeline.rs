@@ -1361,6 +1361,20 @@ async fn render(
     Ok(checkpoint)
 }
 
+fn render_failure(
+    identity: Identity,
+    step: &'static str,
+    error: &super::EditorError,
+) -> AiEditorError {
+    tracing::warn!(
+        job_id = %identity.namespace(),
+        step,
+        code = ?error.code,
+        "Social AI render step failed"
+    );
+    AiEditorError::Render
+}
+
 async fn render_one(
     ctx: &mut StageContext<'_>,
     frozen: &PreparingSnapshot,
@@ -1406,7 +1420,7 @@ async fn render_one(
             &runtime.limits.resources,
         )
         .await
-        .map_err(|_| AiEditorError::Render)?;
+        .map_err(|error| render_failure(ctx.identity, "prepare_intervals", &error))?;
         let layout = frozen
             .layout
             .as_ref()
@@ -1430,7 +1444,7 @@ async fn render_one(
         let rendered =
             super::render_prepared(&prepared, layout.as_ref(), &ass, &runtime.limits.resources)
                 .await
-                .map_err(|_| AiEditorError::Render)?;
+                .map_err(|error| render_failure(ctx.identity, "render_prepared", &error))?;
         let rendering_ms =
             i64::try_from(started.elapsed().as_millis()).map_err(|_| AiEditorError::Render)?;
         ctx.lease
