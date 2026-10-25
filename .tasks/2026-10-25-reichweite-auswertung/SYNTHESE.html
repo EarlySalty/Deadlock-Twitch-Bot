@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>German Deadlock on Twitch: what drives reach</title>
+<style>
+.viz-root {
+  --surface-1: var(--card, #fcfcfb);
+  --text-primary: var(--foreground, #0b0b0b);
+  --text-secondary: var(--muted-foreground, #52514e);
+  --hair: var(--border, rgba(11,11,11,0.10));
+  --faint: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    --surface-1: var(--card, #1a1a19);
+    --text-primary: var(--foreground, #f0efec);
+    --text-secondary: var(--muted-foreground, #c3c2b7);
+    --hair: var(--border, rgba(255,255,255,0.10));
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+  }
+}
+:root[data-theme="dark"] .viz-root {
+  --surface-1: var(--card, #1a1a19);
+  --text-primary: var(--foreground, #f0efec);
+  --text-secondary: var(--muted-foreground, #c3c2b7);
+  --hair: var(--border, rgba(255,255,255,0.10));
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+.viz-root {
+  color: var(--text-primary);
+  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.sub { color: var(--text-secondary); margin: 0 0 14px; font-size: 13px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 10px; margin-bottom: 12px; }
+.tile, .card { background: var(--surface-1); border: 1px solid var(--hair); border-radius: var(--radius, 10px); padding: 16px; }
+.tile .v { font-size: 26px; font-weight: 650; margin: 2px 0 4px; }
+.tile .l { color: var(--text-secondary); font-size: 12.5px; }
+.tile .s { color: var(--text-secondary); font-size: 12px; margin-top: 6px; opacity: 0.85; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 12px; margin-bottom: 12px; }
+.card h2 { font-size: 15px; margin: 0 0 2px; font-weight: 650; }
+.card .note { color: var(--text-secondary); font-size: 12.5px; margin: 0 0 10px; }
+.card .src { color: var(--text-secondary); font-size: 12px; margin-top: 8px; opacity: 0.85; }
+.legend { display: flex; gap: 16px; font-size: 12.5px; color: var(--text-secondary); margin-bottom: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.chart { width: 100%; }
+svg { display: block; overflow: visible; }
+svg text { fill: var(--text-secondary); font-size: 12px; font-family: inherit; }
+svg .val { fill: var(--text-primary); font-variant-numeric: tabular-nums; }
+svg .tick { fill: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+svg .gl { stroke: var(--grid); stroke-width: 1; }
+svg .base { stroke: var(--axis); stroke-width: 1; }
+svg .hit { fill: transparent; }
+svg g.mark:hover .bar { opacity: 0.85; }
+.tip { position: fixed; pointer-events: none; background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--hair); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 4px 16px rgba(0,0,0,0.18); display: none; max-width: 280px; z-index: 10; }
+.tip b { font-weight: 650; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--hair); vertical-align: top; }
+th { color: var(--text-secondary); font-weight: 600; font-size: 12px; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pill { display: inline-block; font-size: 11.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--hair); color: var(--text-secondary); white-space: nowrap; }
+.nulls { columns: 2 220px; column-gap: 24px; margin: 0; padding-left: 18px; color: var(--text-secondary); }
+.nulls li { margin-bottom: 4px; break-inside: avoid; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <p class="sub">Comparisons inside the same streamer or session, January to October 2026. Bots and scene-wide logins (30+ channels) excluded. Aggregates only.</p>
+
+  <div class="tiles">
+    <div class="tile"><div class="l">First-10-minute arrivals who are regulars</div><div class="v">90 %</div><div class="s">No early discovery push; new people trickle in at about 2 per 100 stream minutes</div></div>
+    <div class="tile"><div class="l">German newcomers with a next live day within 7 days</div><div class="v">46 %</div><div class="s">All languages 85 %. Given that chance, return is equal (34 %)</div></div>
+    <div class="tile"><div class="l">Viewers kept per raider after 1 hour (1 to 4 viewer channels)</div><div class="v">+0.19</div><div class="s">257 raids; gone by the next stream</div></div>
+    <div class="tile"><div class="l">Next start after ending near the peak</div><div class="v">+6 to 9 %</div><div class="s">of the usual audience; placebo null (80 streamers)</div></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>Who arrives when</h2>
+      <p class="note">Arrivals per 100 stream minutes, Deadlock sessions of 2 h+ sampled from the start (1,777 sessions)</p>
+      <div class="legend"><span><i style="background:var(--series-1)"></i>Returning to the channel</span><span><i style="background:var(--series-2)"></i>New to the channel</span></div>
+      <div class="chart" id="c-arrivals"></div>
+      <div class="src">Check V6</div>
+    </div>
+    <div class="card">
+      <h2>A real conversation keeps newcomers, one line does not</h2>
+      <p class="note">Share back in the channel within 30 days, by messages written in the first session (logins seen in fewer than 10 channels)</p>
+      <div class="chart" id="c-return"></div>
+      <div class="src">Check V4; about 30 % of one-message newcomers are commands, links or moderated (V3)</div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>German newcomers lack a next stream, not loyalty</h2>
+      <p class="note">Share of newcomers in %. Category newcomers, first seen 2026-09-28 to 2026-10-17 (German 5,041 in 360 rooms; all languages 698,013)</p>
+      <div class="legend"><span><i style="background:var(--series-1)"></i>German</span><span><i style="background:var(--series-2)"></i>All languages</span></div>
+      <div class="chart" id="c-opp"></div>
+      <div class="src">Package P06</div>
+    </div>
+    <div class="card">
+      <h2>What does not move reach</h2>
+      <p class="note">Null or near-null inside the same streamer</p>
+      <ul class="nulls">
+        <li>Tags, tag count, the German tag</li>
+        <li>Title words (only titles under 30 characters cost about 2 %)</li>
+        <li>Changing the title mid-stream (+0.1 %)</li>
+        <li>Start hour and weekday</li>
+        <li>Number of German streams live</li>
+        <li>Go-live notification</li>
+        <li>Shared chat</li>
+        <li>Outgoing raids for own growth</li>
+        <li>Typed reply to a newcomer (return, follows)</li>
+        <li>Typing in chat to fill silence</li>
+        <li>Patch days, holidays</li>
+        <li>Schedule regularity, pauses of 7 to 30 days</li>
+        <li>Directory rank boundaries, snowball</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Levers, ranked</h2>
+    <p class="note">Confidence reflects the orchestrator checks, not the package rating</p>
+    <table>
+      <thead><tr><th>#</th><th>Lever</th><th>Evidence</th><th>Confidence</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td>Stream more days per week, ideally consecutive, so a newcomer finds a next stream within 1 to 3 days</td><td>German opportunity 46 % vs 85 %; returns cluster 2 to 3 days after the first visit</td><td><span class="pill">medium</span></td></tr>
+        <tr><td class="num">2</td><td>Longer sessions (4 h+) instead of several short ones</td><td>1.14x own average viewers; hour 5 holds 1.17 to 1.24x hour 2 at 5 to 19 viewers; new people arrive per minute live</td><td><span class="pill">medium, self-selection</span></td></tr>
+        <tr><td class="num">3</td><td>Get raided: raid ties with channels of similar or larger size</td><td>+0.185 viewers per raider after 1 h at 1 to 4 viewers; follows 6.7 vs 2.2 per 100 viewer-hours in the 10 minutes after a raid</td><td><span class="pill">medium</span></td></tr>
+        <tr><td class="num">4</td><td>End while the room is still full; do not cut streams short for it</td><td>+0.067 of the median at the next start (CI +0.040 to +0.101), placebo null</td><td><span class="pill">medium</span></td></tr>
+        <tr><td class="num">5</td><td>Draw newcomers into a back-and-forth; the second and third message matter</td><td>2+ messages +14 pp 30-day return; 5+ messages 31 % vs 15.5 % silent</td><td><span class="pill">medium association</span></td></tr>
+        <tr><td class="num">6</td><td>Talk to chat by voice and keep it moving; no chat-speed target</td><td>Active 5-minute slot +1.7 pp chance of a new chatter next; typed broadcaster message alone not significant</td><td><span class="pill">medium</span></td></tr>
+        <tr><td class="num">7</td><td>Expect follows late and at high points</td><td>Median follow at minute 130; chatters follow about 9x as often per session as silent viewers</td><td><span class="pill">low to medium</span></td></tr>
+        <tr><td class="num">8</td><td>Titles of 30+ characters, otherwise free</td><td>Under 30 characters -1.7 % against sessions within 14 days</td><td><span class="pill">medium, small</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+<div class="tip" id="tip"></div>
+</div>
+<script>
+(function () {
+  const root = document.documentElement;
+  const bg = getComputedStyle(root).backgroundColor.match(/[\d.]+/g);
+  if (bg && bg.length >= 3 && (bg.length < 4 || +bg[3] > 0)) {
+    const lum = (0.2126 * bg[0] + 0.7152 * bg[1] + 0.0722 * bg[2]) / 255;
+    if (!root.dataset.theme) root.dataset.theme = lum < 0.5 ? "dark" : "light";
+  }
+})();
+const tip = document.getElementById("tip");
+function showTip(e, html) { tip.innerHTML = html; tip.style.display = "block"; moveTip(e); }
+function moveTip(e) {
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + w > window.innerWidth - 8) x = e.clientX - w - 14;
+  if (y + h > window.innerHeight - 8) y = e.clientY - h - 14;
+  tip.style.left = Math.max(4, x) + "px"; tip.style.top = Math.max(4, y) + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent) {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function roundedTop(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+function roundedRight(x, y, w, h, r) {
+  r = Math.min(r, h / 2, w);
+  return `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h - r}Q${x + w},${y + h} ${x + w - r},${y + h}H${x}Z`;
+}
+function bind(hit, html) {
+  hit.addEventListener("mousemove", e => showTip(e, html));
+  hit.addEventListener("mouseleave", hideTip);
+}
+function grouped(id, cats, series, opt) {
+  const box = document.getElementById(id);
+  box.textContent = "";
+  const W = box.clientWidth, H = 230, m = { t: 18, r: 4, b: 40, l: 30 };
+  const svg = el("svg", { width: W, height: H, role: "img", "aria-label": opt.aria });
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const y = v => m.t + ih - v / opt.max * ih;
+  opt.ticks.forEach(t => {
+    el("line", { x1: m.l, x2: W - m.r, y1: y(t), y2: y(t), class: t === 0 ? "base" : "gl" }, svg);
+    el("text", { x: m.l - 6, y: y(t) + 4, "text-anchor": "end", class: "tick" }, svg).textContent = t;
+  });
+  const gw = iw / cats.length, bw = Math.max(8, Math.min(36, (gw - 24) / series.length));
+  cats.forEach((c, i) => {
+    const gx = m.l + i * gw + (gw - bw * series.length - 2 * (series.length - 1)) / 2;
+    series.forEach((s, j) => {
+      const v = s.values[i], x = gx + j * (bw + 2), top = y(v), h = y(0) - top;
+      const g = el("g", { class: "mark" }, svg);
+      el("path", { d: roundedTop(x, top, bw, h, 4), fill: `var(${s.color})`, class: "bar" }, g);
+      el("text", { x: x + bw / 2, y: top - 5, "text-anchor": "middle", class: "val" }, g).textContent = v.toFixed(1);
+      bind(el("rect", { x: x - 1, y: m.t, width: bw + 2, height: ih, class: "hit" }, g), `<b>${c.replace("\n", " ")}</b><br>${s.name}: ${v.toFixed(1)}${opt.tipUnit}`);
+    });
+    c.split("\n").forEach((ln, k) => {
+      el("text", { x: m.l + i * gw + gw / 2, y: H - m.b + 16 + k * 14, "text-anchor": "middle" }, svg).textContent = ln;
+    });
+  });
+  box.appendChild(svg);
+}
+function hbars(id, rows, opt) {
+  const box = document.getElementById(id);
+  box.textContent = "";
+  const W = box.clientWidth, rowH = 36, m = { t: 6, r: 52, b: 6, l: 96 };
+  const H = m.t + m.b + rows.length * rowH;
+  const svg = el("svg", { width: W, height: H, role: "img", "aria-label": opt.aria });
+  const iw = W - m.l - m.r, x = v => m.l + v / opt.max * iw;
+  el("line", { x1: m.l, x2: m.l, y1: m.t, y2: H - m.b, class: "base" }, svg);
+  rows.forEach((r, i) => {
+    const yy = m.t + i * rowH + 7, bh = rowH - 14;
+    const g = el("g", { class: "mark" }, svg);
+    el("text", { x: m.l - 8, y: yy + bh / 2 + 4, "text-anchor": "end" }, g).textContent = r.label;
+    el("path", { d: roundedRight(m.l, yy, x(r.v) - m.l, bh, 4), fill: "var(--series-1)", class: "bar" }, g);
+    el("text", { x: x(r.v) + 6, y: yy + bh / 2 + 4, class: "val" }, g).textContent = r.v.toFixed(1) + " %";
+    bind(el("rect", { x: 0, y: yy - 4, width: W, height: bh + 8, class: "hit" }, g), `<b>${r.label}</b><br>Back within 30 days: ${r.v.toFixed(1)} %<br>Newcomers: ${r.n.toLocaleString("en-US")}`);
+  });
+  box.appendChild(svg);
+}
+function draw() {
+  grouped("c-arrivals", ["0-10 min", "10-30 min", "30-60 min", "60-120 min"], [
+    { name: "Returning to the channel", color: "--series-1", values: [14.0, 3.3, 2.1, 1.6] },
+    { name: "New to the channel", color: "--series-2", values: [1.5, 2.1, 2.3, 1.9] }
+  ], { max: 15, ticks: [0, 5, 10, 15], tipUnit: " per 100 stream minutes", aria: "Arrivals per 100 stream minutes by minute since start, returning versus new viewers" });
+  hbars("c-return", [
+    { label: "Silent", v: 15.5, n: 9272 },
+    { label: "1 message", v: 9.1, n: 2868 },
+    { label: "2-4 messages", v: 17.4, n: 2140 },
+    { label: "5+ messages", v: 31.3, n: 2574 }
+  ], { max: 35, aria: "30-day return share by messages in the first session" });
+  grouped("c-opp", ["Next live day with\nchat within 7 days", "Back within\n7 days", "Back within 7 days,\ngiven a next live day"], [
+    { name: "German", color: "--series-1", values: [46.1, 15.6, 33.8] },
+    { name: "All languages", color: "--series-2", values: [85.0, 28.9, 34.0] }
+  ], { max: 100, ticks: [0, 25, 50, 75, 100], tipUnit: " %", aria: "German versus all-language newcomers: opportunity, return, and return given opportunity" });
+}
+draw();
+let rt;
+new ResizeObserver(() => { clearTimeout(rt); rt = setTimeout(draw, 60); }).observe(document.querySelector(".viz-root"));
+</script>
+</body>
+</html>

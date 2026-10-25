@@ -1,4 +1,4 @@
-# TODO: Twitch reach analysis (state 2026-10-25 20:15 CET)
+# TODO: Twitch reach analysis (state 2026-10-25 20:20 CET)
 
 User goal: deep analysis of all Twitch data on how German Deadlock streams win new viewers, turn
 lurkers into chatters and newcomers into followers, subs and regulars; also when Twitch shows a
@@ -12,17 +12,17 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
 
 | Package | Topic | State |
 |---|---|---|
-| P01 | titles | resumed 19:57, running |
+| P01 | titles | done, FINDINGS-P01.md (tips 1, 2, 4, 5 downgraded by V9) |
 | P02 | tags | done, FINDINGS-P02.md |
 | P03 | timing, competition | done, FINDINGS-P03.md |
 | P04 | length, frequency, growth | done, FINDINGS-P04.md |
-| P05 | lurkers vs chatters | resumed 19:57, running |
-| P06 | first-time chatter loyalty | resumed 19:57, running |
-| P07 | chat content | resumed 19:57, running |
+| P05 | lurkers vs chatters | done, FINDINGS-P05.md (tips 1 to 3 annotated by V10) |
+| P06 | first-time chatter loyalty | done, FINDINGS-P06.md |
+| P07 | chat content | resumed 19:57, running (agent ad74e288c3ab2f477) |
 | P08 | follows and subs | done, FINDINGS-P08.md (tip 1 withdrawn by V7) |
 | P09 | raids, shared chat | done, FINDINGS-P09.md |
 | P10 | global category benchmark | done, FINDINGS-P10.md |
-| P11 | stream opening, games | resumed 19:57, running |
+| P11 | stream opening, games | done, FINDINGS-P11.md (tip 8 annotated by V8) |
 | P12 | exposure triggers | done, FINDINGS-P12.md |
 
 ## Resources for a fresh agent per open package
@@ -50,6 +50,10 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
   follow alert prompts the thank-you); tips must not claim either.
 - More German streams live costs no new viewers within streamer (V5). Early-stream jumps are
   returning regulars, not discovery (V6).
+- Ending near the peak lifts the next start by about +0.07 of the streamer median, placebo null
+  (V8). Title word effects mostly vanish against a +-14 day local baseline; only titles under 30
+  characters keep a small cost (V9). A broadcaster chat message does not raise new chatters in the
+  next 5 minutes within the session; an active chat does, +1.7 pp (V10).
 
 ## Next steps
 

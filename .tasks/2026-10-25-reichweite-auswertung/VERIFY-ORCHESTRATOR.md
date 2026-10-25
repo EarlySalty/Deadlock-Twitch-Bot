@@ -87,3 +87,44 @@ P08 reported a follow within 60 minutes for 9.3 % of first messages with a broad
 | V7a: first message ever in the channel, same exclusions | 70 | 5.7 % vs 5.8 % | -2.3 pp (-4.4 to +0.2) |
 
 52 of the 57 quick follows in the reply arm happen in the same 3 minutes as the broadcaster message: the follow alert prompts the thank-you, not the other way round. Once those are removed, a broadcaster message after a first chat line shows no follow lift inside the same channel. Greeting newcomers stays sensible for retention reasons (V2 shows conversation depth matters), but the synthesis must not promise more follows from a quick reply.
+
+## V8. Ending near the peak and the next start: smaller, but it holds
+
+P11 reported +0.120 (in units of the streamer's median viewers) on the next start when a session ends above its own median end-to-peak ratio. Recheck (`queries-VERIFY.sql` V8, `verify-v8-end-next.py`): sessions of at least 1 h since 2026-01-09, next session within 48 h and first sampled by minute 5, three earlier sessions known, streamer fixed effects, values capped at 5x the median, bootstrap over streamers.
+
+| Model | Pairs | Streamers | Effect on next start (95 % CI) |
+|---|---|---|---|
+| Raw | 3,228 | 80 | +0.064 (+0.033 to +0.105) |
+| + current average, current start, mean of last 3 sessions | 3,228 | 80 | +0.059 (+0.031 to +0.095) |
+| + duration and current peak | 3,228 | 80 | +0.067 (+0.040 to +0.101) |
+| Placebo: same flag vs the PREVIOUS session's start | 3,143 | 73 | +0.005 (-0.026 to +0.035) |
+| Channels with median 5+ viewers, full model | 442 | 12 | +0.086 (+0.021 to +0.181) |
+
+The effect is about half of P11's figure but survives level, duration and peak controls, and the placebo against the earlier session is null, so it is not a channel-level trend. A stream that still holds most of its peak audience at the end is followed by a start about 6 to 9 % of the usual audience higher. This supports ending while the room is still full instead of streaming into an emptying room; it does not show that cutting a stream short helps, because longer streams also collect more viewers (P03, P04).
+
+## V9. Title effects from P01 shrink to near zero against nearby sessions
+
+P01 compared all of a streamer's sessions with and without a title feature. A streamer who adds "!discord" or brackets during a growth phase gets credited with that growth. Recheck (`queries-VERIFY.sql` V9, `verify-v9-titles.py`): German Deadlock sessions of at least 30 min since 2026-01-09 (10,917 sessions). Each session with the feature is compared with the same streamer's sessions without it inside plus or minus 14 days (at least 2 such sessions), log2 average viewers, median across streamers, bootstrap CI and sign test.
+
+| Feature | All sessions (reproduces P01) | Matched within 14 days |
+|---|---|---|
+| Bang command (`!discord`, `!socials` and so on) | +12.8 % (48 streamers, p 0.013) | +3.1 % (27, CI -2.7 to +9.4, p 0.44) |
+| Word "discord" | +22.5 % (22, p 0.052) | +5.7 % (14, CI +3.1 to +24.7, p 0.057) |
+| Bracket tag | +9.2 % (37, p 0.32) | +0.5 % (29, p 0.71) |
+| Title under 30 characters | -3.3 % (183, p 0.018) | -1.7 % (137, CI -4.4 to -0.1, p 0.026) |
+| Word "chill" | -13.0 % (35, p 0.090) | -0.8 % (29, p 0.46) |
+
+The large title effects are mostly time trends inside the channel. What stays is small: very short titles cost about 2 %, and "discord" may help a little (14 streamers, borderline). No title word is a reach lever worth chasing.
+
+## V10. Broadcaster chat messages do not pull in new chatters within a stream
+
+P05 (and P10) found far more chatters per viewer in sessions where the broadcaster writes in chat (+0.418 per average viewer, 110 streamers). At session level this cannot separate cause from reaction: a busy chat makes the streamer type. Recheck on 5-minute slots (`queries-VERIFY.sql` V10, `verify-v10-slots.py`): sessions since 2026-07-01 with at least 5 viewer messages, logins in 30+ channels removed (144,967 slots). Outcome: at least one new chatter (first message in the session) in the next slot. Mantel-Haenszel within session, stratified by viewer messages in the current and previous slot and by whether a new chatter already appeared; bootstrap over streamers.
+
+| Check | Streamers | Exposed slots: next-slot new chatter | Unexposed | Within-session difference (95 % CI) |
+|---|---|---|---|---|
+| A: broadcaster wrote in the slot | 128 | 16.1 % (1,241) | 11.5 % (7,199) | +1.8 pp (-2.1 to +5.0) |
+| B: same, only slots where viewers were silent | 54 | 9.9 % (364) | 7.9 % (4,959) | -0.1 pp (-4.6 to +4.3) |
+| C: reverse, new chatter in the slot -> broadcaster writes next | 426 | 3.6 % (7,132) | 3.1 % (11,053) | +0.5 pp (-0.2 to +1.3) |
+| D: viewers chatting in the slot (vs silent) | 594 | 13.9 % (32,366) | 7.2 % (89,616) | +1.7 pp (+0.9 to +2.5) |
+
+Typing in chat, also to break a silence, shows no measurable pull on new chatters inside the same stream. A chat that is already moving does carry a small lift (D, about +1.7 pp per slot), consistent with P05's finding that lurkers start writing in livelier rooms. Spoken interaction, which is how most streamers talk to chat, is invisible here, so the honest reading is: the session-level gap is engagement style, not the act of typing.

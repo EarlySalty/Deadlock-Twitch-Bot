@@ -304,3 +304,123 @@ select reply3, count(*) as n,
        count(*) filter (where fol_at <= first_ts + interval '3 minutes') as fol_0_3m,
        count(*) filter (where fol_at <= first_ts + interval '60 minutes') as fol60
 from clean group by 1 order by 1;
+
+-- V8 end-to-peak ratio and the next start, session pairs within 48 h (streamer fixed effects in verify-v8-end-next.py)
+with s as (
+  select id, streamer_login, started_at, ended_at, duration_seconds,
+         start_viewers, peak_viewers, end_viewers, avg_viewers
+  from twitch_stream_sessions
+  where started_at >= '2026-01-09' and ended_at is not null
+    and duration_seconds >= 3600 and peak_viewers > 0 and avg_viewers is not null
+),
+med as (
+  select streamer_login, percentile_cont(0.5) within group (order by avg_viewers) as m, count(*) as n
+  from s group by 1
+),
+f as (
+  select s.*, fs.first_min
+  from s
+  left join lateral (
+    select v.minutes_from_start as first_min
+    from twitch_session_viewers v
+    where v.session_id = s.id
+    order by v.ts_utc
+    limit 1
+  ) fs on true
+),
+w as (
+  select f.*,
+    lead(start_viewers) over p as next_start,
+    lead(first_min) over p as next_first_min,
+    lead(started_at) over p as next_started_at,
+    lag(start_viewers) over p as prev_start,
+    lag(first_min) over p as prev_first_min,
+    avg(avg_viewers) over (partition by streamer_login order by started_at rows between 3 preceding and 1 preceding) as lvl3,
+    count(*) over (partition by streamer_login order by started_at rows between 3 preceding and 1 preceding) as lvl3_n
+  from f
+  window p as (partition by streamer_login order by started_at)
+)
+select md5(w.streamer_login) as st, med.m as med_avg,
+       round((w.end_viewers::numeric / w.peak_viewers), 4) as endpeak,
+       round((w.start_viewers / med.m)::numeric, 4) as cur_start_n,
+       round((w.avg_viewers / med.m)::numeric, 4) as cur_avg_n,
+       round((w.peak_viewers / med.m)::numeric, 4) as cur_peak_n,
+       round((w.lvl3 / med.m)::numeric, 4) as lvl3_n,
+       round((w.next_start / med.m)::numeric, 4) as next_start_n,
+       round((w.prev_start / med.m)::numeric, 4) as prev_start_n,
+       w.first_min, w.next_first_min, w.prev_first_min,
+       round(w.duration_seconds / 3600.0, 2) as dur_h,
+       round(extract(epoch from (w.next_started_at - w.ended_at)) / 3600.0, 2) as gap_h
+from w join med using (streamer_login)
+where med.m > 0 and med.n >= 6 and w.lvl3_n = 3
+  and w.next_start is not null
+  and w.next_started_at - w.ended_at <= interval '48 hours';
+
+-- V9 title features, per-session export (local +-14 day matching in verify-v9-titles.py)
+select md5(streamer_login) as st,
+       extract(epoch from started_at)::bigint as t,
+       avg_viewers,
+       (stream_title ~ '(^|\s)![a-zA-Z]{2,}') as bang,
+       (stream_title ilike '%discord%') as discord,
+       (stream_title ~ '\[[^\]]{1,20}\]') as bracket,
+       (length(stream_title) < 30) as short,
+       (stream_title ilike '%chill%') as chill
+from twitch_stream_sessions
+where started_at >= '2026-01-09' and ended_at is not null
+  and language = 'de' and stream_title is not null and stream_title <> ''
+  and (game_name = 'Deadlock' or had_deadlock_in_session)
+  and duration_seconds >= 1800 and avg_viewers is not null;
+
+-- V10 5-minute chat slots per session since 2026-07-01 (tests in verify-v10-slots.py)
+with s as (
+  select id, streamer_login, started_at, ended_at
+  from twitch_stream_sessions
+  where started_at >= '2026-07-01' and ended_at is not null
+    and duration_seconds between 1800 and 43200
+),
+bots as (
+  select chatter_login
+  from twitch_chat_messages
+  where message_ts >= '2026-07-01'
+  group by 1
+  having count(distinct streamer_login) >= 30
+),
+m as (
+  select c.session_id, c.chatter_login, c.message_ts, c.is_command,
+         (c.chatter_login = s.streamer_login) as is_bc,
+         floor(extract(epoch from c.message_ts - s.started_at) / 300)::int as slot
+  from twitch_chat_messages c
+  join s on s.id = c.session_id
+  where c.message_ts >= s.started_at and c.message_ts <= s.ended_at
+    and c.chatter_login is not null
+    and not exists (select 1 from bots b where b.chatter_login = c.chatter_login)
+),
+firsts as (
+  select session_id, chatter_login, min(slot) as slot
+  from m where not is_bc
+  group by 1, 2
+),
+agg as (
+  select session_id, slot,
+         count(*) filter (where not is_bc) as vmsg,
+         count(*) filter (where is_bc and not coalesce(is_command, false)) as bcmsg
+  from m group by 1, 2
+),
+newc as (
+  select session_id, slot, count(*) as newc from firsts group by 1, 2
+),
+active as (
+  select session_id from agg group by 1 having sum(vmsg) >= 5
+),
+grid as (
+  select s.id as session_id, s.streamer_login, g.slot
+  from s
+  join active a on a.session_id = s.id
+  cross join lateral generate_series(0, floor(extract(epoch from s.ended_at - s.started_at) / 300)::int - 1) as g(slot)
+)
+select md5(g.streamer_login) as st, g.session_id, g.slot,
+       coalesce(a.vmsg, 0) as vmsg, coalesce(a.bcmsg, 0) as bcmsg, coalesce(n.newc, 0) as newc
+from grid g
+left join agg a on a.session_id = g.session_id and a.slot = g.slot
+left join newc n on n.session_id = g.session_id and n.slot = g.slot
+order by g.session_id, g.slot;
