@@ -82,6 +82,7 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
       <div className="social-ai-actions"><button type="button" className="studio-primary" disabled={!confirmed || !canStart || blocked} onClick={() => action.mutate('confirm')}>{t("Änderung bestätigen")}</button><button type="button" className="studio-button" disabled={blocked} onClick={() => action.mutate('cancel')}>{t("Änderung verwerfen")}</button></div>
       <p>{t("Bis zur Bestätigung wird keine neue Analyse oder Videofassung erstellt. Die kurze Schnittplanung ist bereits in den Auftragskosten enthalten.")}</p>
     </div>}
+    <RevisionOutcome job={job} />
     {job.status === 'rejected' && <p role="status">{t("Der Änderungsvorschlag wurde verworfen. Die vorherige Fassung ist weiterhin zur Sichtung verfügbar.")}</p>}
     {version && <>
       <div className="social-ai-version-actions"><h4>{t('Fassung {version}{variant} beurteilen', { version: version.version_no, variant: version.variant_index > 0 ? t(', Variante {variant}', { variant: version.variant_index + 1 }) : '' })}</h4><p>{t("Bewertungen und bevorzugte Fassung sind unabhängig von der Videofreigabe.")}</p>
@@ -109,6 +110,16 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
     {!ratingFeedback && <ActionFeedback pending={action.isPending} message={message} />}
     {action.isError && <div className="social-ai-alert" role="alert"><div><p>{editorErrorExplanation(action.error, t)} {t("Lade den aktuellen Stand neu, bevor du eine weitere Aktion ausführst.")}</p><button type="button" className="studio-button" disabled={reloading} onClick={() => { void reload(); }}>{reloading ? t("Stand wird geladen…") : t("Aktuellen Stand neu laden")}</button></div></div>}
   </section>;
+}
+
+function RevisionOutcome({job}: {job: AiJobView}) {
+  const t = useT();
+  const proposal = job.revision_proposal;
+  if (job.parent_version_id === null || !proposal || ['awaiting_confirmation', 'rejected'].includes(job.status)) return null;
+  const produced = job.versions.some((item) => item.job_id === job.id);
+  const outcome = produced ? 'answered' : ['review', 'failed'].includes(job.status) ? 'unchanged' : 'running';
+  const text = { answered: t('Rückmeldung der KI zu deinem Änderungswunsch: {summary}', { summary: proposal.summary }), unchanged: t('Die KI konnte das nicht umsetzen: {summary}', { summary: proposal.summary }), running: t('Geplante Änderung: {summary}', { summary: proposal.summary }) }[outcome];
+  return <div className="social-ai-revision-outcome" data-outcome={outcome} role="status"><p>{text}</p>{proposal.impact && <p>{proposal.impact}</p>}</div>;
 }
 
 function ActionFeedback({pending,message}: {pending: boolean; message: string | { scheduledAt: string }}) {
