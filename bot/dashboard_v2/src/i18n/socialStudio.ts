@@ -185,7 +185,7 @@ export const SOCIAL_STUDIO_EN: Record<string, string> = {
   'Video prüfen': 'Review video',
   'Dieses Video benötigt deine Prüfung. Bitte prüfe die Bildqualität und ob die wichtige Spielsituation vollständig erhalten ist.': 'This video needs your review. Please check the image quality and whether the important gameplay moment is fully preserved.',
   'Aufbewahrungsfrist abgelaufen. Es wird nicht automatisch neu gerendert.': 'Retention period expired. The video will not be rendered again automatically.',
-  'Ohne Freigabe verfügbar bis {date}': 'Available without approval until {date}',
+  'Freigeben kannst du bis {date}. Danach wird die Videodatei gelöscht.': 'You can approve it until {date}. After that the video file is deleted.',
   'Datei für Freigabe, Veröffentlichung und erforderliche Wiederholungen geschützt.': 'File protected for approval, publication and required retries.',
   'Die Videodatei konnte nicht gelöscht werden. Wir versuchen es nicht automatisch erneut.': 'The video file could not be deleted. We will not retry automatically.',
   'Gemeinsamer Termin:': 'Shared publication time:',

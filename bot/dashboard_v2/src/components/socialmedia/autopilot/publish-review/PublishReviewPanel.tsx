@@ -31,6 +31,7 @@ export interface PublishReviewPanelProps {
   clipDbId?: number;
   locked?: boolean;
   testRunApi?: TestRunApi;
+  onReviseVideo?: (videoId: number) => void;
 }
 
 const names: Record<PublishPlatform, string> = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram' };
@@ -55,7 +56,7 @@ export function PublishReviewPanel(props: PublishReviewPanelProps) {
   return <OwnerPanel key={props.twitchUserId} {...props} />;
 }
 
-function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClient, onChanged, onOpenVideo, reloadKey = 0, videoId, locked = false, testRunApi = scheduleQueueApi }: PublishReviewPanelProps) {
+function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClient, onChanged, onOpenVideo, reloadKey = 0, videoId, locked = false, testRunApi = scheduleQueueApi, onReviseVideo }: PublishReviewPanelProps) {
   const { t } = useLanguage();
   const [editorVideo, setEditorVideo] = useState<number | null>(null);
   const [editorBusy, setEditorBusy] = useState(false);
@@ -148,7 +149,7 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
       {snapshot.settings.paused && <p className="publish-note" role="status">{t('Pausiert. Keine neuen geplanten Veröffentlichungen. Deine Warteschlange bleibt erhalten.')}</p>}
       {editorVideo !== null && <AiRevisionPanel key={editorVideo} owner={twitchUserId} videoId={editorVideo} onBusyChange={setEditorBusy} onClose={() => setEditorVideo(null)} onRefresh={() => act(async () => {}, { key: 'Stand aktualisiert.' })} />}
       {(section === 'all' || section === 'videos') && <div className="publish-video-list">
-        {visibleVideos.length === 0 ? <p>{videoId === undefined ? t('Noch keine fertigen Videos. Sobald ein Video gerendert ist, findest du es hier.') : t('Diese Fassung wartet nicht mehr auf eine Freigabe.')}</p> : visibleVideos.map((video) => <VideoRow key={video.id} video={video} snapshot={snapshot} busy={busy || editorBusy || editorVideo === video.id} onRevise={editorVideo === null ? setEditorVideo : undefined} onOpenVideo={onOpenVideo} act={act} client={client} testRunApi={testRunApi} owner={twitchUserId} locked={locked} />)}
+        {visibleVideos.length === 0 ? <p>{videoId === undefined ? t('Noch keine fertigen Videos. Sobald ein Video gerendert ist, findest du es hier.') : t('Diese Fassung wartet nicht mehr auf eine Freigabe.')}</p> : visibleVideos.map((video) => <VideoRow key={video.id} video={video} snapshot={snapshot} busy={busy || editorBusy || editorVideo === video.id} onRevise={onReviseVideo ?? (editorVideo === null ? setEditorVideo : undefined)} onOpenVideo={onOpenVideo} act={act} client={client} testRunApi={testRunApi} owner={twitchUserId} locked={locked} />)}
       </div>}
       {(section === 'all' || section === 'notifications') && preferences && <div className="publish-preferences">
         {section === 'all' && <h3>{t('Benachrichtigungen & Aufbewahrung')}</h3>}
@@ -248,10 +249,10 @@ function VideoRow({ video, snapshot, busy, owner, client, testRunApi, act, onOpe
     if (willSchedule) await client.schedule(owner, video.id, platforms);
   }
   return <article className="publish-video" data-unsaved={selected.length > 0 || busy ? 'true' : undefined} aria-label={t('Videoversion {version}, Variante {variant}', { version: video.version_no, variant: video.variant_index + 1 })}>
-    <header><div><h3>{t('Video #{id}', { id: video.id })} <span>{t('Version {version}, Variante {variant}', { version: video.version_no, variant: video.variant_index + 1 })}</span></h3><p>{t(video.mode === 'ai' ? 'KI-bearbeitet' : 'Statisch bearbeitet')}{video.duration_ms ? ` · ${new Intl.NumberFormat(locale, { style: 'unit', unit: 'second', unitDisplay: 'long' }).format(video.duration_ms / 1000)}` : ''}{testJobId && <span className="studio-mode-badge publish-test-badge" data-mode="test"><FlaskConical className="h-3 w-3" aria-hidden />{t('Testlauf')}</span>}</p></div>{onOpenVideo && !expired && <button type="button" disabled={busy} onClick={() => onOpenVideo(video.id)}>{t('Video prüfen')}</button>}</header>
-    {!onOpenVideo && !expired && client.videoUrl && <video className="publish-preview" controls preload="none" playsInline aria-label={t('Vorschau Video #{id}', { id: video.id })} src={client.videoUrl(owner, video.id)} />}
+    <header><div><h3>{t('Video #{id}', { id: video.id })} <span>{t('Version {version}, Variante {variant}', { version: video.version_no, variant: video.variant_index + 1 })}</span></h3><p>{t(video.mode === 'ai' ? 'KI-bearbeitet' : 'Statisch bearbeitet')}{video.duration_ms ? ` · ${new Intl.NumberFormat(locale, { style: 'unit', unit: 'second', unitDisplay: 'long', maximumFractionDigits: 0 }).format(Math.max(1, Math.round(video.duration_ms / 1000)))}` : ''}{testJobId && <span className="studio-mode-badge publish-test-badge" data-mode="test"><FlaskConical className="h-3 w-3" aria-hidden />{t('Testlauf')}</span>}</p></div>{onOpenVideo && !expired && <button type="button" disabled={busy} onClick={() => onOpenVideo(video.id)}>{t('Video prüfen')}</button>}</header>
+    {!onOpenVideo && !expired && client.videoUrl && <video className="publish-preview" controls preload="metadata" playsInline aria-label={t('Vorschau Video #{id}', { id: video.id })} src={`${client.videoUrl(owner, video.id)}#t=0.1`} />}
     {video.needs_review && <p className="publish-note">{t('Dieses Video benötigt deine Prüfung. Bitte prüfe die Bildqualität und ob die wichtige Spielsituation vollständig erhalten ist.')}</p>}
-    {expired ? <p className="publish-note">{t('Aufbewahrungsfrist abgelaufen. Es wird nicht automatisch neu gerendert.')}</p> : <p className="publish-expiry">{video.status === 'review' ? t('Ohne Freigabe verfügbar bis {date}', { date: date(video.expires_at) }) : t('Datei für Freigabe, Veröffentlichung und erforderliche Wiederholungen geschützt.')}</p>}
+    {expired ? <p className="publish-note">{t('Aufbewahrungsfrist abgelaufen. Es wird nicht automatisch neu gerendert.')}</p> : <p className="publish-expiry">{video.status === 'review' ? t('Freigeben kannst du bis {date}. Danach wird die Videodatei gelöscht.', { date: date(video.expires_at) }) : t('Datei für Freigabe, Veröffentlichung und erforderliche Wiederholungen geschützt.')}</p>}
     {video.cleanup_error && <p role="alert" className="publish-error">{t('Die Videodatei konnte nicht gelöscht werden. Wir versuchen es nicht automatisch erneut.')}</p>}
     {video.event && <p>{t('Gemeinsamer Termin:')} <strong>{date(video.event.scheduled_at)}</strong>{` · ${t(video.event.executed_at ? 'Termin ausgeführt' : 'Noch nicht ausgeführt')}`}</p>}
     {routineOnly && actionable && <p className="publish-note" role="status">{t('Die Prüfung ist ausgeschaltet. Dieses Video wird ohne weitere Freigabe zum geplanten Termin veröffentlicht.')}</p>}
@@ -338,12 +339,14 @@ export function ClipReviewDetail({ owner, source, mode, title, onClose, onChange
             {detailTabs.map((item) => <button key={item.mode} type="button" role="tab" className="studio-tab" aria-selected={tab === item.mode} disabled={busy} onClick={() => switchTab(item.mode)}>{t(item.label)}</button>)}
           </nav>
         </div>
-        <div ref={area} className="clip-review-area">
-          {tab === 'enrichment' && (version ? <MetadataPanel key={version.id} channel={owner} videoId={version.id} disabled={busy} onEditingChange={setEditing} /> : <EnrichmentPanel clipDbId={clipDbId} onSavingChange={setBusy} />)}
-          {tab === 'ai' && (version?.mode === 'ai' ? <AiRevisionPanel key={version.id} owner={owner} videoId={version.id} onBusyChange={setBusy} onClose={() => setTab('enrichment')} onRefresh={async () => { refresh(); return true; }} /> : <AiEditorPanel twitchUserId={owner} streamer="" clipDbId={clipDbId} clipOnly />)}
-          {tab === 'layout' && <ClipLayout clipDbId={clipDbId} onBusyChange={setBusy} onSaved={refresh} />}
+        <div className="clip-review-columns" data-media={version ? 'true' : undefined}>
+          {version && <div className="clip-review-media"><PublishReviewPanel key={version.id} twitchUserId={owner} section="videos" videoId={version.id} locked={editing} reloadKey={reloadKey} onChanged={onChanged} onReviseVideo={() => switchTab('ai')} /></div>}
+          <div ref={area} className="clip-review-area">
+            {tab === 'enrichment' && (version ? <MetadataPanel key={version.id} channel={owner} videoId={version.id} disabled={busy} onEditingChange={setEditing} /> : <EnrichmentPanel clipDbId={clipDbId} onSavingChange={setBusy} />)}
+            {tab === 'ai' && (version?.mode === 'ai' ? <AiRevisionPanel key={version.id} owner={owner} videoId={version.id} onBusyChange={setBusy} onClose={() => setTab('enrichment')} onRefresh={async () => { refresh(); return true; }} /> : <AiEditorPanel twitchUserId={owner} streamer="" clipDbId={clipDbId} clipOnly />)}
+            {tab === 'layout' && <ClipLayout clipDbId={clipDbId} onBusyChange={setBusy} onSaved={refresh} />}
+          </div>
         </div>
-        {version && <PublishReviewPanel key={version.id} twitchUserId={owner} section="videos" videoId={version.id} locked={editing} reloadKey={reloadKey} onChanged={onChanged} />}
       </>}
     </div>
   </WorkspaceDialog>;

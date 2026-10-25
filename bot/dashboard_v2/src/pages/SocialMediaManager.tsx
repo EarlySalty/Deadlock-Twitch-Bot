@@ -19,6 +19,7 @@ import { resolveSocialMediaChannel } from '@/utils/socialMediaChannel';
 import { socialWorkspaceDepartureAllowed } from '@/components/socialmedia/studioNavigation';
 import { PREVIEW_SOCIAL_ROUTE } from '@/preview/routes';
 import { AdminSocialMediaAccessRequests, SocialMediaAccessRequestCard } from '@/components/socialmedia/SocialMediaAccessRequests';
+import { SocialMediaBetaNotice } from '@/components/socialmedia/BetaNotice';
 
 const SocialMediaPage = import.meta.env.MODE === 'preview'
   ? lazy(() => import('@/preview/SocialWorkspaces'))
@@ -178,6 +179,8 @@ export function SocialMediaManager() {
             {accessMutation.isError && <p role="alert" className="text-sm text-ui-danger-soft">{t('Die Freigabe konnte nicht geändert werden. Bitte prüfe die Kanalauswahl.')}</p>}
         </div>}
       </header>
+
+      {(isAdminView || access?.allowed) && <SocialMediaBetaNotice />}
 
       {authStatus?.isAdmin && <AdminSocialMediaAccessRequests />}
 
