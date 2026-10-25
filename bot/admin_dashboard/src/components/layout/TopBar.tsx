@@ -25,6 +25,7 @@ const BREADCRUMB_LABELS: Record<string, string> = {
   content: 'Content & Comms',
   announcements: 'Ankündigungen',
   'social-ai': 'KI-Videos',
+  'social-media-recordings': 'Nutzungsaufnahmen',
   usage: 'Verbrauch & Kosten',
   limits: 'Verarbeitungsgrenzen',
   roadmap: 'Roadmap',

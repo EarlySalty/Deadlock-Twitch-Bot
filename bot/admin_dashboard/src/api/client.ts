@@ -1563,3 +1563,37 @@ export async function buildBrainPlan(body: BrainRequest): Promise<BrainReport> {
     body: JSON.stringify(body),
   });
 }
+
+export interface SocialMediaRecordingSession {
+  id: string;
+  twitch_user_id: string;
+  twitch_login: string;
+  started_at: string;
+  last_chunk_at: string;
+  duration_seconds: number;
+  total_bytes: number;
+  chunk_count: number;
+  viewport_width: number | null;
+  viewport_height: number | null;
+  user_agent: string;
+}
+
+const RECORDINGS_PATH = '/social-media/recordings';
+
+export async function fetchSocialMediaRecordings(): Promise<SocialMediaRecordingSession[]> {
+  const data = await admin<{ items?: SocialMediaRecordingSession[] }>(RECORDINGS_PATH);
+  return coerceArray<SocialMediaRecordingSession>(data?.items);
+}
+
+export async function fetchSocialMediaRecordingEvents(sessionId: string): Promise<unknown[]> {
+  const chunks = await admin<unknown[][]>(`${RECORDINGS_PATH}/${encodeURIComponent(sessionId)}/events`);
+  return coerceArray<unknown[]>(chunks).flat();
+}
+
+export async function deleteSocialMediaRecording(sessionId: string): Promise<{ ok: boolean }> {
+  const csrfToken = await resolveJsonCsrfToken({});
+  return admin<{ ok: boolean }>(`${RECORDINGS_PATH}/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+    headers: { 'X-CSRF-Token': csrfToken },
+  });
+}

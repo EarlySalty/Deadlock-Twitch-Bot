@@ -20,6 +20,7 @@ import { socialWorkspaceDepartureAllowed } from '@/components/socialmedia/studio
 import { PREVIEW_SOCIAL_ROUTE } from '@/preview/routes';
 import { AdminSocialMediaAccessRequests, SocialMediaAccessRequestCard } from '@/components/socialmedia/SocialMediaAccessRequests';
 import { SocialMediaBetaNotice } from '@/components/socialmedia/BetaNotice';
+import { SocialMediaRecording } from '@/components/socialmedia/recording/SocialMediaRecording';
 
 const SocialMediaPage = import.meta.env.MODE === 'preview'
   ? lazy(() => import('@/preview/SocialWorkspaces'))
@@ -213,6 +214,7 @@ export function SocialMediaManager() {
         {!loadingStreamers && streamers.length === 0 && authStatus?.isAdmin && (
           <div className="mt-4 text-xs text-text-secondary">{t('Keine Streamer gefunden.')}</div>
         )}
+        <SocialMediaRecording active={!isAdminView && !isDemoMode && Boolean(access?.allowed)} />
     </div>
   );
 }
