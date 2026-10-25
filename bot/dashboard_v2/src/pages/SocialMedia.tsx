@@ -43,7 +43,9 @@ export interface SocialMediaProps {
   };
 }
 
-const PLATTFORMEN: SocialPlatform[] = ['youtube', 'tiktok', 'instagram'];
+type VerbindungsPlatz = SocialPlatform | 'youtube_vod';
+const VERBINDUNGEN: VerbindungsPlatz[] = ['youtube', 'youtube_vod', 'tiktok', 'instagram'];
+const iconPlattform = (platz: VerbindungsPlatz): SocialPlatform => (platz === 'youtube_vod' ? 'youtube' : platz);
 
 const RELOAD_QUERY_ROOTS = new Set(['social-media', 'social-ai', 'social-ai-publishing-context', 'vod-archive']);
 
@@ -701,7 +703,8 @@ function PlatformConnectionsCard({
       <p className="text-xs leading-5 text-text-secondary">{t('Gespeicherter Kontostand, keine Live-Prüfung beim Anbieter.')}</p>
 
       <div className="space-y-2">
-        {PLATTFORMEN.map((platform) => {
+        {VERBINDUNGEN.map((platform) => {
+          const nurVod = platform === 'youtube_vod';
           const status = byName.get(platform);
           const connected = status?.connected ?? false;
           const uploadAvailable = status?.capabilities?.upload ?? false;
@@ -749,7 +752,7 @@ function PlatformConnectionsCard({
             zeile = t('Verbunden');
             ton = 'success';
           }
-          const autoPostingBlocker: AutoPostingBlocker = standUnbekannt ? 'unknown' : !uploadAvailable ? 'no_upload' : connected && !abgelaufen ? null : 'disconnected';
+          const autoPostingBlocker: AutoPostingBlocker = nurVod ? null : standUnbekannt ? 'unknown' : !uploadAvailable ? 'no_upload' : connected && !abgelaufen ? null : 'disconnected';
           const autoPostingAktiv = targetPlatforms?.includes(platform) ?? false;
           const autoPostingHinweis = autoPostingHint(autoPostingBlocker, autoPostingAktiv);
           const hinweise = [
@@ -758,23 +761,26 @@ function PlatformConnectionsCard({
             t(authorizationFact(status, isLoading, Boolean(ladeFehler)).label),
             !standUnbekannt && connected && !abgelaufen && !ablauf && status?.automatically_renewed ? t('Verlängert sich automatisch.') : null,
             !standUnbekannt && platform === 'tiktok' ? t('TikTok-Statistiken sind in dieser Beta nicht verfügbar.') : null,
+            nurVod ? t(connected ? 'VODs landen nur auf diesem Kanal, Clips weiter auf deinem YouTube-Konto.' : 'Optional: Ohne eigenen VOD-Kanal landen VODs auf deinem YouTube-Konto.') : null,
           ].filter((hinweis): hinweis is string => Boolean(hinweis));
 
           return (
-            <PlatformCheck key={platform} platform={platform}>
+            <PlatformCheck key={platform} platform={iconPlattform(platform)}>
               <div className="studio-connection-name">
                 <span className="text-sm font-medium text-ui-text">{PLATFORM_LABELS[platform] ?? platform}</span>
                 <StatusChip tone={ton}>{zeile}</StatusChip>
                 {hinweise.length > 0 && <HintChip hint={hinweise.join(' · ')} />}
               </div>
               <div className="studio-connection-actions">
-                <AutoPostingSwitch
-                  active={autoPostingAktiv}
-                  blocker={autoPostingBlocker}
-                  describedBy={autoPostingHinweis ? `studio-blocker-${platform}` : undefined}
-                  disabled={gesperrt || targetPlatforms === null || targetSaving}
-                  onChange={(active) => onToggleTarget(platform, active)}
-                />
+                {!nurVod && (
+                  <AutoPostingSwitch
+                    active={autoPostingAktiv}
+                    blocker={autoPostingBlocker}
+                    describedBy={autoPostingHinweis ? `studio-blocker-${platform}` : undefined}
+                    disabled={gesperrt || targetPlatforms === null || targetSaving}
+                    onChange={(active) => onToggleTarget(iconPlattform(platform), active)}
+                  />
+                )}
               {standUnbekannt ? null : connected && !status?.uses_global_fallback ? (
                 <>
                   {abgelaufen && uploadAvailable && (

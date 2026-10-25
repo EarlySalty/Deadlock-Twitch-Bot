@@ -152,13 +152,15 @@ impl OAuthManager {
         };
         let state = tb_crypto::random_hex_token(24);
         let pkce_verifier = match platform {
-            "tiktok" | "youtube" => Some(tb_crypto::random_hex_token(48)),
+            "tiktok" | "youtube" | "youtube_vod" => Some(tb_crypto::random_hex_token(48)),
             _ => None,
         };
 
         let auth_url = match platform {
             "tiktok" => tiktok_auth_url(&state, redirect_uri, pkce_verifier.as_deref().unwrap())?,
-            "youtube" => youtube_auth_url(&state, redirect_uri, pkce_verifier.as_deref().unwrap())?,
+            "youtube" | "youtube_vod" => {
+                youtube_auth_url(&state, redirect_uri, pkce_verifier.as_deref().unwrap())?
+            }
             "instagram" => instagram_auth_url(&state, redirect_uri)?,
             other => return Err(OAuthError::UnknownPlatform(other.to_string())),
         };
@@ -198,7 +200,7 @@ impl OAuthManager {
                 self.tiktok_exchange_code(code, &redirect_uri, verifier.as_deref().unwrap_or(""))
                     .await?
             }
-            "youtube" => {
+            "youtube" | "youtube_vod" => {
                 self.youtube_exchange_code(code, &redirect_uri, verifier.as_deref().unwrap_or(""))
                     .await?
             }
@@ -232,7 +234,7 @@ impl OAuthManager {
         let state_lookup_key = tb_crypto::token_lookup_key(state);
         // Plattform-Filter optional über $3 (NULL = kein Filter).
         let (platform, streamer_login, twitch_user_id, redirect_uri, pkce_verifier) = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>, Option<String>)>(
-            "UPDATE oauth_state_tokens SET consumed_at = $1 WHERE state_token = $2 AND expires_at > $1 AND consumed_at IS NULL AND ($3::text IS NULL OR platform = $3) RETURNING platform, streamer_login, twitch_user_id, redirect_uri, pkce_verifier",
+            "UPDATE oauth_state_tokens SET consumed_at = $1 WHERE state_token = $2 AND expires_at > $1 AND consumed_at IS NULL AND ($3::text IS NULL OR platform = $3 OR ($3 = 'youtube' AND platform = 'youtube_vod')) RETURNING platform, streamer_login, twitch_user_id, redirect_uri, pkce_verifier",
         )
         .bind(now).bind(&state_lookup_key).bind(expected_platform.as_deref())
         .fetch_optional(&self.pool).await?.ok_or(OAuthError::StateInvalid)?;
@@ -751,7 +753,7 @@ impl OAuthManager {
                 self.refresh_tiktok(refresh_token, client_id, client_secret)
                     .await
             }
-            "youtube" => {
+            "youtube" | "youtube_vod" => {
                 self.refresh_youtube(refresh_token, client_id, client_secret)
                     .await
             }
