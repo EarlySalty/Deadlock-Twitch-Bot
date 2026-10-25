@@ -502,11 +502,11 @@ fn cut_filter(plan: &ValidatedPlan, has_audio: bool) -> String {
         let start = format_time(interval.start_ms);
         let end = format_time(interval.end_ms);
         steps.push(format!(
-            "[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{index}]"
+            "[{index}:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{index}]"
         ));
         if has_audio {
             steps.push(format!(
-                "[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{index}]"
+                "[{index}:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{index}]"
             ));
         }
     }
@@ -555,16 +555,19 @@ pub async fn prepare_intervals(
         .args([
             "-filter_complex_threads",
             &limits.encoder_threads.to_string(),
-        ])
-        .args(["-threads", &limits.encoder_threads.to_string()])
-        .arg("-i")
-        .arg(&path)
-        .args([
-            "-filter_complex",
-            &cut_filter(plan, source_info.has_audio),
-            "-map",
-            "[vout]",
         ]);
+    for _ in plan.intervals() {
+        command
+            .args(["-threads", &limits.encoder_threads.to_string()])
+            .arg("-i")
+            .arg(&path);
+    }
+    command.args([
+        "-filter_complex",
+        &cut_filter(plan, source_info.has_audio),
+        "-map",
+        "[vout]",
+    ]);
     if source_info.has_audio {
         command.args(["-map", "[aout]"]);
     }
@@ -863,6 +866,50 @@ mod tests {
         assert_eq!(
             check_resources(&resources).err().map(|error| error.code),
             Some(ErrorCode::InvalidLimits)
+        );
+    }
+
+    #[test]
+    fn hook_first_plan_reads_each_interval_from_its_own_input() {
+        let plan_limits = PlanLimits {
+            max_plan_bytes: 4096,
+            max_source_duration_ms: 60_010,
+            max_source_duration_drift_ms: 100,
+            max_output_duration_ms: 70_000,
+            max_intervals: 3,
+            max_highlights: 1,
+            max_review_reasons: 1,
+            max_text_bytes: 50,
+            max_subtitle_segments: 2,
+            max_subtitle_text_bytes: 50,
+            min_kept_percent: 0,
+        };
+        let plan = EditPlan {
+            schema_version: 1,
+            source_duration_ms: 60_010,
+            kept_intervals: vec![KeptInterval {
+                start_ms: 0,
+                end_ms: 60_010,
+                reason: "Main".into(),
+            }],
+            hook: Some(KeptInterval {
+                start_ms: 56_000,
+                end_ms: 59_130,
+                reason: "Hook".into(),
+            }),
+            observed_highlights: vec![],
+            significant_uncertainty: false,
+            review_reasons: vec![],
+            layout: LayoutIntent::ExistingStable,
+        };
+        let validated = validate_plan(plan, 60_010, &plan_limits).expect("hook-first plan");
+        assert_eq!(
+            cut_filter(&validated, true),
+            "[0:v]trim=start=56.000:end=59.130,setpts=PTS-STARTPTS[v0];\
+             [0:a]atrim=start=56.000:end=59.130,asetpts=PTS-STARTPTS[a0];\
+             [1:v]trim=start=0.000:end=60.010,setpts=PTS-STARTPTS[v1];\
+             [1:a]atrim=start=0.000:end=60.010,asetpts=PTS-STARTPTS[a1];\
+             [v0][a0][v1][a1]concat=n=2:v=1:a=1[vout][aout]"
         );
     }
 
