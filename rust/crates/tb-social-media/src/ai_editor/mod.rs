@@ -16,8 +16,8 @@ mod stage_contract;
 mod validation;
 
 pub use media::{
-    extract_frames, inspect_media, prepare_intervals, render_prepared, FrameBatch, MediaInfo,
-    PreparedMedia,
+    audio_levels, contact_sheet_grid, extract_frames, inspect_media, prepare_intervals,
+    render_prepared, AudioLevels, FrameBatch, MediaInfo, PreparedMedia, MAX_CONTACT_SHEET_FPS,
 };
 pub use model::{
     EditPlan, EditorOptions, Highlight, KeptInterval, LayoutIntent, PlanLimits, ResourceLimits,

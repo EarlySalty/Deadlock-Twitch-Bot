@@ -282,53 +282,130 @@ pub async fn inspect_media(
     probe_path(&path, limits).await
 }
 
+pub const MAX_CONTACT_SHEET_FPS: u32 = 16;
+const CONTACT_SHEET_WINDOW_MS: u64 = 1000;
+const MAX_CONTACT_SHEET_WIDTH: u32 = 1568;
+const CONTACT_SHEET_QUALITIES: [u8; 5] = [4, 7, 11, 16, 23];
+
+pub fn contact_sheet_grid(fps: u32) -> (u32, u32) {
+    let fps = fps.clamp(1, MAX_CONTACT_SHEET_FPS);
+    let columns = (1..=fps).find(|side| side * side >= fps).unwrap_or(fps);
+    (columns, fps.div_ceil(columns))
+}
+
+fn contact_sheet_starts(duration_ms: u64, max_sheets: usize) -> Vec<u64> {
+    let seconds = duration_ms.div_ceil(CONTACT_SHEET_WINDOW_MS).max(1);
+    let count = seconds.min(max_sheets as u64);
+    let last_start = duration_ms.saturating_sub(CONTACT_SHEET_WINDOW_MS);
+    (0..count)
+        .map(|index| {
+            if count == seconds {
+                index * CONTACT_SHEET_WINDOW_MS
+            } else {
+                let center =
+                    ((index as u128 * 2 + 1) * duration_ms as u128 / (count as u128 * 2)) as u64;
+                center
+                    .saturating_sub(CONTACT_SHEET_WINDOW_MS / 2)
+                    .min(last_start)
+            }
+        })
+        .collect()
+}
+
+fn contact_sheet_tile_width(fps: u32, frame_width: u32) -> u32 {
+    let (columns, _) = contact_sheet_grid(fps);
+    (frame_width.min(MAX_CONTACT_SHEET_WIDTH / columns) & !1).max(2)
+}
+
+fn contact_sheet_filter(fps: u32, frame_width: u32, start_ms: u64) -> String {
+    let (columns, rows) = contact_sheet_grid(fps);
+    let tile_width = contact_sheet_tile_width(fps, frame_width);
+    let font_size = (tile_width / 36).max(12);
+    format!(
+        "fps={fps},scale={tile_width}:-2,drawtext=text='%{{pts\\:hms\\:{}}}':x=4:y=(h-th)/2:fontsize={font_size}:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=3,tile={columns}x{rows}",
+        format_time(start_ms)
+    )
+}
+
+async fn write_contact_sheet(
+    path: &Path,
+    output: &Path,
+    start_ms: u64,
+    fps: u32,
+    limits: &ResourceLimits,
+    duration_ms: u64,
+) -> Result<(), EditorError> {
+    let window_ms = CONTACT_SHEET_WINDOW_MS.min(duration_ms.saturating_sub(start_ms).max(1));
+    let mut failure = EditorError::new(ErrorCode::ProcessFailed);
+    for quality in CONTACT_SHEET_QUALITIES {
+        let mut command = bounded_ffmpeg_command("ffmpeg", limits.max_frame_bytes);
+        command
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+            .args(["-filter_threads", &limits.encoder_threads.to_string()])
+            .args(["-threads", &limits.encoder_threads.to_string()])
+            .arg("-ss")
+            .arg(format_time(start_ms))
+            .arg("-t")
+            .arg(format_time(window_ms))
+            .arg("-i")
+            .arg(path)
+            .args(["-an", "-vf"])
+            .arg(contact_sheet_filter(fps, limits.frame_width, start_ms))
+            .args(["-frames:v", "1", "-q:v"])
+            .arg(quality.to_string())
+            .arg("-threads:v")
+            .arg(limits.encoder_threads.to_string())
+            .args(["-y"])
+            .arg(output);
+        match run_status(command, limits.process_deadline_ms).await {
+            Ok(()) => match check_output(output, limits.max_frame_bytes) {
+                Ok(()) => return Ok(()),
+                Err(error) => failure = error,
+            },
+            Err(error) if error.code == ErrorCode::ProcessDeadline => return Err(error),
+            Err(error) => failure = error,
+        }
+    }
+    Err(failure)
+}
+
+async fn has_jpeg_magic(output: &Path) -> Result<bool, EditorError> {
+    let mut image = tokio::fs::File::open(output)
+        .await
+        .map_err(|_| EditorError::new(ErrorCode::InvalidMedia))?;
+    let mut magic = [0; 2];
+    image
+        .read_exact(&mut magic)
+        .await
+        .map_err(|_| EditorError::new(ErrorCode::InvalidMedia))?;
+    Ok(magic == [0xff, 0xd8])
+}
+
 pub async fn extract_frames(
     source_root: &Path,
     input: &Path,
     workspace_root: &Path,
     limits: &ResourceLimits,
+    fps: u32,
 ) -> Result<FrameBatch, EditorError> {
     check_resources(limits)?;
+    if !(1..=MAX_CONTACT_SHEET_FPS).contains(&fps) {
+        return Err(EditorError::new(ErrorCode::InvalidLimits));
+    }
     let path = source_path(source_root, input, limits.max_source_bytes)?;
     let info = probe_path(&path, limits).await?;
     let owned = make_temp_directory(workspace_root)?;
-    let mut timestamps = Vec::with_capacity(limits.max_frames);
+    let starts = contact_sheet_starts(info.duration_ms, limits.max_frames);
     tokio::time::timeout(
         Duration::from_millis(limits.total_frames_deadline_ms),
         async {
-            for index in 0..limits.max_frames {
-                let timestamp = ((index as u128 * 2 + 1) * info.duration_ms as u128
-                    / (limits.max_frames as u128 * 2)) as u64;
+            for (index, start_ms) in starts.iter().enumerate() {
                 let output = owned.0.join(format!("frame-{index:04}.jpg"));
-                let mut command = bounded_ffmpeg_command("ffmpeg", limits.max_frame_bytes);
-                command
-                    .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
-                    .args(["-filter_threads", &limits.encoder_threads.to_string()])
-                    .args(["-threads", &limits.encoder_threads.to_string()])
-                    .args(["-ss"])
-                    .arg(format_time(timestamp))
-                    .arg("-i")
-                    .arg(&path)
-                    .args(["-frames:v", "1", "-vf"])
-                    .arg(format!("scale={}:-2", limits.frame_width))
-                    .args(["-q:v", "4", "-threads:v"])
-                    .arg(limits.encoder_threads.to_string())
-                    .args(["-y"])
-                    .arg(&output);
-                run_status(command, limits.process_deadline_ms).await?;
-                check_output(&output, limits.max_frame_bytes)?;
-                let mut image = tokio::fs::File::open(&output)
-                    .await
-                    .map_err(|_| EditorError::new(ErrorCode::InvalidMedia))?;
-                let mut magic = [0; 2];
-                image
-                    .read_exact(&mut magic)
-                    .await
-                    .map_err(|_| EditorError::new(ErrorCode::InvalidMedia))?;
-                if magic != [0xff, 0xd8] {
+                write_contact_sheet(&path, &output, *start_ms, fps, limits, info.duration_ms)
+                    .await?;
+                if !has_jpeg_magic(&output).await? {
                     return Err(EditorError::new(ErrorCode::InvalidMedia));
                 }
-                timestamps.push(timestamp);
             }
             Ok(())
         },
@@ -337,7 +414,81 @@ pub async fn extract_frames(
     .map_err(|_| EditorError::new(ErrorCode::ProcessDeadline))??;
     Ok(FrameBatch {
         owned,
-        timestamps_ms: timestamps,
+        timestamps_ms: starts,
+    })
+}
+
+pub const AUDIO_LEVEL_STEP_MS: u64 = 250;
+const AUDIO_LEVEL_SAMPLE_RATE: u64 = 8000;
+const AUDIO_LEVEL_FLOOR_DBFS: f64 = -90.0;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AudioLevels {
+    pub step_ms: u64,
+    pub rms_dbfs: Vec<i16>,
+}
+
+fn rms_dbfs(samples: &[u8]) -> Vec<i16> {
+    let step_bytes = (AUDIO_LEVEL_SAMPLE_RATE * AUDIO_LEVEL_STEP_MS / 1000 * 2) as usize;
+    samples
+        .chunks(step_bytes)
+        .map(|chunk| {
+            let values = chunk
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| f64::from(i16::from_le_bytes(*pair)) / 32768.0);
+            let (sum, count) = values.fold((0.0, 0usize), |(sum, count), value| {
+                (sum + value * value, count + 1)
+            });
+            let rms = if count == 0 {
+                0.0
+            } else {
+                (sum / count as f64).sqrt()
+            };
+            let level = if rms > 0.0 {
+                (20.0 * rms.log10()).max(AUDIO_LEVEL_FLOOR_DBFS)
+            } else {
+                AUDIO_LEVEL_FLOOR_DBFS
+            };
+            level.round() as i16
+        })
+        .collect()
+}
+
+pub async fn audio_levels(
+    source_root: &Path,
+    input: &Path,
+    workspace_root: &Path,
+    limits: &ResourceLimits,
+    filter: &str,
+) -> Result<AudioLevels, EditorError> {
+    check_resources(limits)?;
+    let path = source_path(source_root, input, limits.max_source_bytes)?;
+    let owned = make_temp_directory(workspace_root)?;
+    let output = owned.0.join("levels.pcm");
+    let mut command = bounded_ffmpeg_command("ffmpeg", limits.max_output_bytes);
+    command
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+        .args(["-threads", &limits.encoder_threads.to_string()])
+        .arg("-i")
+        .arg(&path)
+        .args(["-vn", "-ac", "1", "-ar"])
+        .arg(AUDIO_LEVEL_SAMPLE_RATE.to_string());
+    if !filter.trim().is_empty() {
+        command.arg("-af").arg(filter);
+    }
+    command
+        .args(["-f", "s16le", "-c:a", "pcm_s16le", "-y"])
+        .arg(&output);
+    run_status(command, limits.process_deadline_ms).await?;
+    check_output(&output, limits.max_output_bytes)?;
+    let samples = tokio::fs::read(&output)
+        .await
+        .map_err(|_| EditorError::new(ErrorCode::InvalidMedia))?;
+    Ok(AudioLevels {
+        step_ms: AUDIO_LEVEL_STEP_MS,
+        rms_dbfs: rms_dbfs(&samples),
     })
 }
 
@@ -679,6 +830,27 @@ mod tests {
     }
 
     #[test]
+    fn contact_sheets_cover_one_second_each_and_scale_with_fps() {
+        assert_eq!(contact_sheet_grid(4), (2, 2));
+        assert_eq!(contact_sheet_grid(8), (3, 3));
+        assert_eq!(contact_sheet_tile_width(4, 640), 640);
+        assert_eq!(contact_sheet_tile_width(8, 640), 522);
+        assert_eq!(contact_sheet_starts(3_500, 4), vec![0, 1_000, 2_000, 3_000]);
+        assert_eq!(
+            contact_sheet_starts(60_000, 4),
+            vec![7_000, 22_000, 37_000, 52_000]
+        );
+    }
+
+    #[test]
+    fn audio_levels_report_dbfs_per_quarter_second() {
+        let step = (AUDIO_LEVEL_SAMPLE_RATE * AUDIO_LEVEL_STEP_MS / 1000) as usize;
+        let mut samples = vec![0u8; step * 2];
+        samples.extend(std::iter::repeat_n(16_384i16.to_le_bytes(), step).flatten());
+        assert_eq!(rms_dbfs(&samples), vec![-90, -6]);
+    }
+
+    #[test]
     fn rejects_file_limits_that_disable_the_kernel_ceiling() {
         let mut resources = limits();
         resources.max_output_bytes = u64::MAX;
@@ -848,14 +1020,14 @@ mod tests {
             .expect("probe source");
         assert!(source_info.has_audio);
         assert_eq!((source_info.width, source_info.height), (160, 90));
-        let frames = extract_frames(root.path(), &source, root.path(), &resources)
+        let frames = extract_frames(root.path(), &source, root.path(), &resources, 4)
             .await
             .expect("extract across duration");
         let limited_frames = ResourceLimits {
             max_frame_bytes: 64,
             ..resources.clone()
         };
-        let frame_error = extract_frames(root.path(), &source, root.path(), &limited_frames)
+        let frame_error = extract_frames(root.path(), &source, root.path(), &limited_frames, 4)
             .await
             .expect_err("frame output must stay bounded");
         assert!(matches!(

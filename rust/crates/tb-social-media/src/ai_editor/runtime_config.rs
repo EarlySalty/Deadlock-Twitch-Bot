@@ -35,6 +35,12 @@ pub struct RuntimeConfig {
     pub revisions: RevisionLimits,
     #[serde(default)]
     pub video_observer: Option<VideoObserverConfig>,
+    #[serde(default = "default_analysis_fps")]
+    pub analysis_fps: u32,
+}
+
+fn default_analysis_fps() -> u32 {
+    4
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -88,6 +94,24 @@ pub struct SttRuntimeConfig {
     pub startup_deadline_ms: u64,
     pub shutdown_deadline_ms: u64,
     pub poll_interval_ms: u64,
+    #[serde(default = "default_stt_prompt")]
+    pub prompt: String,
+    #[serde(default = "default_voice_filter")]
+    pub voice_filter: String,
+}
+
+pub const VOICE_BAND_FILTER: &str = "highpass=f=200,lowpass=f=3500";
+
+fn default_stt_prompt() -> String {
+    "Deutsch, Deadlock, kein Problem, geparryt, parry, low, push, nice, ja".to_owned()
+}
+
+fn default_voice_filter() -> String {
+    VOICE_BAND_FILTER.to_owned()
+}
+
+fn plain_text(value: &str, max_bytes: usize) -> bool {
+    value.len() <= max_bytes && !value.chars().any(char::is_control)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -357,6 +381,9 @@ impl RuntimeConfig {
             || !(1..=50).contains(&self.list_limit)
             || !(1024..=32_768).contains(&self.max_snapshot_bytes)
             || !(128..=4096).contains(&self.max_skill_bytes)
+            || !(1..=super::MAX_CONTACT_SHEET_FPS).contains(&self.analysis_fps)
+            || !plain_text(&self.stt.prompt, 1024)
+            || !plain_text(&self.stt.voice_filter, 256)
             || resources.max_frames > configuration.provider.max_frames
             || resources.max_frame_bytes > configuration.provider.max_frame_bytes as u64
             || resources.process_deadline_ms > self.job_deadline_ms
@@ -476,6 +503,8 @@ impl SttRuntimeConfig {
             shutdown_deadline: Duration::from_millis(self.shutdown_deadline_ms),
             poll_interval: Duration::from_millis(self.poll_interval_ms),
             max_upload_bytes: self.settings.max_upload_bytes,
+            prompt: self.prompt.clone(),
+            voice_filter: self.voice_filter.clone(),
         })
     }
 }

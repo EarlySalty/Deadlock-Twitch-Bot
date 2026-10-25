@@ -647,6 +647,16 @@ async fn brain_context(ctx: &StageContext<'_>, runtime: &EditorRuntime, transcri
     json!({ "status": format!("{:?}", retrieved.status), "knowledge_release": retrieved.knowledge_release, "evidence": evidence })
 }
 
+fn frame_layout(fps: u32) -> Value {
+    let (columns, rows) = super::contact_sheet_grid(fps);
+    json!({
+        "kind": "contact_sheet",
+        "frames_per_second": fps,
+        "grid": format!("{columns}x{rows}"),
+        "rule": format!("Each image covers one second starting at its stated time and holds {fps} frames, read left to right and top to bottom. Every tile shows its exact source time burned in at the left edge as hours:minutes:seconds.milliseconds. Compare neighbouring tiles for movement, the kill feed at the top left, the damage log on the right and the centre of the screen. Seconds without an image were not sampled."),
+    })
+}
+
 async fn analyze(
     ctx: &StageContext<'_>,
     frozen: &PreparingSnapshot,
@@ -668,6 +678,7 @@ async fn analyze(
         &frozen.source.path,
         &workspace.0,
         &runtime.limits.resources,
+        runtime.limits.analysis_fps,
     )
     .await
     .map_err(|_| AiEditorError::Source)?;
@@ -710,7 +721,7 @@ async fn analyze(
     };
     let request = EditorRequest {
         system: frozen.system(&[SkillId::DeadlockUnderstanding, SkillId::HighlightAnalysis])?,
-        text: json!({ "task": task, "video_observation": observation, "source": { "duration_ms": frozen.media.duration_ms, "width": frozen.media.width, "height": frozen.media.height, "has_audio": frozen.media.has_audio, "title": frozen.source.title }, "streamer": streamer_context(&frozen.source.login), "transcript": transcript, "language": language, "segments": segments, "brain": evidence, "user_correction":feedback.as_ref().map(|request| &request.feedback) }).to_string(),
+        text: json!({ "task": task, "frames": frame_layout(runtime.limits.analysis_fps), "video_observation": observation, "source": { "duration_ms": frozen.media.duration_ms, "width": frozen.media.width, "height": frozen.media.height, "has_audio": frozen.media.has_audio, "title": frozen.source.title }, "streamer": streamer_context(&frozen.source.login), "transcript": transcript, "language": language, "segments": segments, "brain": evidence, "user_correction":feedback.as_ref().map(|request| &request.feedback) }).to_string(),
         frames,
         json_schema: analysis_schema(&runtime.limits.plan, frozen.media.duration_ms),
     };
@@ -734,6 +745,33 @@ async fn analyze(
         uncertainty: result.uncertainty,
         analysis_notes: result.analysis_notes,
     })
+}
+
+async fn planning_audio_levels(frozen: &PreparingSnapshot, runtime: &EditorRuntime) -> Value {
+    if !frozen.media.has_audio {
+        return Value::Null;
+    }
+    let workspace = match Workspace::create(runtime) {
+        Ok(workspace) => workspace,
+        Err(_) => return Value::Null,
+    };
+    match super::audio_levels(
+        &runtime.limits.source_root,
+        &frozen.source.path,
+        &workspace.0,
+        &runtime.limits.resources,
+        &runtime.limits.stt.voice_filter,
+    )
+    .await
+    {
+        Ok(levels) => {
+            json!({ "step_ms": levels.step_ms, "rms_dbfs": levels.rms_dbfs, "note": "Voice band loudness of the source in dBFS, one value per step starting at 0 ms. Game sound is part of the mix, so compare values with the rest of the clip: clear peaks well above the typical level mark shouting or loud reactions, long low stretches mark quiet time. Use it with the segments to see when the streamer speaks or shouts and never cut through a loud reaction." })
+        }
+        Err(error) => {
+            tracing::warn!(code = ?error.code, "Audio levels unavailable for planning");
+            Value::Null
+        }
+    }
 }
 
 async fn plan(
@@ -789,6 +827,7 @@ async fn plan(
     } else {
         super::stage_contract::drop_variants(&mut schema);
     }
+    let audio_levels = planning_audio_levels(frozen, runtime).await;
     let personal = match super::learning::personal_hints(ctx.pool, ctx.owner).await {
         Ok(hints) => hints,
         Err(error) => {
@@ -799,7 +838,7 @@ async fn plan(
     let request = EditorRequest {
         system: frozen.system(&skill_ids)?,
         text: planning_text(
-            json!({ "task": "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. analysis.uncertainty is already shown to the user next to review_reasons: put only concerns about this edit that the analysis does not already state into review_reasons, and never restate an analysis uncertainty in other words. Publication copy follows the requested language and template, not subtitle language. overlay_title controls the large title burned in during the first seconds: clip_title shows clip_title, custom shows your own short text, none shows no title. Use custom or none when clip_title is misleading, shouty or not supported by the analysis.", "source_duration_ms": frozen.media.duration_ms, "clip_title": frozen.source.title, "streamer": streamer_context(&frozen.source.login), "analysis": analysis, "language": language, "segments": segments, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base,&frozen.source.title)) }),
+            json!({ "task": "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. analysis.uncertainty is already shown to the user next to review_reasons: put only concerns about this edit that the analysis does not already state into review_reasons, and never restate an analysis uncertainty in other words. Publication copy follows the requested language and template, not subtitle language. overlay_title controls the large title burned in during the first seconds: clip_title shows clip_title, custom shows your own short text, none shows no title. Use custom or none when clip_title is misleading, shouty or not supported by the analysis.", "source_duration_ms": frozen.media.duration_ms, "clip_title": frozen.source.title, "streamer": streamer_context(&frozen.source.login), "analysis": analysis, "language": language, "segments": segments, "audio_levels": audio_levels, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base,&frozen.source.title)) }),
             &personal,
         ),
         frames: vec![],
