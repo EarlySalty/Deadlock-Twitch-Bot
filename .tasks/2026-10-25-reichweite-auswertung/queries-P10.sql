@@ -61,11 +61,35 @@ where v.id in (select distinct s.version_id from category_snapshot_samples s whe
 select user_id, created_at, broadcaster_type, followers_total, broadcaster_language, first_seen, followers_checked_at, followers_http_status
 from category_channels;
 
-select room_user_id, date_trunc('hour', sent_at) as hour_at,
-  count(*) filter (where shared_chat_copy is not true) as msgs,
-  count(*) filter (where shared_chat_copy is not true and chatter_user_id = room_user_id) as self_msgs,
-  count(distinct chatter_user_id) filter (where shared_chat_copy is not true and chatter_user_id <> room_user_id) as distinct_chatters,
-  count(*) filter (where shared_chat_copy is true) as shared_copies
-from category_chat_metrics
-where sent_at >= '2026-10-09' and sent_at < '2026-10-26'
+select case when rooms >= 100 then '1:100+' when rooms >= 30 then '2:30-99' when rooms >= 10 then '3:10-29' when rooms >= 5 then '4:05-09' else '5:01-04' end as bucket,
+  count(*) as chatters, sum(msgs) as msgs
+from (
+  select chatter_user_id, count(distinct room_user_id) as rooms, count(*) as msgs
+  from category_chat_metrics
+  where sent_at >= '2026-10-09' and sent_at < '2026-10-26'
+    and shared_chat_copy is not true and chatter_user_id <> room_user_id
+  group by 1
+) t
+group by 1 order by 1;
+
+with bots as (
+  select chatter_user_id
+  from category_chat_metrics
+  where sent_at >= '2026-10-09' and sent_at < '2026-10-26'
+    and chatter_user_id is not null
+    and shared_chat_copy is not true
+    and chatter_user_id <> room_user_id
+  group by 1
+  having count(distinct room_user_id) >= 30
+)
+select m.room_user_id,
+  date_trunc('hour', m.sent_at) as hour_at,
+  count(*) filter (where m.shared_chat_copy is not true) as msgs,
+  count(*) filter (where m.shared_chat_copy is not true and m.chatter_user_id = m.room_user_id) as self_msgs,
+  count(distinct m.chatter_user_id) filter (where m.shared_chat_copy is not true and m.chatter_user_id <> m.room_user_id and m.chatter_user_id not in (select chatter_user_id from bots)) as distinct_chatters,
+  count(distinct m.chatter_user_id) filter (where m.shared_chat_copy is not true and m.chatter_user_id <> m.room_user_id and m.chatter_user_id in (select chatter_user_id from bots)) as bot_chatters,
+  count(*) filter (where m.shared_chat_copy is not true and m.chatter_user_id <> m.room_user_id and m.chatter_user_id in (select chatter_user_id from bots)) as bot_msgs,
+  count(*) filter (where m.shared_chat_copy is true) as shared_copies
+from category_chat_metrics m
+where m.sent_at >= :'wfrom' and m.sent_at < :'wto'
 group by 1,2;

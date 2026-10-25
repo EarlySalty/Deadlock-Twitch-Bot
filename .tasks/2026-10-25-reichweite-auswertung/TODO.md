@@ -1,4 +1,4 @@
-# TODO: Twitch reach analysis (state 2026-10-25 19:50 CET)
+# TODO: Twitch reach analysis (state 2026-10-25 20:15 CET)
 
 User goal: deep analysis of all Twitch data on how German Deadlock streams win new viewers, turn
 lurkers into chatters and newcomers into followers, subs and regulars; also when Twitch shows a
@@ -12,17 +12,17 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
 
 | Package | Topic | State |
 |---|---|---|
-| P01 | titles | stopped by Haiku limit, early stage |
-| P02 | tags | stopped right before writing findings |
-| P03 | timing, competition | stopped right before writing findings |
+| P01 | titles | resumed 19:57, running |
+| P02 | tags | done, FINDINGS-P02.md |
+| P03 | timing, competition | done, FINDINGS-P03.md |
 | P04 | length, frequency, growth | done, FINDINGS-P04.md |
-| P05 | lurkers vs chatters | stopped mid-analysis (conversion window) |
-| P06 | first-time chatter loyalty | stopped right before writing findings |
-| P07 | chat content | stopped right before writing findings |
-| P08 | follows and subs | stopped mid-analysis |
+| P05 | lurkers vs chatters | resumed 19:57, running |
+| P06 | first-time chatter loyalty | resumed 19:57, running |
+| P07 | chat content | resumed 19:57, running |
+| P08 | follows and subs | done, FINDINGS-P08.md (tip 1 withdrawn by V7) |
 | P09 | raids, shared chat | done, FINDINGS-P09.md |
-| P10 | global category benchmark | stopped right before writing findings |
-| P11 | stream opening, games | stopped right before writing findings |
+| P10 | global category benchmark | done, FINDINGS-P10.md |
+| P11 | stream opening, games | resumed 19:57, running |
 | P12 | exposure triggers | done, FINDINGS-P12.md |
 
 ## Resources for a fresh agent per open package
@@ -46,14 +46,18 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
 - Lurker baselines must exclude logins seen in 30+ channels (bots, scene surfers): they return
   at 52 %; ordinary lurkers at 15.5 % (VERIFY-ORCHESTRATOR.md V4). About 30 % of one-message
   newcomers are commands, spam or moderated (V3).
-- Broadcaster chat replies show no within-channel effect on return (V2); tips must not claim it.
+- Broadcaster chat replies show no within-channel effect on return (V2) or on follows (V7: the
+  follow alert prompts the thank-you); tips must not claim either.
+- More German streams live costs no new viewers within streamer (V5). Early-stream jumps are
+  returning regulars, not discovery (V6).
 
 ## Next steps
 
-1. After the Haiku limit reset (22:10 CET): spawn one fresh Haiku agent per open package with the
-   resources above. Each finishes its package from the scratch state, reruns only what it needs,
-   and returns the COMPLETE findings text in its final reply. The orchestrator saves it as
-   FINDINGS-<PKG>.md.
+1. After the Haiku limit reset (22:10 CET): resume the SAME stopped agents with SendMessage (user
+   decision, no fresh spawns). Agent ids: P01 a1879883538bcfd58, P02 a438a5af86250a3df,
+   P03 a35fa98244ee4bf79, P05 ac1cbfb7c1e2cce2d, P06 a8ac14dfe0e975bc3, P07 ad74e288c3ab2f477,
+   P08 a81f3b96dc981e787, P10 a51316e1f22f287e2, P11 a6292928aab92488a. Each returns the COMPLETE
+   findings text; the orchestrator saves it as FINDINGS-<PKG>.md. Wakeup `reichweite` at 22:15.
 2. Orchestrator verifies the strongest claims with own queries, then writes `SYNTHESE.md`
    (prioritized tips with evidence, null results, caveats) and optionally an HTML visual.
 3. Commit only this folder, run `gate_hook.py --review` (skill rolle-merge-schleuse), merge to

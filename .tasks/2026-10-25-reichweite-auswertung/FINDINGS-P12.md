@@ -108,6 +108,8 @@ Pooled new presence per viewer is higher in rising and falling windows than in f
 
 With 6 to 20 German streams live, each viewer brings about 15 to 20 percent fewer new people per 15 minutes than with 1 to 5 live, at the same month and hour.
 
+Orchestrator check (VERIFY-ORCHESTRATOR.md V5): the pooled ratio mixes channel size with competition. Within streamer x viewer bin x hour band x weekend, 6-10 live minus 1-5 live is +0.027 new presences per 15 min (95 % CI -0.003 to +0.062, 329 streamers); 11+ minus 1-5 is +0.003 (CI -0.046 to +0.065, 196 streamers). No measurable competition cost.
+
 ### Q6. Day after a big organic jump
 
 4,146 streamer-days with a next-day start and a 14-day baseline; 23 big-inflow days. Next-day start vs 14-day median (mean log ratio): 0.149 after big-inflow days vs 0.027 after other days (about 13 percent higher). Within streamer: 14 streamers, median difference 0.168, share positive 0.571.
@@ -115,7 +117,8 @@ With 6 to 20 German streams live, each viewer brings about 15 to 20 percent fewe
 ## Actionable tips
 
 1. **The first 20 to 100 minutes of a stream are when unexplained viewer jumps happen.** Median uptime at a conservative organic jump is 22 min vs 90 min base (0-2 viewers), 83 vs 125 (3-4), 100 vs 146 (5-9); 2,683 events. Likely mechanism: go-live notifications and fresh "just went live" placement. Confidence medium.
-2. **Jumps come when fewer German Deadlock streams are live and outside the 18-23 h peak.** Median 6 German streams live at events vs 9 base; evening share 0.40 vs 0.53 at 0-2 viewers. Fits Q5: new presence per viewer is about 0.80x with 6-10 German streams live vs 1-5 (118 month x hour strata). Confidence medium.
+   Orchestrator note: V6 in `VERIFY-ORCHESTRATOR.md` shows 90 % of arrivals in the first 10 minutes are returning viewers; new people arrive at a flat 1.5 to 2.3 per 100 session-minutes. The early jump is regulars answering the notification, not new discovery.
+2. **Jumps come at quieter times, but busy slots do not cost new viewers.** Median 6 German streams live at events vs 9 base; evening share 0.40 vs 0.53 at 0-2 viewers. Both partly reflect that jumps cluster early in a stream. Within streamer, more German streams live shows no drop in new presences (V5). Confidence low for any timing lever.
 3. **Being in the German top 3 goes along with jumps, but no specific rank boundary matters.** Top-3 share 0.46 vs 0.25 at events (0-2 viewers); within-streamer top 6 vs 7+ median 0.0 (627 streamers). The raw rank gap is mostly viewer size. Confidence medium (null for boundaries).
 4. **There is no snowball and no momentum effect to chase.** Growth share below 0.5 at every level; within-streamer rising vs flat median 0.0 (658 streamers). Confidence medium.
 5. **A big organic day may lift the next day's start.** +0.149 vs +0.027 log ratio, but only 23 days and 14 streamers. Confidence low.

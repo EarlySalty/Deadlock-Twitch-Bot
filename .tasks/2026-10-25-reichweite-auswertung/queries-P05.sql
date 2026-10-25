@@ -424,3 +424,285 @@ group by 1, 2
 order by n desc
 limit 12;
 
+
+-- ===== Bot exclusion (added after the first run)
+-- Bots = logins seen as chatters or viewers in 30+ channels (chatter_login with count(distinct streamer_login) >= 30, sessions since 2026-07-01).
+-- The bot list is computed inside each query below (q_bot_ids.sql, q_bots_session.sql, q_cpvd_bots.sql, q_late_sampling.sql, and the bots CTEs of the *_nobot queries).
+-- Python post-filters on exports (stdlib, scratch only): conv_nobot.csv = conv.csv rows whose chatter_login is in the bot list (q_bots_session.sql);
+-- cpvd_seq_nobot.csv = cpvd_seq.csv rows whose twitch_user_id is in the bot ID list (q_bot_ids.sql);
+-- sessions_nobot.csv = sessions_jul_oct.csv with chatters_ex reduced by bot chatters with messages (bots_session.csv), msgs and cmd_msgs reduced by bot_msgs / bot_cmd_msgs (q_bot_msgs_session.sql), question_msgs reduced by bot_question_msgs (q_bot_q_session.sql).
+-- Per-day category query: run with -v d=YYYY-MM-DD for 2026-10-09 to 2026-10-25 and concatenate.
+
+-- ===== q_bot_ids.sql
+-- Q-K3: twitch user IDs of logins seen in 30+ channels since 2026-07-01 (bot list, scratch only)
+with s as (select id, duration_seconds, avg_viewers, started_at from twitch_stream_sessions where started_at >= '2026-07-01' and started_at < '2026-10-26' and duration_seconds >= 600 and avg_viewers > 0),
+b as (select c.chatter_login, max(c.chatter_id) chatter_id, count(distinct c.streamer_login) n_ch from twitch_session_chatters c join s on s.id = c.session_id where c.chatter_login <> (select streamer_login from twitch_stream_sessions t where t.id = c.session_id) group by 1)
+select distinct chatter_id from b where n_ch >= 30 and chatter_id is not null;
+
+-- ===== q_bots_session.sql
+-- Q-K1: logins seen in 30+ channels since 2026-07-01 (bot list) and per-session lurker/chatter rows split by bot flag
+with s as (
+  select id, streamer_login, started_at, duration_seconds, avg_viewers
+  from twitch_stream_sessions
+  where started_at >= '2026-07-01' and started_at < '2026-10-26' and duration_seconds >= 600 and avg_viewers > 0
+),
+sc as (
+  select c.session_id, c.chatter_login, c.streamer_login, c.messages, c.seen_via_chatters_api, c.last_seen_at
+  from twitch_session_chatters c
+  join s on s.id = c.session_id
+  where c.chatter_login <> s.streamer_login
+),
+bots as (
+  select chatter_login from sc group by 1 having count(distinct streamer_login) >= 30
+)
+select sc.session_id,
+       count(*) filter (where sc.messages = 0 and sc.chatter_login not in (select chatter_login from bots)) lurk_nb,
+       count(*) filter (where sc.messages > 0 and sc.chatter_login not in (select chatter_login from bots)) chat_nb,
+       count(*) filter (where sc.chatter_login in (select chatter_login from bots)) bot_rows,
+       count(*) filter (where sc.messages = 0 and sc.chatter_login in (select chatter_login from bots)) bot_lurk_rows,
+       (select count(*) from bots) bot_logins
+from sc
+group by 1;
+
+-- ===== q_cpvd_bots.sql
+-- Q-C3: community points channel lurker shares without bot logins (seen in 30+ channels since 2026-07-01), 2026-08-13 to 2026-10-25
+with bots as (
+  select chatter_id from (
+    select c.chatter_login, max(c.chatter_id) chatter_id, count(distinct c.streamer_login) n_ch
+    from twitch_session_chatters c
+    join twitch_stream_sessions s on s.id = c.session_id
+    where s.started_at >= '2026-07-01' and s.started_at < '2026-10-26' and s.duration_seconds >= 600 and s.avg_viewers > 0
+      and c.chatter_login <> s.streamer_login
+    group by 1
+  ) b where n_ch >= 30 and chatter_id is not null
+),
+v as (
+  select channel_twitch_user_id ch, day, twitch_user_id, chat_messages,
+         (twitch_user_id in (select chatter_id from bots)) is_bot
+  from twitch_community_points_viewer_daily
+  where day >= '2026-08-13' and day <= '2026-10-25' and watch_minutes > 0
+),
+sz as (
+  select twitch_user_id ch, percentile_cont(0.5) within group (order by avg_viewers) med_avg
+  from twitch_stream_sessions
+  where started_at >= '2026-08-13' and started_at < '2026-10-26' and twitch_user_id is not null
+  group by 1
+)
+select v.ch, count(*) filter (where not v.is_bot) viewer_days_nb,
+       count(*) filter (where not v.is_bot and v.chat_messages = 0) lurker_days_nb,
+       count(*) filter (where v.is_bot) bot_viewer_days,
+       (select count(*) from bots) bot_ids,
+       round(sz.med_avg::numeric, 1) med_avg_viewers
+from v left join sz on sz.ch = v.ch
+group by v.ch, sz.med_avg;
+
+-- ===== q_late_sampling.sql
+-- Q-K2: lurker rows (non-bot, sessions since 2026-07-01) by when they were last seen relative to session start
+with s as (
+  select id, started_at, duration_seconds
+  from twitch_stream_sessions
+  where started_at >= '2026-07-01' and started_at < '2026-10-26' and duration_seconds >= 600 and avg_viewers > 0
+),
+sc as (
+  select c.session_id, c.chatter_login, c.chatter_id, c.streamer_login, c.messages, c.last_seen_at, s.started_at, s.duration_seconds
+  from twitch_session_chatters c
+  join s on s.id = c.session_id
+  where c.chatter_login <> c.streamer_login and c.messages = 0
+),
+bots as (
+  select chatter_login from (
+    select c.chatter_login, count(distinct c.streamer_login) n_ch
+    from twitch_session_chatters c join s on s.id = c.session_id
+    where c.chatter_login <> c.streamer_login
+    group by 1
+  ) b where n_ch >= 30
+)
+select count(*) lurker_rows_nb,
+       count(*) filter (where sc.last_seen_at is null) no_last_seen,
+       round(avg((extract(epoch from (sc.last_seen_at - sc.started_at)) / 60.0 > 15)::int)::numeric, 3) share_last_seen_after_min15,
+       round(avg(least(extract(epoch from (sc.last_seen_at - sc.started_at)) / sc.duration_seconds, 1))::numeric, 3) mean_last_seen_fraction,
+       round(percentile_cont(0.5) within group (order by extract(epoch from (sc.last_seen_at - sc.started_at)) / sc.duration_seconds)::numeric, 3) median_last_seen_fraction
+from sc
+where sc.chatter_login not in (select chatter_login from bots);
+
+-- ===== q_bot_msgs_session.sql
+with s as (
+  select id from twitch_stream_sessions
+  where started_at >= '2026-07-01' and started_at < '2026-10-26' and duration_seconds >= 600 and avg_viewers > 0
+),
+bots as (
+  select c.chatter_login from twitch_session_chatters c join s on s.id = c.session_id
+  where c.chatter_login <> (select t.streamer_login from twitch_stream_sessions t where t.id = c.session_id)
+  group by 1 having count(distinct c.streamer_login) >= 30
+)
+select m.session_id,
+       count(*) filter (where m.chatter_login in (select chatter_login from bots) and m.streamer_login <> m.chatter_login) bot_msgs,
+       count(*) filter (where m.chatter_login in (select chatter_login from bots) and m.streamer_login <> m.chatter_login and m.is_command) bot_cmd_msgs
+from twitch_chat_messages m join s on s.id = m.session_id
+where m.message_ts >= '2026-07-01' and m.message_ts < '2026-10-26'
+group by 1 order by 1;
+
+-- ===== q_bot_q_session.sql
+with s as (
+  select id from twitch_stream_sessions
+  where started_at >= '2026-07-01' and started_at < '2026-10-26' and duration_seconds >= 600 and avg_viewers > 0
+),
+bots as (
+  select c.chatter_login from twitch_session_chatters c join s on s.id = c.session_id
+  where c.chatter_login <> (select t.streamer_login from twitch_stream_sessions t where t.id = c.session_id)
+  group by 1 having count(distinct c.streamer_login) >= 30
+)
+select m.session_id,
+       count(*) filter (where l.label = 'Question' and m.chatter_login in (select chatter_login from bots) and m.streamer_login <> m.chatter_login) bot_question_msgs
+from twitch_chat_messages m
+join s on s.id = m.session_id
+left join twitch_chat_message_labels l on l.message_id = m.id
+where m.message_ts >= '2026-07-01' and m.message_ts < '2026-10-26'
+group by 1 order by 1;
+
+-- ===== q_velocity_nobot.sql
+with s as (
+  select id, streamer_login, started_at, duration_seconds, avg_viewers
+  from twitch_stream_sessions
+  where started_at >= '2026-07-01' and started_at < '2026-10-26' and duration_seconds >= 600 and avg_viewers > 0
+),
+bots as (
+  select c.chatter_login from twitch_session_chatters c join s on s.id = c.session_id
+  where c.chatter_login <> (select t.streamer_login from twitch_stream_sessions t where t.id = c.session_id)
+  group by 1 having count(distinct c.streamer_login) >= 30
+),
+slots as (
+  select s.id session_id, g.slot
+  from s, lateral generate_series(0, floor(s.duration_seconds / 300.0)::int - 1) as g(slot)
+),
+m as (
+  select m.session_id, floor(extract(epoch from (m.message_ts - s.started_at)) / 300)::int slot,
+         count(*) filter (where m.streamer_login <> m.chatter_login and b.chatter_login is null) viewer_msgs,
+         count(*) filter (where m.streamer_login = m.chatter_login) self_msgs,
+         count(*) filter (where l.label = 'Question' and b.chatter_login is null) q_msgs,
+         count(*) filter (where m.is_command and b.chatter_login is null) cmd_msgs
+  from twitch_chat_messages m
+  join s on s.id = m.session_id
+  left join bots b on b.chatter_login = m.chatter_login
+  left join twitch_chat_message_labels l on l.message_id = m.id
+  group by 1, 2
+),
+first_msg as (
+  select m.session_id, m.chatter_login, min(m.message_ts) first_ts
+  from twitch_chat_messages m
+  join s on s.id = m.session_id
+  left join bots b on b.chatter_login = m.chatter_login
+  where m.streamer_login <> m.chatter_login and b.chatter_login is null
+  group by 1, 2
+),
+f as (
+  select fm.session_id, floor(extract(epoch from (fm.first_ts - s.started_at)) / 300)::int slot, count(*) new_starts
+  from first_msg fm join s on s.id = fm.session_id
+  group by 1, 2
+)
+select s.id session_id, s.avg_viewers, sl.slot,
+       coalesce(m.viewer_msgs,0) viewer_msgs, coalesce(m.self_msgs,0) self_msgs,
+       coalesce(m.q_msgs,0) q_msgs, coalesce(m.cmd_msgs,0) cmd_msgs, coalesce(f.new_starts,0) new_starts
+from slots sl
+join s on s.id = sl.session_id
+left join m on m.session_id = sl.session_id and m.slot = sl.slot
+left join f on f.session_id = sl.session_id and f.slot = sl.slot
+order by s.id, sl.slot;
+
+-- ===== q_base_sessions_nobot.sql
+with bots as (
+  select c.chatter_login from twitch_session_chatters c
+  join twitch_stream_sessions s on s.id = c.session_id
+  where s.started_at >= '2026-07-01' and s.started_at < '2026-10-26' and s.duration_seconds >= 600 and s.avg_viewers > 0
+    and c.chatter_login <> s.streamer_login
+  group by 1 having count(distinct c.streamer_login) >= 30
+),
+s as (
+  select id session_id, started_at, duration_seconds
+  from twitch_stream_sessions
+  where started_at >= '2026-04-01' and started_at < '2026-10-26'
+    and duration_seconds >= 600 and avg_viewers > 0
+)
+select s.session_id, s.duration_seconds, x.slot, count(*) msgs
+from s
+join twitch_chat_messages m on m.session_id = s.session_id
+  and m.message_ts >= '2026-04-01' and m.message_ts < '2026-10-26'
+left join bots b on b.chatter_login = m.chatter_login
+cross join lateral (select floor(extract(epoch from (m.message_ts - s.started_at)) / 300)::int slot) x
+where b.chatter_login is null
+group by 1, 2, 3
+order by 1, 3;
+
+-- ===== q_firstwrite_window_nobot.sql
+with s as (
+  select id, streamer_login, started_at, duration_seconds, avg_viewers
+  from twitch_stream_sessions
+  where started_at >= '2026-04-01' and started_at < '2026-10-26'
+),
+bots as (
+  select c.chatter_login from twitch_session_chatters c join s on s.id = c.session_id
+  where c.chatter_login <> s.streamer_login
+  group by 1 having count(distinct c.streamer_login) >= 30
+),
+sg as (
+  select c.streamer_login, c.chatter_login, c.session_id, s.started_at, s.duration_seconds, s.avg_viewers, c.messages,
+         row_number() over (partition by c.streamer_login, c.chatter_login order by s.started_at, c.session_id) rn
+  from twitch_session_chatters c
+  join s on s.id = c.session_id
+  where c.chatter_login <> s.streamer_login
+),
+lurk_first as (
+  select sg.streamer_login, sg.chatter_login from sg
+  where sg.rn = 1 and sg.messages = 0
+    and sg.chatter_login not in (select chatter_login from bots)
+),
+fw as (
+  select sg.streamer_login, sg.chatter_login, sg.session_id, sg.started_at, sg.duration_seconds, sg.avg_viewers,
+         row_number() over (partition by sg.streamer_login, sg.chatter_login order by sg.started_at, sg.session_id) fwr
+  from sg
+  join lurk_first lf on lf.streamer_login = sg.streamer_login and lf.chatter_login = sg.chatter_login
+  where sg.messages > 0
+),
+fm as (
+  select fw.streamer_login, fw.chatter_login, fw.session_id, fw.started_at, fw.duration_seconds, fw.avg_viewers,
+         min(m.message_ts) first_ts
+  from fw
+  join twitch_chat_messages m on m.session_id = fw.session_id and m.chatter_login = fw.chatter_login
+   and m.streamer_login <> m.chatter_login
+  where fw.fwr = 1
+  group by 1, 2, 3, 4, 5, 6
+)
+select fm.session_id, fm.chatter_login, fm.first_ts, fm.duration_seconds, fm.avg_viewers, w.msgs_10m_before,
+       w.self_10m_before, w.q_10m_before
+from fm
+join lateral (
+  select count(*) filter (where b.chatter_login is null) msgs_10m_before,
+         count(*) filter (where m.streamer_login = m.chatter_login) self_10m_before,
+         count(*) filter (where l.label = 'Question' and b.chatter_login is null) q_10m_before
+  from twitch_chat_messages m
+  left join bots b on b.chatter_login = m.chatter_login
+  left join twitch_chat_message_labels l on l.message_id = m.id
+  where m.session_id = fm.session_id
+    and m.message_ts >= fm.first_ts - interval '10 minutes' and m.message_ts < fm.first_ts
+) w on true;
+
+-- ===== q_cat_exact_day_nobot.sql
+with bots as (
+  select max(c.chatter_id) chatter_id
+  from twitch_session_chatters c join twitch_stream_sessions s on s.id = c.session_id
+  where s.started_at >= '2026-07-01' and s.started_at < '2026-10-26' and s.duration_seconds >= 600 and s.avg_viewers > 0
+    and c.chatter_login <> s.streamer_login
+  group by c.chatter_login
+  having count(distinct c.streamer_login) >= 30
+),
+bot_ids as (select chatter_id from bots where chatter_id is not null)
+select date_trunc('hour', m.sent_at) hour_at, m.room_user_id,
+       count(distinct m.chatter_user_id) filter (where m.chatter_user_id <> m.room_user_id and m.chatter_user_id not in (select chatter_id from bot_ids)) distinct_viewers_nb,
+       count(distinct m.chatter_user_id) filter (where m.chatter_user_id <> m.room_user_id) distinct_viewers_all,
+       count(*) filter (where m.chatter_user_id in (select chatter_id from bot_ids)) bot_msgs,
+       count(*) filter (where m.chatter_user_id = m.room_user_id) self_msgs,
+       count(*) msgs
+from category_chat_messages m
+where m.sent_at >= :'d'::timestamptz and m.sent_at < :'d'::timestamptz + interval '1 day'
+  and not m.shared_chat_copy
+group by 1, 2;
