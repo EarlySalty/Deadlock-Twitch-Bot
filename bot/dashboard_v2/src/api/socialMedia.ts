@@ -41,6 +41,7 @@ export interface ArchivedVod {
   status_label: string;
   display_status: 'youtube_uploaded' | 'youtube_confirmed' | 'youtube_processing' | 'youtube_unavailable' | 'youtube_error' | 'drive_uploaded' | 'uploading' | 'downloading' | 'waiting' | 'partial' | 'failed' | 'unknown';
   youtube_complete: boolean;
+  youtube_platform?: 'youtube' | 'youtube_vod';
   youtube_verified_complete?: boolean;
   can_check_youtube?: boolean;
   youtube_check?: {

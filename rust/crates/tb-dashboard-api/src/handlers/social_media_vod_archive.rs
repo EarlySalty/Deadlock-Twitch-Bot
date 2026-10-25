@@ -37,11 +37,12 @@ pub async fn list_handler(
             FROM twitch_vod_archive_parts p WHERE p.vod_id = v.id), '[]'::jsonb) AS parts, \
          COALESCE(NOT a.needs_reauth AND a.access_token_enc IS NOT NULL \
             AND string_to_array(COALESCE(a.scopes, ''), ' ') && ARRAY['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube', 'https://www.googleapis.com/auth/youtube.force-ssl'], FALSE) AS youtube_connected, \
-         CASE WHEN a.refresh_token_enc IS NOT NULL THEN a.refresh_expires_at::text ELSE a.token_expires_at END AS youtube_expires_at \
+         CASE WHEN a.refresh_token_enc IS NOT NULL THEN a.refresh_expires_at::text ELSE a.token_expires_at END AS youtube_expires_at, \
+         COALESCE(a.platform, 'youtube') AS youtube_platform \
          FROM visible v \
          LEFT JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a \
-            WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1 \
-            ORDER BY a.authorized_at DESC, a.id DESC LIMIT 1) a ON TRUE \
+            WHERE a.twitch_user_id=v.twitch_user_id AND a.platform IN ('youtube_vod','youtube') AND a.enabled=1 \
+            ORDER BY (a.platform='youtube_vod') DESC, a.authorized_at DESC, a.id DESC LIMIT 1) a ON TRUE \
          LEFT JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id AND c.auth_id=a.id \
            AND c.auth_revision=md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) \
          ORDER BY v.discovered_at DESC, v.id DESC LIMIT 50 OFFSET $2) \
@@ -102,6 +103,7 @@ pub async fn list_handler(
                 let recovery = terminal_recovery(&status, &parts, evidence_check, local_path.as_deref(), progress.drive_complete);
                 let checked_status = if progress.drive_complete { None } else { youtube_check_label(check_state) };
                 json!({
+                    "youtube_platform": row.get::<String, _>("youtube_platform"),
                     "youtube_check": visible_check,
                     "can_check_youtube": row.get::<bool, _>("can_check_youtube"),
                     "youtube_verified_complete": youtube_verified_complete(evidence_check, &parts),
@@ -418,7 +420,7 @@ async fn apply_action(
         tx.rollback().await?;
         return Ok(None);
     };
-    let target: Option<(i64, String, Option<String>)> = sqlx::query_as("SELECT a.id::bigint,md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')),a.platform_user_id FROM social_media_platform_auth a WHERE a.twitch_user_id=$1 AND a.platform='youtube' AND a.enabled=1 ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1 FOR UPDATE")
+    let target: Option<(i64, String, Option<String>)> = sqlx::query_as("SELECT a.id::bigint,md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')),a.platform_user_id FROM social_media_platform_auth a WHERE a.twitch_user_id=$1 AND a.platform IN ('youtube_vod','youtube') AND a.enabled=1 ORDER BY (a.platform='youtube_vod') DESC, a.authorized_at DESC, a.id DESC LIMIT 1 FOR UPDATE")
         .bind(&owner).fetch_optional(&mut *tx).await?;
     let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(186976768, $1::int)")
         .bind(

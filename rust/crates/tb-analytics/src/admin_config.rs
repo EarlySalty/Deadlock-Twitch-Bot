@@ -11,6 +11,7 @@
 //! toggeln — die Admin-Bulk-Variante setzt sie netzweit.
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../test-support/postgres.rs"]
 mod test_postgres;
 

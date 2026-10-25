@@ -78,7 +78,7 @@ export function VodArchiveEntry({ vod, pending, onAction }: {
       </a>)}
       {vod.drive_url?.startsWith('https://drive.google.com/') && <a className="inline-flex min-h-9 items-center gap-1 text-primary underline underline-offset-4" href={vod.drive_url} target="_blank" rel="noopener noreferrer">{t('Auf Drive öffnen')}{!vod.drive_complete && <span>({t('unbestätigt')})</span>}<ExternalLink aria-hidden="true" className="h-3 w-3 shrink-0" /></a>}
     </div>
-    {(vod.needs_connection && vod.can_retry && !vod.drive_requested || check?.error === 'connection' || check?.error === 'channel_changed') && vod.twitch_user_id && <a className="studio-button mt-3" href={oauthStartUrl('youtube', vod.twitch_user_id)}>{t('YouTube neu verbinden')}</a>}
+    {(vod.needs_connection && vod.can_retry && !vod.drive_requested || check?.error === 'connection' || check?.error === 'channel_changed') && vod.twitch_user_id && <a className="studio-button mt-3" href={oauthStartUrl(vod.youtube_platform ?? 'youtube', vod.twitch_user_id)}>{t('YouTube neu verbinden')}</a>}
     {vod.drive_requested && !finished && <p className="mt-3 text-sm text-text-secondary">{t(vod.display_status === 'uploading' ? 'Drive-Sicherung läuft.' : 'Drive-Sicherung vorgemerkt.')}</p>}
     <div className="mt-3 flex flex-wrap items-center gap-3">
       {vod.can_check_youtube && (['uploaded', 'archived'].includes(vod.status) || vod.parts.some((p) => p.youtube_video_id)) && <button type="button" className="studio-button" disabled={pending || check?.pending || check?.can_request === false} onClick={() => onAction(vod, 'check')}>{t(check?.pending ? 'YouTube-Prüfung vorgemerkt' : 'Bei YouTube prüfen')}</button>}

@@ -111,6 +111,7 @@ export const SOCIAL_MEDIA_TABS: Array<{ id: SocialMediaView; label: string }> = 
 
 export const PLATFORM_LABELS: Record<string, string> = {
   youtube: 'YouTube',
+  youtube_vod: 'YouTube VOD',
   tiktok: 'TikTok',
   instagram: 'Instagram',
 };

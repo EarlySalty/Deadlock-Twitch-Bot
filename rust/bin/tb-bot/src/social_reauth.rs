@@ -26,6 +26,7 @@ fn reconnect_text(platform: &str, incident_at: chrono::DateTime<chrono::Utc>) ->
     let name = match platform {
         "tiktok" => "TikTok",
         "youtube" => "YouTube",
+        "youtube_vod" => "YouTube (VOD-Kanal)",
         "instagram" => "Instagram",
         _ => return None,
     };

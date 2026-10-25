@@ -227,7 +227,7 @@ pub(crate) async fn test_save_recovery(
 const REVISION: &str = "md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,''))";
 
 async fn ziel(pool: &PgPool, user: &str) -> Result<Option<Ziel>, sqlx::Error> {
-    let query = format!("SELECT a.id, {REVISION} AS revision, a.platform_user_id AS channel_id FROM social_media_platform_auth a WHERE a.platform='youtube' AND a.twitch_user_id=$1 AND a.enabled=1 ORDER BY a.authorized_at DESC, a.id DESC LIMIT 1");
+    let query = format!("SELECT a.id, {REVISION} AS revision, a.platform_user_id AS channel_id FROM social_media_platform_auth a WHERE a.platform IN ('youtube_vod','youtube') AND a.twitch_user_id=$1 AND a.enabled=1 ORDER BY (a.platform='youtube_vod') DESC, a.authorized_at DESC, a.id DESC LIMIT 1");
     sqlx::query_as(sqlx::AssertSqlSafe(query))
         .bind(user)
         .fetch_optional(pool)
@@ -239,7 +239,7 @@ async fn ziel_guard(
     user: &str,
     expected: &Ziel,
 ) -> Result<bool, sqlx::Error> {
-    let query = format!("SELECT a.id, {REVISION} AS revision, a.platform_user_id AS channel_id FROM social_media_platform_auth a WHERE a.platform='youtube' AND a.twitch_user_id=$1 AND a.enabled=1 ORDER BY a.authorized_at DESC, a.id DESC LIMIT 1 FOR UPDATE");
+    let query = format!("SELECT a.id, {REVISION} AS revision, a.platform_user_id AS channel_id FROM social_media_platform_auth a WHERE a.platform IN ('youtube_vod','youtube') AND a.twitch_user_id=$1 AND a.enabled=1 ORDER BY (a.platform='youtube_vod') DESC, a.authorized_at DESC, a.id DESC LIMIT 1 FOR UPDATE");
     let current: Option<Ziel> = sqlx::query_as(sqlx::AssertSqlSafe(query))
         .bind(user)
         .fetch_optional(&mut **tx)
@@ -704,7 +704,7 @@ pub(crate) async fn part_processed(
     vod_id: i64,
     part_id: i64,
 ) -> Result<bool, sqlx::Error> {
-    let row: Option<(Value, Value, i64)> = sqlx::query_as("SELECT jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'youtube_video_id',p.youtube_video_id,'updated_at',p.updated_at),jsonb_build_object('auth_id',c.auth_id,'auth_revision',c.auth_revision,'channel_id',c.channel_id,'source_twitch_id',v.twitch_id,'source_duration_sec',v.duration_sec,'upload_snapshot',c.upload_snapshot,'complete',c.complete,'error',c.last_error,'observations',c.observations),(SELECT COUNT(*) FROM twitch_vod_archive_parts WHERE vod_id=v.id) FROM twitch_vod_archive_vods v JOIN twitch_vod_archive_parts p ON p.vod_id=v.id JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1 ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1) a ON TRUE WHERE v.id=$1 AND v.twitch_user_id=$2 AND p.id=$3 AND c.auth_id=a.id AND c.auth_revision=md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AND c.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR c.channel_id=a.platform_user_id) AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(c.observations) o WHERE o->>'source_twitch_id' IS DISTINCT FROM v.twitch_id OR o->'source_duration_sec' IS DISTINCT FROM to_jsonb(v.duration_sec))")
+    let row: Option<(Value, Value, i64)> = sqlx::query_as("SELECT jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'youtube_video_id',p.youtube_video_id,'updated_at',p.updated_at),jsonb_build_object('auth_id',c.auth_id,'auth_revision',c.auth_revision,'channel_id',c.channel_id,'source_twitch_id',v.twitch_id,'source_duration_sec',v.duration_sec,'upload_snapshot',c.upload_snapshot,'complete',c.complete,'error',c.last_error,'observations',c.observations),(SELECT COUNT(*) FROM twitch_vod_archive_parts WHERE vod_id=v.id) FROM twitch_vod_archive_vods v JOIN twitch_vod_archive_parts p ON p.vod_id=v.id JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a WHERE a.twitch_user_id=v.twitch_user_id AND a.platform IN ('youtube_vod','youtube') AND a.enabled=1 ORDER BY (a.platform='youtube_vod') DESC, a.authorized_at DESC, a.id DESC LIMIT 1) a ON TRUE WHERE v.id=$1 AND v.twitch_user_id=$2 AND p.id=$3 AND c.auth_id=a.id AND c.auth_revision=md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AND c.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR c.channel_id=a.platform_user_id) AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(c.observations) o WHERE o->>'source_twitch_id' IS DISTINCT FROM v.twitch_id OR o->'source_duration_sec' IS DISTINCT FROM to_jsonb(v.duration_sec))")
         .bind(vod_id).bind(user).bind(part_id).fetch_optional(pool).await?;
     Ok(row.is_some_and(|(part, check, total)| {
         part_observed(&part, Some(&check), total as usize, "processed")
@@ -822,8 +822,9 @@ async fn run_with(
             guard.rollback().await?;
             continue;
         }
+        let platform = credentials.vod_platform_for_id(&user).await?;
         let Some(creds) = credentials
-            .get_channel_credentials_for_id("youtube", &user)
+            .get_channel_credentials_for_id(platform, &user)
             .await
         else {
             for vod in &pending {
