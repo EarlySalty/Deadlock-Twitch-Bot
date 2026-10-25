@@ -21,6 +21,7 @@ import RaidsActivityPage from '@/pages/community/RaidsActivity';
 import ResearchPage from '@/pages/community/Research';
 import AnnouncementsPage from '@/pages/content/Announcements';
 import ChangelogPage from '@/pages/content/Changelog';
+import SocialMediaRecordingsPage from '@/pages/content/SocialMediaRecordings';
 import LegalPage from '@/pages/content/Legal';
 import CasterOverlayPage from '@/pages/content/CasterOverlay';
 import RoadmapPage from '@/pages/content/Roadmap';
@@ -89,6 +90,7 @@ const router = createBrowserRouter(
         ] },
         { path: 'content/roadmap', element: <RoadmapPage /> },
         { path: 'content/changelog', element: <ChangelogPage /> },
+        { path: 'content/social-media-recordings', element: <SocialMediaRecordingsPage /> },
         { path: 'content/legal', element: <LegalPage /> },
         { path: 'config', element: <Navigate to="/content/announcements" replace /> },
         { path: 'config/raids', element: <RaidConfig /> },

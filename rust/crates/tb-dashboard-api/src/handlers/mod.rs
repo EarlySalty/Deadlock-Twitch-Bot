@@ -112,6 +112,7 @@ pub mod silent_settings;
 pub mod social_media;
 pub mod social_media_ai;
 pub mod social_media_pipeline;
+pub mod social_media_recording;
 pub mod spa;
 pub mod stream_kennzahlen;
 pub mod stream_report;

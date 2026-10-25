@@ -296,6 +296,7 @@ fn build_authed_router_with_analysis_store(
     let ai_runtime = handlers::social_media_ai::AiRuntime::packaged();
     let social_routes = Router::new()
         .merge(handlers::social_media_ai::routes(ai_runtime.clone()))
+        .merge(handlers::social_media_recording::partner_routes())
         .route("/social-media/api/stats", get(social_media::stats_handler))
         .route("/social-media/api/clips", get(social_media::clips_handler))
         .route(
@@ -1334,6 +1335,7 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
     Router::new()
         .merge(social_media_ai_admin_usage::routes())
         .merge(social_media_ai_admin_skills::routes())
+        .merge(handlers::social_media_recording::admin_routes())
         .route(
             "/twitch/api/admin/config/overview",
             get(admin_config::config_overview_handler),
@@ -2381,6 +2383,7 @@ pub fn build_router_with_analysis_writer(
     // DB-Fehlern ist der Limiter fail-open (siehe RateLimiter::allow).
     let fernet_key = DashboardAuthState::fernet_key_from_env().unwrap_or_default();
     let uplink_refresh_pool = pool.clone();
+    handlers::social_media_recording::spawn_retention(pool.clone());
     let rate_limiter = RateLimiter::new(pool.clone(), fernet_key);
     let challenge_settings = tb_config::runtime::settings().ok();
     let central_pool = challenge_settings.as_ref().and_then(|settings| {
