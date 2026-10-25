@@ -705,7 +705,7 @@ mod tests {
         seed(&pool, &c, "youtube", None, "yt-access", None).await;
         let mgr = CredentialManager::new(pool, c);
         let status = mgr.get_all_platforms_status(None).await.unwrap();
-        assert_eq!(status.len(), 3);
+        assert_eq!(status.len(), PLATFORMS.len());
         let yt = status.iter().find(|s| s.platform == "youtube").unwrap();
         assert!(yt.connected);
         let tk = status.iter().find(|s| s.platform == "tiktok").unwrap();
