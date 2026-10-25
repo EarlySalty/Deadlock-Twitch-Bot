@@ -116,15 +116,32 @@ P01 compared all of a streamer's sessions with and without a title feature. A st
 
 The large title effects are mostly time trends inside the channel. What stays is small: very short titles cost about 2 %, and "discord" may help a little (14 streamers, borderline). No title word is a reach lever worth chasing.
 
-## V10. Broadcaster chat messages do not pull in new chatters within a stream
+## V10. Neither broadcaster typing nor a moving chat pulls in new chatters within a stream
 
-P05 (and P10) found far more chatters per viewer in sessions where the broadcaster writes in chat (+0.418 per average viewer, 110 streamers). At session level this cannot separate cause from reaction: a busy chat makes the streamer type. Recheck on 5-minute slots (`queries-VERIFY.sql` V10, `verify-v10-slots.py`): sessions since 2026-07-01 with at least 5 viewer messages, logins in 30+ channels removed (144,967 slots). Outcome: at least one new chatter (first message in the session) in the next slot. Mantel-Haenszel within session, stratified by viewer messages in the current and previous slot and by whether a new chatter already appeared; bootstrap over streamers.
+P05 (and P10) found far more chatters per viewer in sessions where the broadcaster writes in chat (+0.418 per average viewer, 110 streamers). At session level this cannot separate cause from reaction: a busy chat makes the streamer type. Recheck on 5-minute slots (`queries-VERIFY.sql` V10, `verify-v10-slots.py`): sessions since 2026-07-01 with at least 5 viewer messages, logins in 30+ channels removed. Outcome: at least one new chatter (first message in the session) in the next slot. Mantel-Haenszel within session, stratified by viewer messages in the current and previous slot and by whether a new chatter already appeared; bootstrap over streamers.
+
+P07 showed that tracked chat often starts late (first tracked message after minute 15 in 62.9 % of sessions with chat, 39.9 % even in sessions with 200+ messages). Untracked slots look silent, and at the start of tracking everyone already in the room counts as a new chatter. The first run kept those slots and gave D +1.7 pp (CI +0.9 to +2.5). That was this artifact. The table below drops every slot before the first tracked slot plus 2 (10 minutes); trimming plus 6 gives the same picture (D -0.2 pp, CI -0.9 to +0.5).
 
 | Check | Streamers | Exposed slots: next-slot new chatter | Unexposed | Within-session difference (95 % CI) |
 |---|---|---|---|---|
-| A: broadcaster wrote in the slot | 128 | 16.1 % (1,241) | 11.5 % (7,199) | +1.8 pp (-2.1 to +5.0) |
-| B: same, only slots where viewers were silent | 54 | 9.9 % (364) | 7.9 % (4,959) | -0.1 pp (-4.6 to +4.3) |
-| C: reverse, new chatter in the slot -> broadcaster writes next | 426 | 3.6 % (7,132) | 3.1 % (11,053) | +0.5 pp (-0.2 to +1.3) |
-| D: viewers chatting in the slot (vs silent) | 594 | 13.9 % (32,366) | 7.2 % (89,616) | +1.7 pp (+0.9 to +2.5) |
+| A: broadcaster wrote in the slot | 111 | 15.2 % (1,047) | 11.7 % (5,727) | +1.4 pp (-2.3 to +5.1) |
+| B: same, only slots where viewers were silent | 51 | 8.9 % (292) | 7.7 % (3,740) | -0.4 pp (-4.8 to +5.7) |
+| C: reverse, new chatter in the slot -> broadcaster writes next | 339 | 4.0 % (5,632) | 3.3 % (9,287) | +0.6 pp (-0.1 to +1.4) |
+| D: viewers chatting in the slot (vs silent) | 488 | 12.6 % (27,372) | 7.5 % (55,178) | +0.0 pp (-0.7 to +0.6) |
 
-Typing in chat, also to break a silence, shows no measurable pull on new chatters inside the same stream. A chat that is already moving does carry a small lift (D, about +1.7 pp per slot), consistent with P05's finding that lurkers start writing in livelier rooms. Spoken interaction, which is how most streamers talk to chat, is invisible here, so the honest reading is: the session-level gap is engagement style, not the act of typing.
+Inside the same stream, neither typing in chat (also to break a silence) nor an already moving chat raises the chance that a new person writes in the next five minutes. The raw gaps (15.2 vs 11.7 %, 12.6 vs 7.5 %) are the busy-room level, not a pull. Spoken interaction, which is how most streamers talk to chat, is invisible here. The session-level gap in P05 and P10 is engagement style and room size, not the act of typing.
+
+## V11. P07's "social messages draw more replies" is a busy-moment effect
+
+P07 reported a 2-minute follow-up lift of 1.12 for Social viewer messages (62 % of streamers above 1) and 0.75 for Game-Related. Lift there is the label mean over the session mean, so a label that tends to be posted when chat is already fast gets a lift without causing anything. Recheck (`queries-VERIFY.sql` V11, `verify-v11-followup.py`): 305,446 messages from 2026-02-01 to 2026-10-04, logins in 30+ channels removed, viewer messages from 5 minutes after the first tracked message to 2 minutes before the last (265,364 messages, 518 streamers). Follow-up = messages by other chatters (broadcaster included) in the next 2 minutes. Comparison against all other labelled viewer messages in the same session and with the same number of messages by others in the 2 minutes before (buckets 0, 1-2, 3-5, 6-10, 11-20, 21+); bootstrap over streamers.
+
+| Label | Naive lift (median of streamers, share above 1) | Same session and same prior speed: relative follow-up (95 % CI) |
+|---|---|---|
+| Social | 1.23 (0.71) | -0.8 % (-5.4 to +10.4) |
+| Greeting | 1.15 (0.62) | +2.1 % (-10.1 to +14.3) |
+| Reaction | 1.02 (0.52) | +4.7 % (+0.4 to +6.4) |
+| Question | 0.97 (0.46) | -12.2 % (-18.4 to +0.3) |
+| Game-Related | 0.87 (0.32) | -19.2 % (-23.6 to -4.1) |
+| Statement | 0.97 (0.40) | -19.4 % (-25.7 to -3.8) |
+
+The naive lift reproduces the direction. Holding chat speed equal, Social messages draw no more follow-up than other messages; the 1.12 is when they are posted, not what they do. Game talk and longer statements stay below other messages at equal speed, short reactions slightly above. Practical reading: chat replies follow the room's tempo; there is no message type a streamer could prompt to make chat answer more. The confidence intervals are wide and skewed because a few large channels carry much of the weight.

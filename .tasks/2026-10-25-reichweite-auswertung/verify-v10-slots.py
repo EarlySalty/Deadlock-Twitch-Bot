@@ -8,6 +8,12 @@ for r in csv.DictReader(open(sys.argv[1])):
     st_of[sid] = r["st"]
     sess[sid].append((int(r["slot"]), int(r["vmsg"]), int(r["bcmsg"]), int(r["newc"])))
 
+BUF = int(sys.argv[2])
+for sid in list(sess):
+    rows = sorted(sess[sid])
+    first = next((s for s, v, b, n in rows if v or b), None)
+    sess[sid] = [] if first is None else [x for x in rows if x[0] >= first + BUF]
+
 
 def vb(v):
     return 0 if v == 0 else 1 if v <= 2 else 2 if v <= 5 else 3 if v <= 15 else 4

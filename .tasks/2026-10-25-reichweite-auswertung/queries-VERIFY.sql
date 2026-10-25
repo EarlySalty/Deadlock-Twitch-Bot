@@ -371,7 +371,7 @@ where started_at >= '2026-01-09' and ended_at is not null
   and (game_name = 'Deadlock' or had_deadlock_in_session)
   and duration_seconds >= 1800 and avg_viewers is not null;
 
--- V10 5-minute chat slots per session since 2026-07-01 (tests in verify-v10-slots.py)
+-- V10 5-minute chat slots per session since 2026-07-01 (tests in verify-v10-slots.py <csv> <trim slots after first tracked slot>, reported with 2 and 6)
 with s as (
   select id, streamer_login, started_at, ended_at
   from twitch_stream_sessions
@@ -424,3 +424,23 @@ from grid g
 left join agg a on a.session_id = g.session_id and a.slot = g.slot
 left join newc n on n.session_id = g.session_id and n.slot = g.slot
 order by g.session_id, g.slot;
+
+-- V11: chat events for the P07 follow-up recheck (verify-v11-followup.py)
+with bots as (
+  select chatter_login
+  from twitch_chat_messages
+  where message_ts >= '2026-02-01' and message_ts < '2026-10-05'
+  group by 1
+  having count(distinct streamer_login) >= 30
+)
+select left(md5(c.streamer_login), 12) as st, c.session_id as sid,
+       extract(epoch from c.message_ts)::bigint as t,
+       left(md5(c.chatter_login), 12) as ch,
+       (c.chatter_login = c.streamer_login) as bc,
+       coalesce(l.label, '') as label
+from twitch_chat_messages c
+left join twitch_chat_message_labels l on l.message_id = c.id
+where c.message_ts >= '2026-02-01' and c.message_ts < '2026-10-05'
+  and c.session_id is not null and c.chatter_login is not null
+  and not exists (select 1 from bots b where b.chatter_login = c.chatter_login)
+order by 2, 3;

@@ -1,4 +1,4 @@
-# TODO: Twitch reach analysis (state 2026-10-25 20:20 CET)
+# TODO: Twitch reach analysis (state 2026-10-25 21:05 CET)
 
 User goal: deep analysis of all Twitch data on how German Deadlock streams win new viewers, turn
 lurkers into chatters and newcomers into followers, subs and regulars; also when Twitch shows a
@@ -16,22 +16,14 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
 | P02 | tags | done, FINDINGS-P02.md |
 | P03 | timing, competition | done, FINDINGS-P03.md |
 | P04 | length, frequency, growth | done, FINDINGS-P04.md |
-| P05 | lurkers vs chatters | done, FINDINGS-P05.md (tips 1 to 3 annotated by V10) |
+| P05 | lurkers vs chatters | done, FINDINGS-P05.md (tips 1 and 3 withdrawn by V10) |
 | P06 | first-time chatter loyalty | done, FINDINGS-P06.md |
-| P07 | chat content | resumed 19:57, running (agent ad74e288c3ab2f477) |
+| P07 | chat content | done, FINDINGS-P07.md (tips 1 and 2 downgraded by V11) |
 | P08 | follows and subs | done, FINDINGS-P08.md (tip 1 withdrawn by V7) |
 | P09 | raids, shared chat | done, FINDINGS-P09.md |
 | P10 | global category benchmark | done, FINDINGS-P10.md |
 | P11 | stream opening, games | done, FINDINGS-P11.md (tip 8 annotated by V8) |
 | P12 | exposure triggers | done, FINDINGS-P12.md |
-
-## Resources for a fresh agent per open package
-
-- Common rules: `BRIEF-COMMON.md` in this folder.
-- Original package brief: `/tmp/reichweite-scratch/VERIFY/partial/<PKG>-brief.md`.
-- What the stopped agent found so far (narration only): `/tmp/reichweite-scratch/VERIFY/partial/<PKG>-texts.md`.
-- Its scratch CSVs and scripts: `/tmp/reichweite-scratch/<PKG>/`; its SQL if written: `queries-<PKG>.sql`.
-- DB: `/tmp/tq.sh` (read-only, credentials via env, not argv).
 
 ## Corrections the orchestrator must apply
 
@@ -52,17 +44,14 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
   returning regulars, not discovery (V6).
 - Ending near the peak lifts the next start by about +0.07 of the streamer median, placebo null
   (V8). Title word effects mostly vanish against a +-14 day local baseline; only titles under 30
-  characters keep a small cost (V9). A broadcaster chat message does not raise new chatters in the
-  next 5 minutes within the session; an active chat does, +1.7 pp (V10).
+  characters keep a small cost (V9). Neither a broadcaster chat message nor an active chat raises new chatters
+  in the next 5 minutes within the session (V10, after trimming the late start of tracked chat;
+  the first run's +1.7 pp for active chat was that artifact). Social messages draw no extra
+  follow-up at equal chat speed; game talk draws less (V11).
 
 ## Next steps
 
-1. After the Haiku limit reset (22:10 CET): resume the SAME stopped agents with SendMessage (user
-   decision, no fresh spawns). Agent ids: P01 a1879883538bcfd58, P02 a438a5af86250a3df,
-   P03 a35fa98244ee4bf79, P05 ac1cbfb7c1e2cce2d, P06 a8ac14dfe0e975bc3, P07 ad74e288c3ab2f477,
-   P08 a81f3b96dc981e787, P10 a51316e1f22f287e2, P11 a6292928aab92488a. Each returns the COMPLETE
-   findings text; the orchestrator saves it as FINDINGS-<PKG>.md. Wakeup `reichweite` at 22:15.
-2. Orchestrator verifies the strongest claims with own queries, then writes `SYNTHESE.md`
-   (prioritized tips with evidence, null results, caveats) and optionally an HTML visual.
-3. Commit only this folder, run `gate_hook.py --review` (skill rolle-merge-schleuse), merge to
-   main on ALLOW, clean up branch and worktree. Report to the user in English.
+1. All packages are in and verified; `SYNTHESE.md` and `SYNTHESE.html` are final.
+2. Commit only this folder, run `gate_hook.py --review` (skill rolle-merge-schleuse), merge to
+   main on ALLOW, clean up branch and worktree, cancel wakeup `reichweite`. Report to the user in
+   English.
