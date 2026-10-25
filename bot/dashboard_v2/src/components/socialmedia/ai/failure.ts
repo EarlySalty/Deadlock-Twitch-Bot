@@ -14,7 +14,7 @@ const explanations: Record<string, string> = {
   provider_access: 'Der KI-Zugang ist auf dem Server nicht vollständig eingerichtet. Ein Admin muss ihn prüfen, danach kannst du die Phase erneut versuchen.',
   budget_exceeded: 'Das verfügbare Kostenlimit reicht für diesen Auftrag nicht aus.',
   consent_missing: 'Die erforderliche Freigabe für externe KI fehlt.',
-  interrupted: 'Die Bearbeitung wurde unterbrochen.',
+  interrupted: 'Die Bearbeitung wurde durch eine Störung auf unserer Seite unterbrochen.',
 };
 
 const providerAccessTexts: Record<AiProviderAccess, string> = {

@@ -66,13 +66,26 @@ function EditorError({ children, retry }: { children: ReactNode; retry?: () => v
   return <div className="social-ai-alert" role="alert"><AlertTriangle aria-hidden="true" size={18} /><div><p>{children}</p>{retry && <button type="button" className="studio-button" onClick={retry}>{t("Erneut laden")}</button>}</div></div>;
 }
 
-function VideoPlayer({ url, label, shape, mediaRef }: { url: string | null; label: string; shape: 'source' | 'output'; mediaRef?: RefObject<HTMLVideoElement | null> }) {
+function VideoPlayer({ url, label, shape, mediaRef, emptyText }: { url: string | null; label: string; shape: 'source' | 'output'; mediaRef?: RefObject<HTMLVideoElement | null>; emptyText?: string }) {
   const t = useT();
   const [failed, setFailed] = useState(false);
   return <div className={`social-ai-video social-ai-video--${shape}`}>
     {url && !failed ? <video key={url} ref={mediaRef} src={url} controls playsInline preload="metadata" aria-label={label} onError={() => setFailed(true)} /> :
-      <p role={failed ? 'alert' : 'status'}>{failed ? t("Das Video konnte nicht geladen werden. Bitte lade die Ansicht erneut.") : t("Noch kein Video verfügbar.")}</p>}
+      <p role={failed ? 'alert' : 'status'}>{failed ? t("Das Video konnte nicht geladen werden. Bitte lade die Ansicht erneut.") : emptyText ?? t("Noch kein Video verfügbar.")}</p>}
   </div>;
+}
+
+const inProgressStatuses: ReadonlySet<AiJobView['status']> = new Set(['queued', 'preparing', 'transcribing', 'analyzing', 'planning', 'rendering', 'validating']);
+
+function isInProgress(job: AiJobView): boolean {
+  return inProgressStatuses.has(job.status);
+}
+
+function versionNotice(job: AiJobView, hasUsable: boolean, newestUsable: boolean, t: ReturnType<typeof useT>): string | null {
+  if (isInProgress(job)) return t("Die neue Fassung wird gerade erstellt. Die Vorschau erscheint hier, sobald sie fertig ist.");
+  if (newestUsable) return null;
+  if (hasUsable) return t("Die neueste Fassung ist nicht abspielbar. Die letzte nutzbare Fassung bleibt zur Sichtung erhalten.");
+  return t("Für diesen Auftrag gibt es noch keine abspielbare Fassung.");
 }
 
 function TimeRanges({ title, items }: { title: string; items: AiTimeRange[] }) {
@@ -101,6 +114,8 @@ function Review({ job, selectedVersion, onVersionChange, channel, canStart, onJo
   const [comparison,setComparison] = useState<number | null>(null);
   const previous = chooseUsableVersion(job.versions.filter((item) => item.id !== version?.id), comparison ?? version?.parent_version_id ?? undefined);
   const newest = [...job.versions].sort((a, b) => b.version_no - a.version_no)[0];
+  const notice = versionNotice(job, chooseUsableVersion(job.versions) !== null, !newest || chooseUsableVersion([newest]) !== null, t);
+  const pendingText = isInProgress(job) ? t("Wird gerade erstellt…") : undefined;
   const [synced, setSynced] = useState(false);
   const sourceVideo = useRef<HTMLVideoElement>(null);
   const outputVideo = useRef<HTMLVideoElement>(null);
@@ -117,10 +132,10 @@ function Review({ job, selectedVersion, onVersionChange, channel, canStart, onJo
         </select>
       </label>}
     </div>
-    {newest && !chooseUsableVersion([newest]) && <p className="social-ai-caution" role="status">{t("Die neueste Fassung ist nicht abspielbar. Die letzte nutzbare Fassung bleibt zur Sichtung erhalten.")}</p>}
+    {notice && <p className="social-ai-caution" role="status">{notice}</p>}
     <div className="social-ai-video-grid">
-      <figure><figcaption><span>{t("Originalclip")}</span><strong>{duration(job.original_duration_ms, locale, t)}</strong></figcaption><VideoPlayer key={`source-${job.id}-${version?.original_url ?? job.original_url}`} url={version?.original_url ?? job.original_url} label={t("Originalclip abspielen")} shape="source" mediaRef={sourceVideo} /></figure>
-      <figure><figcaption><span>{t("Bearbeitete Fassung")} {version ? version.version_no : ''}</span><strong>{duration(version ? version.duration_ms : job.output_duration_ms, locale, t)}</strong></figcaption><VideoPlayer key={`output-${job.id}-${version?.id}`} url={version?.file_url ?? null} label={t("Bearbeitetes Video abspielen")} shape="output" mediaRef={outputVideo} /></figure>
+      <figure><figcaption><span>{t("Originalclip")}</span><strong>{duration(job.original_duration_ms, locale, t)}</strong></figcaption><VideoPlayer key={`source-${job.id}-${version?.original_url ?? job.original_url}`} url={version?.original_url ?? job.original_url} label={t("Originalclip abspielen")} shape="source" mediaRef={sourceVideo} emptyText={pendingText} /></figure>
+      <figure><figcaption><span>{t("Bearbeitete Fassung")} {version ? version.version_no : ''}</span><strong>{duration(version ? version.duration_ms : job.output_duration_ms, locale, t)}</strong></figcaption><VideoPlayer key={`output-${job.id}-${version?.id}`} url={version?.file_url ?? null} label={t("Bearbeitetes Video abspielen")} shape="output" mediaRef={outputVideo} emptyText={pendingText} /></figure>
     </div>
     {canSync && <label className="social-ai-sync"><input type="checkbox" checked={synced} onChange={(event) => setSynced(event.target.checked)} />{t("Original synchron mitlaufen lassen")}<small>{t("Das Original folgt stumm der bearbeiteten Fassung und springt über entfernte Abschnitte.")}</small></label>}
     <div className="social-ai-explanations">
@@ -163,7 +178,7 @@ export function AiJobDetails({ job, canStart, onRetry, retryPending, retryError,
       <div><dt>{t("Vom Anbieter abgerechnete Kosten")}</dt><dd>{job.cost_basis === 'subscription_included' ? t("Keine, im Claude-Abo enthalten") : job.cost_basis === 'provider_billed' && job.measured_provider_cost_usd !== null ? t('{cost} US-Dollar', { cost: moneyFormat.format(job.measured_provider_cost_usd) }) : t("Noch unbekannt")}</dd></div>
       <div><dt>{t("Fertiggestellt")}</dt><dd>{timestamp(job.completed_at, locale, t)}</dd></div>
     </dl>
-    {(job.original_url || job.versions.length > 0 || job.status === 'review') && <Review job={job} selectedVersion={activeVersionId} onVersionChange={(version) => setVersionSelection({ job: job.id, version })} channel={channel} canStart={canStart} onJob={onJob} onReload={onReload} publishing={publishing} onBusyChange={reportBusy} />}
+    {(job.original_url || job.status === 'review' || chooseUsableVersion(job.versions) || (job.versions.length > 0 && isInProgress(job))) && <Review job={job} selectedVersion={activeVersionId} onVersionChange={(version) => setVersionSelection({ job: job.id, version })} channel={channel} canStart={canStart} onJob={onJob} onReload={onReload} publishing={publishing} onBusyChange={reportBusy} />}
   </article>;
 }
 
