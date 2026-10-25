@@ -932,20 +932,14 @@ mod tests {
     fn vod_abwesenheit_braucht_eindeutige_helix_antwort() {
         use super::video_verfuegbarkeit as pruefe;
         use serde_json::json;
-        assert_eq!(pruefe(200, &json!({"data": []}), "123").unwrap(), false);
-        assert_eq!(
-            pruefe(200, &json!({"data": [{"id":"123"}]}), "123").unwrap(),
-            true
-        );
-        assert_eq!(
-            pruefe(
-                404,
-                &json!({"status":404,"error":"Not Found","message":"missing"}),
-                "123"
-            )
-            .unwrap(),
-            false
-        );
+        assert!(!pruefe(200, &json!({"data": []}), "123").unwrap());
+        assert!(pruefe(200, &json!({"data": [{"id":"123"}]}), "123").unwrap());
+        assert!(!pruefe(
+            404,
+            &json!({"status":404,"error":"Not Found","message":"missing"}),
+            "123"
+        )
+        .unwrap());
         for (status, body) in [
             (200, json!({})),
             (200, json!({"data":null})),

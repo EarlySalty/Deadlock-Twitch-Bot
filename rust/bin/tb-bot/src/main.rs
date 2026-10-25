@@ -2912,5 +2912,6 @@ mod tests {
 mod test_sql;
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../test-support/postgres.rs"]
 mod role_test_postgres;

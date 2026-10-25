@@ -23,6 +23,7 @@ pub(crate) struct TestPostgres {
 }
 
 impl TestPostgres {
+    #[allow(dead_code)]
     pub async fn start() -> Self {
         Self::start_with_preload(false).await
     }

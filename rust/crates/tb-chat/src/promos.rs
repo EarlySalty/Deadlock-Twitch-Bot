@@ -36,6 +36,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../test-support/postgres.rs"]
 mod pitch_test_postgres;
 
@@ -4225,15 +4226,6 @@ mod db_tests {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
-    struct FixedSuppression(bool);
-
-    #[async_trait]
-    impl OutboundSuppressionCheck for FixedSuppression {
-        async fn is_muted(&self, _channel_login: &str) -> bool {
-            self.0
-        }
-    }
-
     struct FixedTextGen(Option<String>);
 
     #[async_trait]
@@ -4327,20 +4319,18 @@ mod db_tests {
         }
     }
 
+    type RecordedCard = (
+        String,
+        String,
+        String,
+        String,
+        PitchCardKind,
+        Option<String>,
+    );
+
     #[derive(Default, Clone)]
     struct RecordingReviewSink {
-        cards: Arc<
-            Mutex<
-                Vec<(
-                    String,
-                    String,
-                    String,
-                    String,
-                    PitchCardKind,
-                    Option<String>,
-                )>,
-            >,
-        >,
+        cards: Arc<Mutex<Vec<RecordedCard>>>,
     }
 
     #[async_trait]

@@ -4371,6 +4371,7 @@ mod db_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../test-support/postgres.rs"]
 pub(crate) mod invite_test_postgres;
 
