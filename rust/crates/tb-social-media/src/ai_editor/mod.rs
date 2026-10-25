@@ -71,6 +71,10 @@ pub enum AiEditorError {
     Storage,
     #[error("Der Auftrag hat sich bereits geändert.")]
     Conflict,
+    #[error(
+        "Die gewünschte Änderung ließ sich nicht umsetzen, deshalb gibt es keine neue Fassung."
+    )]
+    RevisionUnchanged,
     #[error("Die erlaubten Versuche sind aufgebraucht.")]
     Attempts,
     #[error("Das Zeitlimit für die Verarbeitung ist erreicht.")]

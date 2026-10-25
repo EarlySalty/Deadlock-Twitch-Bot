@@ -763,7 +763,7 @@ mod tests {
     fn candidate_must_keep_skill_heading_and_bounds() {
         let base = skill_snapshot(SkillId::Copywriting).text;
         assert!(validate_candidate(SkillId::Copywriting, base, 4096).is_ok());
-        let learned = base.replace("# Copywriting v1", "# Copywriting v2");
+        let learned = base.replace("# Copywriting v2", "# Copywriting v3");
         assert!(validate_candidate(SkillId::Copywriting, &learned, 4096).is_ok());
         assert_eq!(
             validate_candidate(SkillId::Copywriting, "# Subtitles v2\nfoo", 4096),

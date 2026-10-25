@@ -37,6 +37,8 @@ export interface AiVideoVersion {
   decisions: AiTimeRange[];
   approved_platforms: string[];
   rating: AiVersionRating | null;
+  layout_mode: string | null;
+  streamer_layout_configured: boolean;
 }
 
 export type AiVersionRating = 'accepted' | 'rejected';
@@ -177,6 +179,8 @@ function decodeVersion(value: unknown): AiVideoVersion {
     decisions: list(item.decisions, decodeTimeRange),
     approved_platforms: decodePlatforms(item.approved_platforms),
     rating: item.rating === 'accepted' || item.rating === 'rejected' ? item.rating : null,
+    layout_mode: item.layout_mode === undefined || item.layout_mode === null ? null : text(item.layout_mode),
+    streamer_layout_configured: item.streamer_layout_configured === true,
   };
 }
 

@@ -310,6 +310,10 @@ pub struct AiVideoVersion {
     pub approved_platforms: Vec<String>,
     #[serde(default)]
     pub rating: Option<String>,
+    #[serde(default)]
+    pub layout_mode: Option<String>,
+    #[serde(default)]
+    pub streamer_layout_configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -533,11 +537,14 @@ async fn load_versions(
          p.duration_ms, p.parent_version_id, p.variant_index, p.maker_job_id, p.decisions_text, p.planning_text, \
          (SELECT CASE e.event_kind WHEN 'version_accepted' THEN 'accepted' ELSE 'rejected' END \
          FROM social_ai_revision_events e WHERE e.twitch_user_id = j.twitch_user_id AND e.produced_video_id = p.id \
-         AND e.event_kind IN ('version_accepted','version_rejected') ORDER BY e.id DESC LIMIT 1) AS rating \
+         AND e.event_kind IN ('version_accepted','version_rejected') ORDER BY e.id DESC LIMIT 1) AS rating, \
+         p.layout_mode, \
+         EXISTS (SELECT 1 FROM social_media_streamer_layout l WHERE l.twitch_user_id = j.twitch_user_id::text) AS streamer_layout_configured \
          FROM social_ai_jobs j \
          JOIN LATERAL (SELECT p.id, p.version_no, p.created_at, \
          CASE WHEN p.status IN ('rendering','review','failed') AND p.expires_at <= NOW() THEN 'expired' ELSE p.status END AS status, \
-         p.duration_ms, p.parent_version_id, p.variant_index, maker.id AS maker_job_id, maker.decisions::text AS decisions_text, (p.metadata->'planning')::text AS planning_text FROM social_ai_jobs maker \
+         p.duration_ms, p.parent_version_id, p.variant_index, maker.id AS maker_job_id, maker.decisions::text AS decisions_text, (p.metadata->'planning')::text AS planning_text, \
+         COALESCE(maker.checkpoints->'preparing'->'result'->'snapshot'->'layout'->>'mode','blur_pad') AS layout_mode FROM social_ai_jobs maker \
          JOIN social_produced_videos p ON p.metadata->>'manual_ai_job_id'=maker.id::text \
          WHERE COALESCE(maker.root_job_id,maker.id)=COALESCE(j.root_job_id,j.id) AND maker.twitch_user_id=j.twitch_user_id AND maker.clip_db_id=j.clip_db_id \
          AND p.twitch_user_id = j.twitch_user_id::text AND p.clip_id = j.clip_db_id \
@@ -583,6 +590,8 @@ async fn load_versions(
                 decisions,
                 approved_platforms: Vec::new(),
                 rating: row.try_get("rating")?,
+                layout_mode: row.try_get("layout_mode")?,
+                streamer_layout_configured: row.try_get("streamer_layout_configured")?,
             });
     }
     for job in jobs {
@@ -941,6 +950,7 @@ pub enum JobFailure {
     ProviderAccess,
     BudgetExceeded,
     ConsentMissing,
+    RevisionUnchanged,
 }
 
 impl JobFailure {
@@ -956,6 +966,7 @@ impl JobFailure {
             Self::ProviderAccess => "provider_access",
             Self::BudgetExceeded => "budget_exceeded",
             Self::ConsentMissing => "consent_missing",
+            Self::RevisionUnchanged => "revision_unchanged",
         }
     }
 
@@ -973,6 +984,9 @@ impl JobFailure {
             }
             Self::BudgetExceeded => "Das Kostenlimit ist erreicht.",
             Self::ConsentMissing => "Für die externe KI-Verarbeitung fehlt die Einwilligung.",
+            Self::RevisionUnchanged => {
+                "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt."
+            }
         }
     }
 }

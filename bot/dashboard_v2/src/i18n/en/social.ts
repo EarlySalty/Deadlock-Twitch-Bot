@@ -646,4 +646,9 @@ export const SOCIAL_EN: Record<string, string> = {
   'Social-Media-Anfragen': 'Social Media requests',
   'Freischalten gibt dem Streamer Zugang zum Social-Media-Manager und entfernt die Anfrage aus der Liste.': 'Approving gives the streamer access to the Social Media Manager and removes the request from the list.',
   'Die Anfragen sind gerade nicht erreichbar.': 'Requests are currently unavailable.',
+  'Für deinen Kanal ist noch kein Layout eingerichtet. Deshalb zeigt das Video das ganze Bild verkleinert mit unscharfem Rand. Richte dein Kamera-Layout ein, dann wird die nächste Fassung im Hochformat aufgeteilt.': 'No layout is set up for your channel yet, so the video shows the whole frame scaled down with a blurred border. Set up your camera layout and the next version will be split for portrait format.',
+  'Kamera-Layout einrichten': 'Set up camera layout',
+  'Kamera-Layout': 'Camera layout',
+  'Keine neue Fassung': 'No new version',
+  'Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.': 'The requested change could not be applied. No new version was created.',
 };

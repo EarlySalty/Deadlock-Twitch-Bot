@@ -456,6 +456,10 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                 <AiEditor twitchUserId={twitchUserId} streamer={streamer} settingsOnly />
               </section>}
             </div>
+            <section className="studio-card" aria-labelledby="studio-layout-title">
+              <header className="studio-production-head"><h2 id="studio-layout-title"><Pencil aria-hidden="true" size={18} />{t('Kamera-Layout')}</h2></header>
+              {layoutCards}
+            </section>
             {twitchUserId && <section className="studio-card"><PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="notifications" onChanged={refreshSchedule} reloadKey={reloadKey} /></section>}
           </div>
         )}

@@ -190,6 +190,7 @@ async fn prepared(
         subtitle_scale_percent: 100,
         revision_proposal: None,
         variants: Vec::new(),
+        overlay_title: Default::default(),
         plan: super::super::EditPlan {
             schema_version: 1,
             source_duration_ms: frozen.media.duration_ms,
@@ -1548,6 +1549,18 @@ fn proposed_plan(
         .clone();
     if let StageCheckpoint::Planning { edit_plan, .. } = &mut checkpoint {
         edit_plan.insert("revision_proposal".into(),json!({"summary":"Einstieg prüfen","impact":"Der Zusammenhang bleibt erhalten.","reanalyze":reanalyze,"requires_confirmation":true,"estimated_provider_cost_usd":null}));
+        edit_plan.insert("subtitle_scale_percent".into(), json!(110));
+    }
+    checkpoint
+}
+
+fn unchanged_plan(checkpoints: &BTreeMap<AiStage, StageCheckpoint>) -> StageCheckpoint {
+    let mut checkpoint = checkpoints
+        .get(&AiStage::Planning)
+        .expect("parent plan")
+        .clone();
+    if let StageCheckpoint::Planning { edit_plan, .. } = &mut checkpoint {
+        edit_plan.insert("revision_proposal".into(),json!({"summary":"Der Text im Quellvideo lässt sich nicht entfernen.","impact":"Keine Änderung.","reanalyze":false,"requires_confirmation":false,"estimated_provider_cost_usd":null}));
     }
     checkpoint
 }
@@ -1826,6 +1839,52 @@ async fn revisions_preserve_parent_reuse_checkpoints_and_confirm_before_renderin
 }
 
 #[tokio::test]
+async fn unchanged_revision_ends_without_a_new_version_and_keeps_its_summary() {
+    use super::super::revision;
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("root");
+    let runtime = runtime(directory.path());
+    let clip = source(&db.pool, &runtime).await;
+    let (root, parent, checkpoints) = revision_fixture(&db.pool, &runtime, clip).await;
+    let child = revision::create_revision(
+        &db.pool,
+        &runtime,
+        "101",
+        root,
+        parent.id,
+        "Entferne den eingebrannten Text",
+    )
+    .await
+    .expect("revision");
+    save_revision_plan(&db.pool, child.id, &unchanged_plan(&checkpoints)).await;
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
+    let _ = worker.process_next().await;
+    let job = super::super::get_manual_job(&db.pool, &runtime, "101", child.id)
+        .await
+        .expect("unchanged revision");
+    assert_eq!(job.status, "failed");
+    assert_eq!(job.failure_code.as_deref(), Some("revision_unchanged"));
+    assert!(!job.can_retry);
+    assert_eq!(
+        job.revision_proposal
+            .as_ref()
+            .map(|proposal| proposal.summary.as_str()),
+        Some("Der Text im Quellvideo lässt sich nicht entfernen.")
+    );
+    assert!(
+        produced_video::find_ai_version(&db.pool, "101", clip, Some(child.id), None)
+            .await
+            .expect("C2")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn reanalysis_and_final_plan_have_separate_confirmation_and_failed_child_keeps_parent() {
     use super::super::{revision, store};
     let db = database().await;
@@ -2091,6 +2150,7 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
             plan: distinct,
             platforms: base.platforms.clone(),
             subtitle_scale_percent: 100,
+            overlay_title: Default::default(),
         });
     assert!(validate_variants(&plan, &json!({"multi_output_enabled":false}), &runtime).is_err());
     validate_variants(&plan, &frozen.publication, &runtime).expect("opt-in");
@@ -2246,6 +2306,7 @@ async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or
             plan: alternate,
             platforms: plan.platforms.clone(),
             subtitle_scale_percent: 100,
+            overlay_title: Default::default(),
         });
     if let Some(StageCheckpoint::Planning { edit_plan, .. }) =
         checkpoints.get_mut(&AiStage::Planning)
@@ -3203,6 +3264,77 @@ fn transcript_end_within_decoder_drift_is_clamped_to_clip() {
         fit_segments(&[raw(50.0, 52.0)], 51_314, 400),
         Err(AiEditorError::Transcription)
     ));
+}
+
+#[test]
+fn foreign_script_speech_is_not_subtitled() {
+    assert!(!latin_script("아, 너 괜찮은데?"));
+    assert!(latin_script("Are you good?"));
+    assert!(latin_script("Schön, weiß ich, Übermut bei 370 HP!"));
+    assert!(!subtitle_language(Some("ko")));
+    assert!(subtitle_language(Some("de")) && subtitle_language(Some("en")));
+    assert!(subtitle_language(None));
+    let segments = vec![
+        TranscriptSegment {
+            start_ms: 100,
+            end_ms: 2000,
+            text: "아, 너 괜찮은데?".into(),
+        },
+        TranscriptSegment {
+            start_ms: 2000,
+            end_ms: 3000,
+            text: "Let's go".into(),
+        },
+    ];
+    let kept = speech_segments(&segments);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].text, "Let's go");
+}
+
+#[test]
+fn prompts_carry_the_channel_login_and_the_name_rule() {
+    let context = streamer_context("luckymakkydead");
+    assert_eq!(context["twitch_login"], "luckymakkydead");
+    assert!(context["rule"]
+        .as_str()
+        .is_some_and(|rule| rule.contains("name nobody")));
+}
+
+fn planning_fixture(reason: &str, overlay: serde_json::Value) -> Planning {
+    serde_json::from_value(json!({
+        "plan": {
+            "schema_version": 1,
+            "source_duration_ms": 11_833,
+            "kept_intervals": [{ "start_ms": 0, "end_ms": 11_833, "reason": reason }],
+            "hook": null,
+            "observed_highlights": [],
+            "significant_uncertainty": false,
+            "review_reasons": [],
+            "layout": "existing_stable"
+        },
+        "platforms": {},
+        "overlay_title": overlay
+    }))
+    .expect("planning fixture")
+}
+
+#[test]
+fn revision_without_output_change_is_detected() {
+    use super::super::revision::changes_output;
+    let base = planning_fixture(
+        "Ganzer Kampf",
+        json!({ "mode": "clip_title", "text": null }),
+    );
+    let reworded = planning_fixture(
+        "Kampf bleibt",
+        json!({ "mode": "clip_title", "text": null }),
+    );
+    assert!(!changes_output(&base, &reworded, "EZ OUTPLAYED"));
+    let same_text = planning_fixture("Kampf", json!({ "mode": "custom", "text": "EZ OUTPLAYED" }));
+    assert!(!changes_output(&base, &same_text, "EZ OUTPLAYED"));
+    let removed = planning_fixture("Kampf", json!({ "mode": "none", "text": null }));
+    assert!(changes_output(&base, &removed, "EZ OUTPLAYED"));
+    assert_eq!(removed.overlay_title.resolve("EZ OUTPLAYED"), "");
 }
 
 #[path = "acceptance_tests.rs"]

@@ -76,6 +76,7 @@
 .social-ai-failure { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: start; gap: 11px; min-width: 0; }
 .social-ai-failure > .social-ai-alert { max-width: 100%; }
 .social-ai-failure > p { color: var(--ai-muted); font-size: 13px; }
+.social-ai-callout { display: grid; justify-items: start; gap: 10px; }
 .social-ai-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; margin: 0; }
 .social-ai-facts > div { min-width: 0; padding: 12px 0; border-bottom: 1px solid var(--ai-line); }
 .social-ai-facts dt { color: var(--ai-muted); font-size: 12px; }

@@ -7,7 +7,8 @@ import type { AiJobView, AiTimeRange } from './api';
 import { fetchAiConsent, fetchAiJob, fetchAiJobs, retryAiJob, saveAiConsent, startAiJob } from './api';
 import { chooseUsableVersion } from './versions';
 import { findChannelClip, isSelectableClip } from './clipLookup';
-import { canRetryJob, failureExplanation, providerAccessText } from './failure';
+import { canRetryJob, failureExplanation, isUnchangedRevision, providerAccessText } from './failure';
+import { socialViewSearch } from '../studioNavigation';
 import { RevisionControls } from './RevisionControls';
 import { removedSections } from './timeline';
 import { attachSyncedPlayback } from './playback';
@@ -88,6 +89,18 @@ function versionNotice(job: AiJobView, hasUsable: boolean, newestUsable: boolean
   return t("Für diesen Auftrag gibt es noch keine abspielbare Fassung.");
 }
 
+function layoutSettingsHref(): string {
+  return `${window.location.pathname}?${socialViewSearch(window.location.search, 'layout')}`;
+}
+
+function LayoutMissingNotice() {
+  const t = useT();
+  return <div className="social-ai-notice social-ai-callout" role="note">
+    <p>{t("Für deinen Kanal ist noch kein Layout eingerichtet. Deshalb zeigt das Video das ganze Bild verkleinert mit unscharfem Rand. Richte dein Kamera-Layout ein, dann wird die nächste Fassung im Hochformat aufgeteilt.")}</p>
+    <a className="studio-button" href={layoutSettingsHref()}>{t("Kamera-Layout einrichten")}</a>
+  </div>;
+}
+
 function TimeRanges({ title, items }: { title: string; items: AiTimeRange[] }) {
   const t = useT();
   return <section className="social-ai-notes" aria-label={title}>
@@ -133,6 +146,7 @@ function Review({ job, selectedVersion, onVersionChange, channel, canStart, onJo
       </label>}
     </div>
     {notice && <p className="social-ai-caution" role="status">{notice}</p>}
+    {version?.layout_mode === 'blur_pad' && !version.streamer_layout_configured && <LayoutMissingNotice />}
     <div className="social-ai-video-grid">
       <figure><figcaption><span>{t("Originalclip")}</span><strong>{duration(job.original_duration_ms, locale, t)}</strong></figcaption><VideoPlayer key={`source-${job.id}-${version?.original_url ?? job.original_url}`} url={version?.original_url ?? job.original_url} label={t("Originalclip abspielen")} shape="source" mediaRef={sourceVideo} emptyText={pendingText} /></figure>
       <figure><figcaption><span>{t("Bearbeitete Fassung")} {version ? version.version_no : ''}</span><strong>{duration(version ? version.duration_ms : job.output_duration_ms, locale, t)}</strong></figcaption><VideoPlayer key={`output-${job.id}-${version?.id}`} url={version?.file_url ?? null} label={t("Bearbeitetes Video abspielen")} shape="output" mediaRef={outputVideo} emptyText={pendingText} /></figure>
@@ -165,9 +179,10 @@ export function AiJobDetails({ job, canStart, onRetry, retryPending, retryError,
   const retryAllowed = canRetryJob(job, { canStart, retryPending, locked });
   const stage = t(stageLabels[job.stage] ?? 'Phase unbekannt');
   return <article className="social-ai-job" aria-labelledby={headingId}>
-    <div className="social-ai-job-head"><div><h3 id={headingId}>{t("Auftrag")} {numberFormat.format(job.id)}</h3><p>{t("Clip")} {numberFormat.format(job.clip_db_id)} · {t("Angelegt am")} {timestamp(job.created_at, locale, t)}</p></div><span className={`social-ai-status social-ai-status--${job.status}`}>{t(statusLabels[job.status])}</span></div>
+    <div className="social-ai-job-head"><div><h3 id={headingId}>{t("Auftrag")} {numberFormat.format(job.id)}</h3><p>{t("Clip")} {numberFormat.format(job.clip_db_id)} · {t("Angelegt am")} {timestamp(job.created_at, locale, t)}</p></div><span className={`social-ai-status social-ai-status--${job.status}`}>{t(isUnchangedRevision(job) ? 'Keine neue Fassung' : statusLabels[job.status])}</span></div>
     <div className="social-ai-stage" role="status"><Clock3 aria-hidden="true" size={17} /><span>{t("Aktuelle Phase:")} <strong>{stage}</strong></span><span>{t("Zuletzt aktualisiert:")} {timestamp(job.updated_at, locale, t)}</span></div>
-    {job.status === 'failed' && <div className="social-ai-failure"><EditorError>{t('Die Bearbeitung ist in der Phase „{stage}“ fehlgeschlagen.', { stage })} {t(failureExplanation(job.failure_code))} {t("Durch diesen Auftrag wird nichts automatisch veröffentlicht.")}</EditorError>{job.can_retry ? <button type="button" className="studio-button" disabled={!retryAllowed} onClick={() => { if (retryAllowed) onRetry(); }}><RotateCcw aria-hidden="true" size={16} />{retryPending ? t("Wiederholung wird gestartet…") : t("Fehlgeschlagene Phase erneut versuchen")}</button> : <p>{t("Für diesen Auftrag ist kein weiterer Versuch vorgesehen.")}</p>}{retryError && <EditorError>{t("Der erneute Versuch konnte nicht gestartet werden. Bitte prüfe die Freigabe und versuche es später erneut.")}</EditorError>}</div>}
+    {isUnchangedRevision(job) && <div className="social-ai-notice social-ai-callout" role="status"><p>{t(failureExplanation(job.failure_code))}</p>{job.revision_proposal?.summary && <p>{job.revision_proposal.summary}</p>}</div>}
+    {job.status === 'failed' && !isUnchangedRevision(job) && <div className="social-ai-failure"><EditorError>{t('Die Bearbeitung ist in der Phase „{stage}“ fehlgeschlagen.', { stage })} {t(failureExplanation(job.failure_code))} {t("Durch diesen Auftrag wird nichts automatisch veröffentlicht.")}</EditorError>{job.can_retry ? <button type="button" className="studio-button" disabled={!retryAllowed} onClick={() => { if (retryAllowed) onRetry(); }}><RotateCcw aria-hidden="true" size={16} />{retryPending ? t("Wiederholung wird gestartet…") : t("Fehlgeschlagene Phase erneut versuchen")}</button> : <p>{t("Für diesen Auftrag ist kein weiterer Versuch vorgesehen.")}</p>}{retryError && <EditorError>{t("Der erneute Versuch konnte nicht gestartet werden. Bitte prüfe die Freigabe und versuche es später erneut.")}</EditorError>}</div>}
     <dl className="social-ai-facts" aria-label={t("Verarbeitung und Kosten")}>
       <div><dt>{t("KI-Anbieter und Modell")}</dt><dd>{job.provider && job.model ? `${job.provider} · ${job.model}` : t("Noch unbekannt")}</dd></div>
       <div><dt>{t("Gesamte Bearbeitungszeit")}</dt><dd>{duration(job.processing_ms, locale, t)}</dd></div>

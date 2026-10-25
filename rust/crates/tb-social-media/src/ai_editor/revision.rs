@@ -473,6 +473,42 @@ pub(super) async fn reanalysis_estimate(
         .map(Option::flatten)
 }
 
-pub(super) fn request_context(request: &RevisionRequest, base: &Planning) -> Value {
-    json!({"feedback":request.feedback,"previous":base,"reanalysis_confirmed":request.reanalysis_confirmed,"instruction":"Interpret feedback as a bounded edit of saved analysis. Set reanalyze=true only if new visual understanding is necessary and not yet authorized. Mark substantial changes for confirmation. Subtitle size may change only through subtitle_scale_percent. Preserve real speech and its language, stable layout and original audio. Explain unsupported layout, creative or speech-rewriting requests honestly in the summary; never fabricate commands or cost estimates. Return a complete main plan and no extra variants for ordinary revisions."})
+pub(super) fn changes_output(base: &Planning, next: &Planning, clip_title: &str) -> bool {
+    output_identity(base, clip_title) != output_identity(next, clip_title)
+}
+
+fn output_identity(planning: &Planning, clip_title: &str) -> Value {
+    let cut = |plan: &super::EditPlan| {
+        plan.kept_intervals
+            .iter()
+            .map(|interval| (interval.start_ms, interval.end_ms))
+            .collect::<Vec<_>>()
+    };
+    let hook = |plan: &super::EditPlan| {
+        plan.hook
+            .as_ref()
+            .map(|interval| (interval.start_ms, interval.end_ms))
+    };
+    json!({
+        "cut": cut(&planning.plan),
+        "hook": hook(&planning.plan),
+        "subtitle_scale_percent": planning.subtitle_scale_percent,
+        "overlay": planning.overlay_title.resolve(clip_title),
+        "platforms": planning.platforms,
+        "variants": planning.variants.iter().map(|variant| json!({
+            "cut": cut(&variant.plan),
+            "hook": hook(&variant.plan),
+            "subtitle_scale_percent": variant.subtitle_scale_percent,
+            "overlay": variant.overlay_title.resolve(clip_title),
+            "platforms": variant.platforms,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+pub(super) fn request_context(
+    request: &RevisionRequest,
+    base: &Planning,
+    clip_title: &str,
+) -> Value {
+    json!({"feedback":request.feedback,"previous":base,"previous_overlay_text":base.overlay_title.resolve(clip_title),"clip_title":clip_title,"reanalysis_confirmed":request.reanalysis_confirmed,"instruction":"Interpret feedback as a bounded edit of saved analysis. Set reanalyze=true only if new visual understanding is necessary and not yet authorized. Mark substantial changes for confirmation. You control what the video shows: kept_intervals and hook control the cut and the teaser, subtitle_scale_percent controls subtitle size, and overlay_title controls the large title burned in at the start (mode clip_title shows clip_title, custom shows text, none shows no title). previous_overlay_text is what the previous version showed. When the feedback asks to remove or change that overlay text, change overlay_title accordingly. Subtitle wording cannot change because it is the real speech; preserve real speech and its language, stable layout and original audio. If nothing of the requested change can be done, return the previous plan unchanged and explain in German in the summary what could not be done and why; no new version is produced then. Explain unsupported layout, creative or speech-rewriting requests honestly in the summary; never fabricate commands or cost estimates. Return a complete main plan and no extra variants for ordinary revisions."})
 }

@@ -53,7 +53,10 @@ async fn project(
     owner: &str,
     mut job: AiJobView,
 ) -> Result<AiJobView, AiEditorError> {
-    if job.failure_code.as_deref() == Some("invalid_checkpoint") {
+    if matches!(
+        job.failure_code.as_deref(),
+        Some("invalid_checkpoint" | "revision_unchanged")
+    ) {
         job.can_retry = false;
     }
     if job.can_retry {
@@ -255,6 +258,7 @@ fn failure(error: &AiEditorError, stage: AiStage) -> JobFailure {
         AiEditorError::Transcription => JobFailure::TranscriptionFailed,
         AiEditorError::Render => JobFailure::RenderingFailed,
         AiEditorError::Validation => JobFailure::ValidationFailed,
+        AiEditorError::RevisionUnchanged => JobFailure::RevisionUnchanged,
         _ => match stage {
             AiStage::Preparing => JobFailure::SourceUnavailable,
             AiStage::Transcribing => JobFailure::TranscriptionFailed,

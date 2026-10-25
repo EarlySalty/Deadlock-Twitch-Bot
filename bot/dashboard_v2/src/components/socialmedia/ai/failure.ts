@@ -15,6 +15,7 @@ const explanations: Record<string, string> = {
   budget_exceeded: 'Das verfügbare Kostenlimit reicht für diesen Auftrag nicht aus.',
   consent_missing: 'Die erforderliche Freigabe für externe KI fehlt.',
   interrupted: 'Die Bearbeitung wurde durch eine Störung auf unserer Seite unterbrochen.',
+  revision_unchanged: 'Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.',
 };
 
 const providerAccessTexts: Record<AiProviderAccess, string> = {
@@ -32,6 +33,10 @@ export function providerAccessText(access: AiProviderAccess): string {
 
 export function canRetryJob(job: Pick<AiJobView, 'status' | 'can_retry'>, state: { canStart: boolean; retryPending: boolean; locked: boolean }): boolean {
   return job.status === 'failed' && job.can_retry && state.canStart && !state.retryPending && !state.locked;
+}
+
+export function isUnchangedRevision(job: Pick<AiJobView, 'status' | 'failure_code'>): boolean {
+  return job.status === 'failed' && job.failure_code === 'revision_unchanged';
 }
 
 export function failureExplanation(code: string | null): string {

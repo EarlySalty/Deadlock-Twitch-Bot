@@ -369,6 +369,7 @@ fn subtitles(
     let (_, language, segments) = transcription(checkpoints)?;
     let source = segments
         .iter()
+        .filter(|segment| latin_script(&segment.text))
         .map(|segment| SourceSubtitle {
             segment: SubtitleSegment {
                 start: segment.start_ms as f64 / 1000.0,
@@ -534,6 +535,29 @@ fn fit_segments(
         .collect()
 }
 
+const SUBTITLE_LANGUAGES: [&str; 2] = ["de", "en"];
+
+fn subtitle_language(language: Option<&str>) -> bool {
+    language.is_none_or(|language| SUBTITLE_LANGUAGES.contains(&language))
+}
+
+fn latin_script(text: &str) -> bool {
+    text.chars()
+        .filter(|character| character.is_alphabetic())
+        .all(|character| {
+            character.is_ascii_alphabetic()
+                || ('\u{00AA}'..='\u{024F}').contains(&character)
+                || ('\u{1E00}'..='\u{1EFF}').contains(&character)
+        })
+}
+
+fn speech_segments(segments: &[TranscriptSegment]) -> Vec<&TranscriptSegment> {
+    segments
+        .iter()
+        .filter(|segment| latin_script(&segment.text))
+        .collect()
+}
+
 async fn transcribe(
     _ctx: &StageContext<'_>,
     frozen: &PreparingSnapshot,
@@ -554,7 +578,20 @@ async fn transcribe(
         .map_err(stt_failure)?;
     let result = lease.transcribe_clip(&frozen.source.path).await;
     lease.stop().await;
-    let transcript = result.map_err(stt_failure)?;
+    let mut transcript = result.map_err(stt_failure)?;
+    if !subtitle_language(transcript.language.as_deref()) {
+        tracing::warn!(
+            language = transcript.language.as_deref().unwrap_or(""),
+            segments = transcript.segments.len(),
+            "Social AI transcript dropped because its language is not supported"
+        );
+        transcript.text.clear();
+        transcript.segments.clear();
+        transcript.language = None;
+    }
+    transcript
+        .segments
+        .retain(|segment| latin_script(&segment.text));
     let segments = fit_segments(
         &transcript.segments,
         frozen.media.duration_ms,
@@ -654,6 +691,7 @@ async fn analyze(
         });
     }
     let (transcript, language, segments) = transcription(ctx.checkpoints)?;
+    let segments = speech_segments(segments);
     let evidence = brain_context(ctx, runtime, transcript).await;
     let observation = super::observation::watch(
         super::observation::ObservationOwner {
@@ -672,7 +710,7 @@ async fn analyze(
     };
     let request = EditorRequest {
         system: frozen.system(&[SkillId::DeadlockUnderstanding, SkillId::HighlightAnalysis])?,
-        text: json!({ "task": task, "video_observation": observation, "source": { "duration_ms": frozen.media.duration_ms, "width": frozen.media.width, "height": frozen.media.height, "has_audio": frozen.media.has_audio, "title": frozen.source.title }, "transcript": transcript, "language": language, "segments": segments, "brain": evidence, "user_correction":feedback.as_ref().map(|request| &request.feedback) }).to_string(),
+        text: json!({ "task": task, "video_observation": observation, "source": { "duration_ms": frozen.media.duration_ms, "width": frozen.media.width, "height": frozen.media.height, "has_audio": frozen.media.has_audio, "title": frozen.source.title }, "streamer": streamer_context(&frozen.source.login), "transcript": transcript, "language": language, "segments": segments, "brain": evidence, "user_correction":feedback.as_ref().map(|request| &request.feedback) }).to_string(),
         frames,
         json_schema: analysis_schema(&runtime.limits.plan, frozen.media.duration_ms),
     };
@@ -706,6 +744,7 @@ async fn plan(
     let analysis = analysis(ctx.checkpoints)?;
     analysis.validate(frozen.media.duration_ms, &runtime.limits.plan)?;
     let (_, language, segments) = transcription(ctx.checkpoints)?;
+    let segments = speech_segments(segments);
     let revision = match ctx.identity.manual() {
         Some(id) => super::revision::request(ctx.pool, ctx.owner, id).await?,
         None => None,
@@ -760,7 +799,7 @@ async fn plan(
     let request = EditorRequest {
         system: frozen.system(&skill_ids)?,
         text: planning_text(
-            json!({ "task": "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. analysis.uncertainty is already shown to the user next to review_reasons: put only concerns about this edit that the analysis does not already state into review_reasons, and never restate an analysis uncertainty in other words. Publication copy follows the requested language and template, not subtitle language.", "source_duration_ms": frozen.media.duration_ms, "analysis": analysis, "language": language, "segments": segments, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base)) }),
+            json!({ "task": "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. analysis.uncertainty is already shown to the user next to review_reasons: put only concerns about this edit that the analysis does not already state into review_reasons, and never restate an analysis uncertainty in other words. Publication copy follows the requested language and template, not subtitle language. overlay_title controls the large title burned in during the first seconds: clip_title shows clip_title, custom shows your own short text, none shows no title. Use custom or none when clip_title is misleading, shouty or not supported by the analysis.", "source_duration_ms": frozen.media.duration_ms, "clip_title": frozen.source.title, "streamer": streamer_context(&frozen.source.login), "analysis": analysis, "language": language, "segments": segments, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base,&frozen.source.title)) }),
             &personal,
         ),
         frames: vec![],
@@ -848,6 +887,10 @@ async fn plan(
         review_reasons,
         edit_plan,
     })
+}
+
+fn streamer_context(login: &str) -> Value {
+    json!({ "twitch_login": login, "rule": "This is the streamer's Twitch login, not proof of an in-game name. In-game names may differ. Never invent, guess or correct a player name; name a player only when the name is clearly readable on screen, otherwise name nobody." })
 }
 
 pub(super) fn planning_text(mut input: Value, personal: &[String]) -> String {
@@ -1340,6 +1383,12 @@ async fn render(
             }) {
                 return Err(AiEditorError::Conflict);
             }
+            let base =
+                super::revision::parent_planning(ctx.pool, ctx.owner, request.parent_version_id)
+                    .await?;
+            if !super::revision::changes_output(&base, &result, &frozen.source.title) {
+                return Err(AiEditorError::RevisionUnchanged);
+            }
         }
     }
     let mut checkpoint = render_one(ctx, frozen, runtime, &result, 0).await?;
@@ -1422,7 +1471,7 @@ async fn render_one(
         let ass = super::validation::build_scaled_subtitle_ass(
             &validated,
             &mapped,
-            &frozen.source.title,
+            &result.overlay_title.resolve(&frozen.source.title),
             &frozen.source.login,
             cam_height,
             result.subtitle_scale_percent,
@@ -1589,7 +1638,7 @@ async fn validate_one(
     let ass = super::validation::build_scaled_subtitle_ass(
         &validated,
         &mapped,
-        &frozen.source.title,
+        &planning.overlay_title.resolve(&frozen.source.title),
         &frozen.source.login,
         cam_height,
         planning.subtitle_scale_percent,

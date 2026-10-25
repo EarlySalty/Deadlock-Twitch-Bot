@@ -41,8 +41,8 @@ const BASE_JOB: AiJobView = {
   review_reasons: ['Prüfe, ob die Untertitel den gesprochenen Begriff korrekt wiedergeben.'],
   original_url: ORIGINAL,
   versions: [
-    { id: 2201, version_no: 1, created_at: '2026-10-11T08:18:03Z', status: 'review', duration_ms: 40600, file_url: OUTPUT, parent_version_id: null, job_id: 1101, variant_index: 0, original_url: ORIGINAL, decisions: [{start_ms:4200,end_ms:16500,description:'Einstieg behalten.'},{start_ms:26500,end_ms:54800,description:'Teamkampf und Reaktion behalten.'}], approved_platforms: [], rating: null },
-    { id: 2202, version_no: 2, created_at: '2026-10-11T08:25:00Z', status: 'failed', duration_ms: null, file_url: null, parent_version_id: 2201, job_id: 1102, variant_index: 0, original_url: null, decisions: [], approved_platforms: [], rating: null },
+    { id: 2201, version_no: 1, created_at: '2026-10-11T08:18:03Z', status: 'review', duration_ms: 40600, file_url: OUTPUT, parent_version_id: null, job_id: 1101, variant_index: 0, original_url: ORIGINAL, decisions: [{start_ms:4200,end_ms:16500,description:'Einstieg behalten.'},{start_ms:26500,end_ms:54800,description:'Teamkampf und Reaktion behalten.'}], approved_platforms: [], rating: null, layout_mode: 'blur_pad', streamer_layout_configured: false },
+    { id: 2202, version_no: 2, created_at: '2026-10-11T08:25:00Z', status: 'failed', duration_ms: null, file_url: null, parent_version_id: 2201, job_id: 1102, variant_index: 0, original_url: null, decisions: [], approved_platforms: [], rating: null, layout_mode: null, streamer_layout_configured: false },
   ],
   failure_code: null,
   failure_message: null,

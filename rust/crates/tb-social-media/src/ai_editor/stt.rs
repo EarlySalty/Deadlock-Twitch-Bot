@@ -479,15 +479,15 @@ impl SttLease {
         if !self.stop_inner().await {
             return Err(SttError::ShutdownFailed);
         }
-        let segments = if output.text.is_empty() {
-            Vec::new()
+        let (segments, language) = if output.text.is_empty() {
+            (Vec::new(), None)
         } else {
-            output.segments
+            (output.segments, output.language)
         };
         Ok(SttTranscript {
             text: output.text,
             segments,
-            language: None,
+            language,
             model: output.model,
             duration_seconds: output.duration_seconds,
             startup_elapsed: self.startup_elapsed,

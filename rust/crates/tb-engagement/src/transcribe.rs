@@ -51,6 +51,7 @@ pub struct TranscriptionResult {
     /// werden sie ohnehin (`timestamp_granularities[]=segment`); frueher
     /// wurden sie nur weggeworfen.
     pub segments: Vec<TranscriptSegment>,
+    pub language: Option<String>,
 }
 
 /// Ein Abschnitt mit eigener Zeit, so wie Whisper ihn liefert.
@@ -379,8 +380,17 @@ impl OpenAiTranscriber {
             engine: "openai_api".to_string(),
             model: genutztes_modell,
             segments,
+            language: reported_language(&payload),
         })
     }
+}
+
+fn reported_language(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("language")
+        .and_then(serde_json::Value::as_str)
+        .map(|language| language.trim().to_ascii_lowercase())
+        .filter(|language| !language.is_empty() && language != "unknown")
 }
 
 fn classify_transport_error(error: reqwest::Error) -> TranscribeError {
@@ -862,6 +872,24 @@ mod tests_segmente {
         }))
         .await;
         assert_eq!(ohne_modell.model, "whisper-1");
+    }
+
+    #[tokio::test]
+    async fn reported_language_is_kept_and_unknown_is_dropped() {
+        let korean = antwort_mit(serde_json::json!({
+            "text": "아, 너 괜찮은데?",
+            "duration": 2.0,
+            "language": "ko"
+        }))
+        .await;
+        assert_eq!(korean.language.as_deref(), Some("ko"));
+        let silence = antwort_mit(serde_json::json!({
+            "text": "",
+            "duration": 2.0,
+            "language": "unknown"
+        }))
+        .await;
+        assert_eq!(silence.language, None);
     }
 
     #[tokio::test]

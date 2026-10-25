@@ -26,6 +26,50 @@ pub(super) struct Planning {
     pub revision_proposal: Option<super::revision::RevisionProposal>,
     #[serde(default)]
     pub variants: Vec<VariantPlan>,
+    #[serde(default)]
+    pub overlay_title: OverlayTitle,
+}
+
+pub(super) const OVERLAY_TITLE_MAX_CHARS: usize = 54;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum OverlayTitleMode {
+    #[default]
+    ClipTitle,
+    Custom,
+    None,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct OverlayTitle {
+    pub mode: OverlayTitleMode,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+impl OverlayTitle {
+    pub fn resolve(&self, clip_title: &str) -> String {
+        match self.mode {
+            OverlayTitleMode::ClipTitle => clip_title.trim().to_owned(),
+            OverlayTitleMode::Custom => self.text.as_deref().unwrap_or("").trim().to_owned(),
+            OverlayTitleMode::None => String::new(),
+        }
+    }
+
+    fn rejection(&self) -> Option<&'static str> {
+        if self.mode != OverlayTitleMode::Custom {
+            return None;
+        }
+        let text = self.text.as_deref().unwrap_or("").trim();
+        if text.is_empty() || text.chars().count() > OVERLAY_TITLE_MAX_CHARS {
+            return Some("overlay title empty or too long");
+        }
+        text.chars()
+            .any(char::is_control)
+            .then_some("overlay title contains control characters")
+    }
 }
 
 fn default_subtitle_scale() -> u16 {
@@ -38,6 +82,8 @@ pub(super) struct VariantPlan {
     pub plan: EditPlan,
     pub platforms: BTreeMap<String, PublicationCopy>,
     pub subtitle_scale_percent: u16,
+    #[serde(default)]
+    pub overlay_title: OverlayTitle,
 }
 
 impl VariantPlan {
@@ -48,6 +94,7 @@ impl VariantPlan {
             subtitle_scale_percent: self.subtitle_scale_percent,
             revision_proposal: None,
             variants: Vec::new(),
+            overlay_title: self.overlay_title.clone(),
         }
     }
 }
@@ -112,11 +159,15 @@ pub(super) fn planning_schema(
         "review_reasons": array(text(limits.max_text_bytes), limits.max_review_reasons),
         "layout": { "type": "string", "enum": ["existing_stable"] },
     }));
+    let overlay = object(json!({
+        "mode": { "type": "string", "enum": ["clip_title", "custom", "none"] },
+        "text": { "type": ["string", "null"], "maxLength": OVERLAY_TITLE_MAX_CHARS },
+    }));
     let variant = object(
-        json!({"plan":plan.clone(),"platforms":object(json!({"youtube":copy.clone(),"tiktok":copy.clone(),"instagram":copy.clone()})),"subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140}}),
+        json!({"plan":plan.clone(),"platforms":object(json!({"youtube":copy.clone(),"tiktok":copy.clone(),"instagram":copy.clone()})),"subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140},"overlay_title":overlay.clone()}),
     );
     object(
-        json!({ "plan": plan, "platforms": object(json!({ "youtube": copy.clone(), "tiktok": copy.clone(), "instagram": copy })), "subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140}, "variants":array(variant,2) }),
+        json!({ "plan": plan, "platforms": object(json!({ "youtube": copy.clone(), "tiktok": copy.clone(), "instagram": copy })), "subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140}, "overlay_title": overlay, "variants":array(variant,2) }),
     )
 }
 
@@ -213,6 +264,9 @@ impl Planning {
         }
         if self.variants.len() > 2 {
             return Err(AiEditorError::plan_rejected("more than two variants"));
+        }
+        if let Some(reason) = self.overlay_title.rejection() {
+            return Err(AiEditorError::plan_rejected(reason));
         }
         for variant in &self.variants {
             variant
@@ -313,5 +367,41 @@ mod hashtag_tests {
         assert!(!hashtag_valid("Dead lock", 64));
         assert!(!hashtag_valid("Dead#lock", 64));
         assert!(!hashtag_valid(&"a".repeat(64), 64));
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::{OverlayTitle, OverlayTitleMode, OVERLAY_TITLE_MAX_CHARS};
+
+    fn custom(text: &str) -> OverlayTitle {
+        OverlayTitle {
+            mode: OverlayTitleMode::Custom,
+            text: Some(text.into()),
+        }
+    }
+
+    #[test]
+    fn overlay_title_modes_resolve_and_bound_custom_text() {
+        assert_eq!(
+            OverlayTitle::default().resolve(" EZ OUTPLAYED "),
+            "EZ OUTPLAYED"
+        );
+        assert_eq!(
+            custom(" Parry-Kette ").resolve("EZ OUTPLAYED"),
+            "Parry-Kette"
+        );
+        let none = OverlayTitle {
+            mode: OverlayTitleMode::None,
+            text: Some("ignored".into()),
+        };
+        assert_eq!(none.resolve("EZ OUTPLAYED"), "");
+        assert!(none.rejection().is_none());
+        assert!(custom("Parry-Kette").rejection().is_none());
+        assert!(custom(" ").rejection().is_some());
+        assert!(custom(&"a".repeat(OVERLAY_TITLE_MAX_CHARS + 1))
+            .rejection()
+            .is_some());
+        assert!(custom("Zeile\neins").rejection().is_some());
     }
 }
