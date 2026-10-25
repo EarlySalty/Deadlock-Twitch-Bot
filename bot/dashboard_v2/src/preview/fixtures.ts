@@ -445,7 +445,7 @@ export const SOCIAL_CLIPS_FIXTURE: SocialClipMitPosting[] = [
   ...entry,
 })) as SocialClipMitPosting[];
 
-export const SOCIAL_PLATFORMS_FIXTURE: PlatformStatus[] = ['youtube', 'tiktok', 'instagram'].map((platform) => ({
+const SOCIAL_STANDARD_PLATFORMS_FIXTURE: PlatformStatus[] = ['youtube', 'tiktok', 'instagram'].map((platform) => ({
   platform, connected: platform !== 'instagram', expired: false, username: platform === 'instagram' ? null : 'preview_creator',
   automatically_renewed: true, uses_global_fallback: platform === 'tiktok',
   capabilities: { upload: true, statistics: platform !== 'tiktok', upload_mode: 'direct', reason: null },
@@ -453,6 +453,12 @@ export const SOCIAL_PLATFORMS_FIXTURE: PlatformStatus[] = ['youtube', 'tiktok', 
     required_upload_scopes: platform === 'youtube' ? ['https://www.googleapis.com/auth/youtube.upload'] : platform === 'tiktok' ? ['video.publish'] : [], missing_upload_scopes: platform === 'youtube' ? [] : platform === 'tiktok' ? ['video.publish'] : null,
     channel_account_required: platform === 'tiktok' },
 }));
+
+export const SOCIAL_PLATFORMS_FIXTURE: PlatformStatus[] = [...SOCIAL_STANDARD_PLATFORMS_FIXTURE, {
+  platform: 'youtube_vod', connected: false, expired: false, username: null,
+  automatically_renewed: true, uses_global_fallback: false,
+  capabilities: { upload: true, statistics: true, upload_mode: 'direct', reason: null },
+}];
 
 const SOCIAL_PLAN_FIXTURE: PostingPlan = {
   streamer_login: 'midcore_live', approval_mode: 'manual', approval_modes: ['manual', 'veto_window', 'full_auto'],

@@ -134,6 +134,7 @@ pub use token::{load_seed_tokens, BotTokenManager, SeedTokens, TokenError};
 pub use types::{ChatMessageEvent, ChatReply, MentionRef, MessageFragment, SendOutcome};
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../test-support/postgres.rs"]
 mod test_postgres;
 

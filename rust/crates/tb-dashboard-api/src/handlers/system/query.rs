@@ -7,6 +7,7 @@
 //!   serverseitig, selbst falls die Lexer-Prüfung umgangen würde).
 //! - Ein NO-SCROLL-Cursor ruft höchstens 200 Zeilen aus PostgreSQL ab.
 //! - SQL-Eingaben sind auf 16 KiB begrenzt; Statements auf 5 s, Locks auf 1 s.
+//!
 //! Die Konsole führt absichtlich SQL von authentifizierten Admins aus. Die
 //! Keyword-Prüfung ist keine SQL-Sandbox; PostgreSQL erzwingt READ ONLY.
 //!

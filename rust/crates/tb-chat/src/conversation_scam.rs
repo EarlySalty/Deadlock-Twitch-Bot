@@ -2377,10 +2377,11 @@ mod tests {
                 &["Hier ist noch eine normale Nachricht."],
             )
             .await;
-            let records = store.records.lock().unwrap();
-            assert_eq!(records.len(), 1);
-            assert_eq!(records[0].verdict, VerdictKind::Clean);
-            drop(records);
+            {
+                let records = store.records.lock().unwrap();
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].verdict, VerdictKind::Clean);
+            }
             let state = guard
                 .states
                 .get(&("testchannel".to_string(), "fehler_user".to_string()));

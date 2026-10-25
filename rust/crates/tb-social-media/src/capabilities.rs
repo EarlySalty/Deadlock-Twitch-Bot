@@ -25,7 +25,7 @@ fn capabilities_for(platform: &str, instagram_ready: bool) -> PlatformCapabiliti
             upload_mode: "draft",
             reason: None,
         },
-        "youtube" => PlatformCapabilities {
+        "youtube" | "youtube_vod" => PlatformCapabilities {
             upload: true,
             statistics: true,
             upload_mode: "upload",

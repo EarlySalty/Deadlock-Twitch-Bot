@@ -100,7 +100,7 @@ async fn revoke_connection(
         row.access_token_enc.as_deref(),
     );
     match platform {
-        "youtube" => {
+        "youtube" | "youtube_vod" => {
             let token = decrypt(
                 cipher,
                 platform,

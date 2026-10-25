@@ -1,3 +1,4 @@
+use tb_social_media::credentials::PLATFORMS as CONNECTION_PLATFORMS;
 static STATUS_MASTER_KEY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct StatusMasterKeyGuard {
@@ -325,6 +326,11 @@ async fn platforms_status_stored_scopes_keep_disabled_connections_and_channel_fa
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     let platforms = body["platforms"].as_array().unwrap();
+    assert_eq!(platforms.len(), CONNECTION_PLATFORMS.len());
+    let platforms: Vec<_> = platforms
+        .iter()
+        .filter(|status| status["platform"] != "youtube_vod")
+        .collect();
     assert_eq!(platforms.len(), 3);
     for status in platforms {
         assert_eq!(status["authorization"]["upload_scope_status"], "sufficient");
@@ -376,13 +382,13 @@ async fn platforms_status_read_errors_return_500_not_disconnected() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     let platforms = body["platforms"].as_array().unwrap();
-    assert_eq!(platforms.len(), PLATFORMS.len());
+    assert_eq!(platforms.len(), CONNECTION_PLATFORMS.len());
     assert!(platforms.iter().all(|status| status["connected"] == false));
     assert!(platforms
         .iter()
         .all(|status| status["authorization"]["upload_scope_status"] == "unknown"));
 
-    for platform in PLATFORMS {
+    for platform in CONNECTION_PLATFORMS {
         let encrypted = cipher
             .encrypt_field(
                 "local-access",

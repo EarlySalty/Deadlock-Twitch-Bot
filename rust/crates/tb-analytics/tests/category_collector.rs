@@ -51,7 +51,7 @@ async fn category_storage_deletions_rollups_preservation_and_report() {
         3
     );
     assert_eq!(
-        category::store_messages(pool, &[first.clone()])
+        category::store_messages(pool, std::slice::from_ref(&first))
             .await
             .unwrap(),
         0
@@ -151,7 +151,7 @@ async fn explicit_source_removal_also_covers_late_shared_chat_copies() {
     let copied = format!("@room-id=20;user-id=30;id=copy;source-room-id=10;source-id=original;tmi-sent-ts={} :viewer!v@v PRIVMSG #sample :Eine kopierte Nachricht für den kontrollierten Datenbanktest.",now.timestamp_millis());
     let row = category::raw_message(&copied, now, "20", "de").unwrap();
     assert_eq!(
-        category::store_messages(&db.pool, &[row.clone()])
+        category::store_messages(&db.pool, std::slice::from_ref(&row))
             .await
             .unwrap(),
         1

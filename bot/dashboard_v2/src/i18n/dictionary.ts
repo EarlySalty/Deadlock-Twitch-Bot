@@ -625,6 +625,8 @@ const EN: Record<string, string> = {
   'Zugang abgelaufen, bitte neu verbinden': 'Access expired, please reconnect',
   'nutzt die Sammelverbindung': 'uses the shared connection',
   'Verlängert sich automatisch.': 'Renews automatically.',
+  'VODs landen nur auf diesem Kanal, Clips weiter auf deinem YouTube-Konto.': 'VODs go only to this channel, clips stay on your YouTube account.',
+  'Optional: Ohne eigenen VOD-Kanal landen VODs auf deinem YouTube-Konto.': 'Optional: without a separate VOD channel, VODs go to your YouTube account.',
   'Bitte bis {datum} neu verbinden.': 'Please reconnect by {datum}.',
   'Neu verbinden': 'Reconnect',
   '{platform} für {streamer} trennen?': 'Disconnect {platform} for {streamer}?',

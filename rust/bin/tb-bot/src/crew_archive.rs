@@ -118,6 +118,7 @@ async fn cleanup_once(pool: &PgPool, discord: &dyn DiscordBackend) -> Result<(),
 }
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../test-support/postgres.rs"]
 mod postgres;
 

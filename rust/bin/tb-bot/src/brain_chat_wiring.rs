@@ -1218,7 +1218,7 @@ mod tests {
         ) -> Result<(), String> {
             if self
                 .fail_finishes
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
                     (left > 0).then(|| left - 1)
                 })
                 .is_ok()
@@ -1483,9 +1483,11 @@ mod tests {
         assert!(response.await.unwrap());
         clock_guard.abort();
         tokio::time::resume();
-        let sends = chat.sends.lock().unwrap();
-        assert_eq!(sends.len(), 1);
-        assert_eq!(sends[0].2, UNAVAILABLE_REPLY);
+        {
+            let sends = chat.sends.lock().unwrap();
+            assert_eq!(sends.len(), 1);
+            assert_eq!(sends[0].2, UNAVAILABLE_REPLY);
+        }
         assert_eq!(log.results.lock().unwrap()[0].1, "Fehler");
         assert_eq!(log.deliveries.lock().unwrap().len(), 1);
         assert!(log.deliveries.lock().unwrap()[0].0);

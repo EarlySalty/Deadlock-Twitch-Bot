@@ -1882,7 +1882,7 @@ fn stored_platform_scopes(raw: Option<&str>) -> Option<Vec<&str>> {
 fn platform_authorization_json(status: &PlatformStatus, has_scope: bool) -> Value {
     let required: &[&str] = match status.platform.as_str() {
         "tiktok" => &["video.upload"],
-        "youtube" => &["youtube.upload"],
+        "youtube" | "youtube_vod" => &["youtube.upload"],
         "instagram" => &[
             "instagram_business_basic",
             "instagram_business_content_publish",
@@ -1895,7 +1895,7 @@ fn platform_authorization_json(status: &PlatformStatus, has_scope: bool) -> Valu
             .copied()
             .filter(|required_scope| {
                 !scopes.iter().any(|scope| {
-                    if status.platform == "youtube" {
+                    if matches!(status.platform.as_str(), "youtube" | "youtube_vod") {
                         matches!(
                             scope
                                 .strip_prefix("https://www.googleapis.com/auth/")
@@ -3851,7 +3851,14 @@ fn build_oauth_manager(pool: PgPool) -> Option<OAuthManager> {
 }
 
 fn is_supported_platform(p: &str) -> bool {
-    matches!(p, "tiktok" | "youtube" | "instagram")
+    matches!(p, "tiktok" | "youtube" | "youtube_vod" | "instagram")
+}
+
+fn oauth_callback_platform(platform: &str) -> &str {
+    match platform {
+        "youtube_vod" => "youtube",
+        other => other,
+    }
 }
 
 /// `GET /social-media/oauth/start/{platform}` — OAuth-Flow starten (Redirect).
@@ -3889,7 +3896,7 @@ pub async fn oauth_start_handler(
     let redirect_uri = format!(
         "{}/social-media/oauth/callback/{}",
         oauth_public_origin(),
-        platform
+        oauth_callback_platform(&platform)
     );
     match mgr
         .generate_auth_url(
