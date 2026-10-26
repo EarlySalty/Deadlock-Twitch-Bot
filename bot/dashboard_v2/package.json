@@ -26,7 +26,7 @@
     "@tanstack/react-query": "^5.104.0",
     "framer-motion": "^13.5.1",
     "lucide-react": "^1.61.0",
-    "react": "^19.2.8",
+    "react": "^19.3.1",
     "react-dom": "19.3.0",
     "recharts": "^3.10.1",
     "rrweb": "^2.2.0",
