@@ -61,7 +61,7 @@ pub enum AiEditorError {
     Provider,
     #[error("Der KI-Zugang ist auf dem Server nicht vollständig eingerichtet.")]
     ProviderAccess,
-    #[error("Der Clip ist zu lang, um ihn per KI zu bearbeiten.")]
+    #[error("Dieser Clip ist für die KI-Bearbeitung zu umfangreich.")]
     RequestTooLarge,
     #[error("Die Untertitel konnten nicht erstellt werden.")]
     Transcription,

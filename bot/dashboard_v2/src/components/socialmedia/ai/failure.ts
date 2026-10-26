@@ -16,7 +16,7 @@ const explanations: Record<string, string> = {
   consent_missing: 'Die erforderliche Freigabe für externe KI fehlt.',
   interrupted: 'Die Bearbeitung wurde durch eine Störung auf unserer Seite unterbrochen.',
   revision_unchanged: 'Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.',
-  request_too_large: 'Der Clip ist zu lang, um ihn per KI zu bearbeiten. Es wurde keine neue Fassung erstellt.',
+  request_too_large: 'Dieser Clip ist für die KI-Bearbeitung zu umfangreich. Es wurde keine neue Fassung erstellt.',
 };
 
 const providerAccessTexts: Record<AiProviderAccess, string> = {

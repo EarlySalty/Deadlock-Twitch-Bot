@@ -990,7 +990,7 @@ impl JobFailure {
                 "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt."
             }
             Self::RequestTooLarge => {
-                "Der Clip ist zu lang, um ihn per KI zu bearbeiten. Es wurde keine neue Fassung erstellt."
+                "Dieser Clip ist für die KI-Bearbeitung zu umfangreich. Es wurde keine neue Fassung erstellt."
             }
         }
     }
