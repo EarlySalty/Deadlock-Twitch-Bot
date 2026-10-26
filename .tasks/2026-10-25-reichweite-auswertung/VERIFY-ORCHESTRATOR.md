@@ -54,14 +54,14 @@ For ordinary viewers (fewer than 10 channels): a silent newcomer returns at 15.5
 
 ## V5. Competition effect from P12 does not survive a within-streamer check
 
-P12 reported 0.80x new presences per viewer when 6-10 German Deadlock streams are live instead of 1-5 (pooled ratio, month x hour strata). Pooled per-viewer rates fall steeply with channel size, so the ratio mixes composition with competition. Recomputed on the same 16 s stream-minute panel (`verify-v5-competition.py`): new presences over the next 15 minutes per stream-minute, compared inside cells of streamer x viewer bin x hour band x weekend, at least 30 minutes on each side, weighted per streamer, bootstrap over streamers.
+P12 reported 0.80x new presences per viewer when 6-10 German Deadlock streams are live instead of 1-5 (pooled ratio, month x hour strata). Pooled per-viewer rates fall steeply with channel size, so the ratio mixes composition with competition. Recomputed on the same 16 s stream-minute panel (`verify-v5-competition.py`): new presences over the next 15 minutes per stream-minute, compared inside cells of streamer x viewer bin x hour band x weekend, at least 30 minutes on each side, weighted per streamer, bootstrap over streamers. Viewer bins are contiguous on the averaged viewer value (under 3, 3 to under 5, 5 to under 10, 10 to under 20, 20 to under 50, 50 and more); an earlier version used integer ranges and dropped fractional values between them.
 
 | Contrast | Streamers | Mean difference | 95 % CI | Median | Share negative |
 |---|---|---|---|---|---|
-| 6-10 live minus 1-5 live | 329 | +0.027 | -0.003 to +0.062 | 0.0 | 27.7 % |
-| 11+ live minus 1-5 live | 196 | +0.003 | -0.046 to +0.065 | 0.0 | 43.4 % |
+| 6-10 live minus 1-5 live | 337 | +0.027 | -0.001 to +0.064 | 0.0 | 26.4 % |
+| 11+ live minus 1-5 live | 199 | +0.004 | -0.045 to +0.066 | 0.0 | 43.2 % |
 
-Baseline at 1-5 live: 0.11 new presences per 15 min for 1-2 viewers, 0.21 for 5-9, 0.46 for 20-49. No measurable cost of more German streams being live. The synthesis must not claim that avoiding busy slots wins viewers.
+Baseline at 1-5 live: 0.11 new presences per 15 min under 3 viewers, 0.21 for 5 to under 10, 0.46 for 20 to under 50. No measurable cost of more German streams being live. The synthesis must not claim that avoiding busy slots wins viewers.
 
 ## V6. Early-stream jumps are returning viewers, not new discovery
 
@@ -78,30 +78,30 @@ The opening burst is almost entirely regulars arriving after the go-live notific
 
 ## V7. The reply-to-follow gap from P08 is mostly reverse causation; a smaller association remains
 
-P08 reported a follow within 60 minutes for 9.3 % of first messages with a broadcaster message within 3 minutes, against 3.0 % without. Recheck with the order of message, reply and follow respected (`queries-VERIFY.sql` V7, `verify-v7-reply-follow.py`). Logins seen in 10+ channels are excluded, follow-tracked channels only, April and May 2026 skipped (no follow rows), strata are channel x chat activity in the 10 minutes before the message (0-4, 5-19, 20+ messages). In the reply arm the clock starts at the broadcaster message, and events whose follow came at or before it are dropped. Messages without a reply get the same landmark: each is evaluated at the nine deciles of the reply delays in its activity stratum, counting only at landmarks it reaches without having followed (fractional weights). Mantel-Haenszel, 1,000 bootstrap draws over channels. Placebo: among messages without a reply, those where the broadcaster had written in the 3 minutes before, against those where not.
+P08 reported a follow within 60 minutes for 9.3 % of first messages with a broadcaster message within 3 minutes, against 3.4 % without. Recheck with the order of message, reply and follow respected (`queries-VERIFY.sql` V7, `verify-v7-reply-follow.py`). Logins seen in 10+ channels are excluded, follow-tracked channels only, first messages whose 24-hour follow window touches the follow collection gap (no follow rows from 2026-03-15 18:00 to 2026-06-16 16:45 UTC) or ends after the cutoff (2026-10-25 17:28 UTC) dropped, strata are channel x chat activity in the 10 minutes before the message (0-4, 5-19, 20+ messages). In the reply arm the clock starts at the broadcaster message, and events whose follow came at or before it are dropped. Messages without a reply get the same landmark: each is evaluated at the nine deciles of the reply delays in its activity stratum, counting only at landmarks it reaches without having followed (fractional weights). Mantel-Haenszel, 1,000 bootstrap draws over channels. Placebo: among messages without a reply, those where the broadcaster had written in the 3 minutes before, against those where not.
 
 | Check | Events (broadcaster message within 3 min) | Quick follows in the reply arm: before / after the broadcaster message | Follow within 60 min from the landmark, reply vs none | MH 60 min (95 % CI) | MH 24 h (95 % CI) | Placebo MH 60 min (95 % CI) |
 |---|---|---|---|---|---|---|
-| V7b: first message in a session, 58 channels | 6,386 (394) | 38 / 14 of 52 | 5.34 % (356) vs 2.92 % (5,918) | +2.26 pp (-0.19 to +4.69) | +2.40 pp (-0.22 to +4.88) | +0.10 pp (-2.37 to +3.59) |
-| V7a: first message ever in the channel, 46 channels | 2,074 (113) | 32 / 14 of 46 | 22.22 % (81) vs 8.16 % (1,906) | +11.39 pp (+4.08 to +16.82) | +10.96 pp (+2.10 to +16.55) | -0.72 pp (-7.75 to +13.75) |
+| V7b: first message in a session, 57 channels | 6,120 (390) | 38 / 14 of 52 | 5.40 % (352) vs 3.05 % (5,658) | +2.28 pp (-0.32 to +4.76) | +2.42 pp (-0.25 to +4.92) | +0.06 pp (-2.25 to +2.77) |
+| V7a: first message ever in the channel, 44 channels | 1,999 (110) | 32 / 14 of 46 | 23.08 % (78) vs 8.47 % (1,835) | +12.07 pp (+3.14 to +18.05) | +11.61 pp (+1.05 to +17.57) | -0.79 pp (-7.70 to +15.62) |
 
-Quick follows are follows within 3 minutes of the first message. Placebo rates: V7b 3.40 % (weighted n 255) vs 2.90 % (5,663); V7a 10.69 % (73) vs 8.06 % (1,833).
+Quick follows are follows within 3 minutes of the first message. Placebo rates: V7b 3.43 % (weighted n 253) vs 3.03 % (5,405); V7a 10.84 % (72) vs 8.37 % (1,763). A chatter who followed inside the collection gap shows no follow row and counts as not yet following afterwards; this affects both arms alike.
 
-Most quick follows in the reply arm come before the broadcaster message: the follow alert prompts the thank-you, so the raw 3x gap is largely reverse causation. Measured from the reply on, a smaller lift remains: +2.3 pp for any first message in a session (the interval touches zero) and +11 pp for a first message ever in the channel (81 replies). The placebo is null, so the lift is not just the broadcaster reading chat at that moment. It is still an association from a small arm: streamers answer some newcomers and not others for reasons the data does not see (a line that invites a reply, a quiet moment). The synthesis may call answering a newcomer's first line soon a likely-helpful habit, not a measured lever. An earlier version of this check dropped every follow inside the 3-minute window regardless of order and found no lift; that design also removed follows that came after the reply and is replaced.
+Most quick follows in the reply arm come before the broadcaster message: the follow alert prompts the thank-you, so the raw gap is largely reverse causation. Measured from the reply on, a smaller lift remains: +2.3 pp for any first message in a session (the interval touches zero) and +12 pp for a first message ever in the channel (78 replies). The placebo is null, so the lift is not just the broadcaster reading chat at that moment. It is still an association from a small arm: streamers answer some newcomers and not others for reasons the data does not see (a line that invites a reply, a quiet moment). The synthesis may call answering a newcomer's first line soon a likely-helpful habit, not a measured lever. An earlier version of this check dropped every follow inside the 3-minute window regardless of order and found no lift; that design also removed follows that came after the reply and is replaced.
 
-## V8. Ending near the peak and the next start: smaller, but it holds
+## V8. Ending near the peak does not lift the next start
 
-P11 reported +0.120 (in units of the streamer's median viewers) on the next start when a session ends above its own median end-to-peak ratio. Recheck (`queries-VERIFY.sql` V8, `verify-v8-end-next.py`): sessions of at least 1 h since 2026-01-09, next session within 48 h and first sampled by minute 5, three earlier sessions known, streamer fixed effects, values capped at 5x the median, bootstrap over streamers.
+P11 reported +0.120 (in units of the streamer's median viewers) on the next start when a session ends above its own median end-to-peak ratio. Recheck (`queries-VERIFY.sql` V8, `verify-v8-end-next.py`): rows of the same stream_id are deduplicated, and sessions of one streamer that start within 10 minutes of the previous end (or overlap it) are merged into one broadcast, so a reconnect is not counted as the next stream. Broadcasts of at least 1 h since 2026-01-09, next broadcast within 48 h and first sampled by minute 5, three earlier broadcasts known, streamer fixed effects, values capped at 5x the median, bootstrap over streamers (300 resamples).
 
 | Model | Pairs | Streamers | Effect on next start (95 % CI) |
 |---|---|---|---|
-| Raw | 3,228 | 80 | +0.064 (+0.033 to +0.105) |
-| + current average, current start, mean of last 3 sessions | 3,228 | 80 | +0.059 (+0.031 to +0.095) |
-| + duration and current peak | 3,228 | 80 | +0.067 (+0.040 to +0.101) |
-| Placebo: same flag vs the PREVIOUS session's start | 3,143 | 73 | +0.005 (-0.026 to +0.035) |
-| Channels with median 5+ viewers, full model | 442 | 12 | +0.086 (+0.021 to +0.181) |
+| Raw | 3,059 | 74 | +0.010 (-0.011 to +0.033) |
+| + current average, current start, mean of last 3 broadcasts | 3,059 | 74 | +0.007 (-0.014 to +0.026) |
+| + duration and current peak | 3,059 | 74 | +0.007 (-0.015 to +0.025) |
+| Placebo: same flag vs the PREVIOUS broadcast's start | 3,018 | 73 | -0.006 (-0.025 to +0.017) |
+| Channels with median 5+ viewers, full model | 422 | 13 | +0.038 (-0.009 to +0.089) |
 
-The effect is about half of P11's figure but survives level, duration and peak controls, and the placebo against the earlier session is null, so it is not a channel-level trend. A stream that still holds most of its peak audience at the end is followed by a start about 6 to 9 % of the usual audience higher. This supports ending while the room is still full instead of streaming into an emptying room; it does not show that cutting a stream short helps, because longer streams also collect more viewers (P03, P04).
+Null result. An earlier version of this check found +0.06 to +0.07 on session pairs without the merge. Of the 6,031 pairs it exported, 681 had the next start within 10 minutes of the end and 495 overlapped the current session: those were reconnects of one broadcast, where the "next start" is the audience that was still there. With reconnects merged, the effect is +0.007 to +0.010 with intervals that include zero. Ending while the room is still full is not a measured lever for the next stream.
 
 ## V9. Title effects from P01 shrink to near zero against nearby sessions
 
@@ -134,7 +134,7 @@ Inside the same stream, neither typing in chat (also to break a silence) nor an 
 
 ## V11. P07's "social messages draw more replies" is a busy-moment effect
 
-P07 reported a 2-minute follow-up lift of 1.12 for Social viewer messages (62 % of streamers above 1) and 0.75 for Game-Related. Lift there is the label mean over the session mean, so a label that tends to be posted when chat is already fast gets a lift without causing anything. Recheck (`queries-VERIFY.sql` V11, `verify-v11-followup.py`): 305,446 messages from 2026-02-01 to 2026-10-04, logins in 30+ channels removed, viewer messages from 5 minutes after the first tracked message to 2 minutes before the last (265,364 messages, 518 streamers). Follow-up = messages by other chatters (broadcaster included) in the next 2 minutes. Comparison against all other labelled viewer messages in the same session and with the same number of messages by others in the 2 minutes before (buckets 0, 1-2, 3-5, 6-10, 11-20, 21+); bootstrap over streamers.
+P07 reported a 2-minute follow-up lift of 1.10 for Social viewer messages (60 % of streamers above 1) and 0.70 for Game-Related. Lift there is the label mean over the session mean, so a label that tends to be posted when chat is already fast gets a lift without causing anything. Recheck (`queries-VERIFY.sql` V11, `verify-v11-followup.py`): 305,446 messages from 2026-02-01 to 2026-10-04, logins in 30+ channels removed, viewer messages from 5 minutes after the first tracked message to 2 minutes before the last (265,364 messages, 518 streamers). Follow-up = messages by other chatters (broadcaster included) in the next 2 minutes. Comparison against all other labelled viewer messages in the same session and with the same number of messages by others in the 2 minutes before (buckets 0, 1-2, 3-5, 6-10, 11-20, 21+); bootstrap over streamers.
 
 | Label | Naive lift (median of streamers, share above 1) | Same session and same prior speed: relative follow-up (95 % CI) |
 |---|---|---|
@@ -145,4 +145,4 @@ P07 reported a 2-minute follow-up lift of 1.12 for Social viewer messages (62 % 
 | Game-Related | 0.87 (0.32) | -19.2 % (-23.6 to -4.1) |
 | Statement | 0.97 (0.40) | -19.4 % (-25.7 to -3.8) |
 
-The naive lift reproduces the direction. Holding chat speed equal, Social messages draw no more follow-up than other messages; the 1.12 is when they are posted, not what they do. Game talk and longer statements stay below other messages at equal speed, short reactions slightly above. Practical reading: chat replies follow the room's tempo. Only short reactions sit slightly above other messages at equal speed (+4.7 %, CI +0.4 to +6.4), too small to build a tip on; no tested message type is a reply lever. The confidence intervals are wide and skewed because a few large channels carry much of the weight.
+The naive lift reproduces the direction. Holding chat speed equal, Social messages draw no more follow-up than other messages; the 1.10 is when they are posted, not what they do. Game talk and longer statements stay below other messages at equal speed, short reactions slightly above. Practical reading: chat replies follow the room's tempo. Only short reactions sit slightly above other messages at equal speed (+4.7 %, CI +0.4 to +6.4), too small to build a tip on; no tested message type is a reply lever. The confidence intervals are wide and skewed because a few large channels carry much of the weight.

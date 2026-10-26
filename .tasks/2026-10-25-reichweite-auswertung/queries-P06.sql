@@ -36,11 +36,11 @@ nc AS (
   SELECT fm2.s, fm2.c, fm2.mid, fm2.sid, fm2.t0,
          ss.started_at AS s_start,
          ss.started_at + make_interval(secs => coalesce(ss.duration_seconds, 0)) AS s_end,
-         ss.unique_chatters, ss.peak_viewers, ss.avg_viewers
+         ss.unique_chatters, ss.peak_viewers, ss.avg_viewers,
+         coalesce(pp.first_pres < ss.started_at, false) AS prior_silent
   FROM fm2
   JOIN twitch_stream_sessions ss ON ss.id = fm2.sid
   LEFT JOIN pp ON pp.s = fm2.s AND pp.c = fm2.c
-  WHERE pp.first_pres IS NULL OR pp.first_pres >= ss.started_at
 )
 , co AS (
   SELECT nc.s, nc.c, nc.sid, nc.t0, x.session_id AS xs, x.message_ts AS xt
@@ -75,7 +75,7 @@ chan AS (
   WHERE started_at >= '2026-07-01' AND started_at < '2026-10-26'
   GROUP BY streamer_login
 )
-SELECT nc.s AS streamer_login, nc.c AS chatter_login, nc.sid AS session_id, nc.t0,
+SELECT nc.s AS streamer_login, nc.c AS chatter_login, nc.sid AS session_id, nc.t0, nc.prior_silent,
        nc.s_start, nc.s_end, nc.unique_chatters, nc.peak_viewers, nc.avg_viewers,
        chan.med_avg_viewers, chan.sessions_jul_oct,
        extract(epoch FROM nc.t0 - nc.s_start) / 60.0 AS min_into_stream,
@@ -114,7 +114,6 @@ nc AS (
   FROM fm2
   JOIN twitch_stream_sessions ss ON ss.id = fm2.sid
   LEFT JOIN pp ON pp.s = fm2.s AND pp.c = fm2.c
-  WHERE pp.first_pres IS NULL OR pp.first_pres >= ss.started_at
 )
 SELECT nc.s AS streamer_login, nc.c AS chatter_login, nc.sid AS session_id,
        count(y.id) FILTER (WHERE y.message_ts > nc.t0 - interval '5 minutes' AND y.message_ts <= nc.t0) AS msgs_pre5,
@@ -154,7 +153,6 @@ nc AS (
   FROM fm2
   JOIN twitch_stream_sessions ss ON ss.id = fm2.sid
   LEFT JOIN pp ON pp.s = fm2.s AND pp.c = fm2.c
-  WHERE pp.first_pres IS NULL OR pp.first_pres >= ss.started_at
 )
 SELECT nc.s AS streamer_login, nc.c AS chatter_login, nc.sid AS session_id,
        (SELECT l.label FROM twitch_chat_message_labels l WHERE l.message_id = nc.mid) AS first_label,

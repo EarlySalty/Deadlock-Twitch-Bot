@@ -39,6 +39,7 @@ WITH msg AS (
          WHEN m.chatter_login LIKE '%bot' OR m.chatter_login IN ('streamelements','streamlabs') THEN 'bot'
          ELSE 'viewer' END AS role
   FROM twitch_chat_messages m
+  WHERE m.message_ts >= '2026-02-01' AND m.message_ts < '2026-10-05'
 ),
 firsts AS (
   SELECT msg.*, (message_ts = min(message_ts) OVER (PARTITION BY session_id, chatter_login)) AS is_first
@@ -905,6 +906,7 @@ WITH multi30 AS (SELECT chatter_login FROM twitch_chat_messages WHERE message_ts
          WHEN m.chatter_login IN (SELECT chatter_login FROM multi30) OR m.chatter_login LIKE '%bot' OR m.chatter_login IN ('streamelements','streamlabs') THEN 'bot'
          ELSE 'viewer' END AS role
   FROM twitch_chat_messages m
+  WHERE m.message_ts >= '2026-02-01' AND m.message_ts < '2026-10-05'
 ),
 firsts AS (
   SELECT msg.*, (message_ts = min(message_ts) OVER (PARTITION BY session_id, chatter_login)) AS is_first

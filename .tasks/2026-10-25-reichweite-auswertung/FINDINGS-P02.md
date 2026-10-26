@@ -11,7 +11,7 @@ Which tags, tag combinations and tag counts go with more viewers, more first-tim
 - **twitch_stream_sessions**, German Deadlock universe, 2026-03-12 to 2026-10-25. One row per stream_id after dedupe (max duration, then max id). 9,658 sessions, 1,531 streamers, 1,047 sessions with empty tags, 2,473 with null follower_delta.
 - **Main analysis:** sessions of at least 30 minutes: 8,421 sessions, 1,448 streamers (138 with 12 or more sessions).
 - **Monthly sessions:** Mar 1,188; Apr 1,420; May 1,233; Jun 696; Jul 791; Aug 1,196; Sep 967; Oct (to 25th) 2,167.
-- **Chat fields:** ftc is zero in March to May 2026 and populated from June. Chat window: sessions from 2026-06-22 with at least 30 minutes, 4,359 sessions, 971 streamers.
+- **Chat counts:** the session fields `unique_chatters` and `first_time_chatters` are not used. They include lurker rows (P01): in the chat window the field sums to 66,452 chatters, while only 18,622 logins sent at least one message. Chat counts come from twitch_session_chatters instead: chatters = logins with `messages >= 1`, first-time chatters = the same with `is_first_time_streamer`, bots excluded (logins present in 30 or more channels in the window). Sessions without any tracked chatter row (131) count as missing, not zero. Chat window: sessions from 2026-06-22 with at least 30 minutes, 4,359 sessions, 971 streamers.
 - **follower_delta:** available from March 2026.
 - **Category:** category_snapshots_normalized, time-weighted viewers (sum of viewer_count times sample_seconds over sum of sample_seconds). Rows exist only for 2026-10-09 to 2026-10-25 (17 days). Per-day exports for 2026-09-27 to 2026-10-08 returned no rows. Universe: 36,223 channels, 544 German.
 - **twitch_stats_category tag pairs:** exported monthly (Feb to Oct) for a census. Not used in the reported effects.
@@ -71,26 +71,28 @@ Class C buckets have 1 to 3 streamers each and are not interpretable.
 
 ### 4. Chat window (sessions from 2026-06-22), class A
 
+ftc and uc are message-based counts (see Data used).
+
 | Tags | ftc effect (n, p) | uc/avg effect (n, p) |
 |---|---|---|
-| 0 | +0.213 (29, 0.087) | +0.081 (28, 0.036) |
-| 1-3 | -0.167 (18, 0.481) | +0.057 (17, 1.000) |
-| 4-7 | -0.213 (37, 0.099) | -0.078 (33, 0.080) |
-| 8-10 | +0.151 (12, 0.774) | +0.063 (10, 0.754) |
+| 0 | +0.000 (27, 1.000) | +0.081 (24, 0.839) |
+| 1-3 | -0.039 (16, 0.424) | +0.178 (16, 0.804) |
+| 4-7 | +0.044 (34, 0.860) | -0.129 (29, 0.265) |
+| 8-10 | -0.178 (12, 0.774) | -0.129 (9, 1.000) |
 
 Named families, all classes, chat window (median effect, n, p):
 
 | Family | ftc (n, effect, p) | uc/avg (n, effect, p) |
 |---|---|---|
-| Deutsch | 75, -0.218, 0.101 | 69, -0.057, 0.470 |
-| German | 21, +0.390, 0.664 | 14, +0.364, 0.424 |
-| English | 30, +0.048, 1.000 | 28, +0.196, 0.572 |
-| Deadlock | 41, +0.060, 0.875 | 35, +0.312, 0.090 |
-| Gaming | 18, -0.178, 0.815 | 15, +0.158, 1.000 |
-| Ranked | 10, +0.011, 1.000 | 10, +0.136, 0.754 |
-| DropsEnabled | 34, -0.810, 0.007 | 28, -0.195, 0.572 |
+| Deutsch | 72, +0.311, 0.120 | 60, +0.122, 0.519 |
+| German | 20, +0.029, 1.000 | 15, +0.156, 0.607 |
+| English | 28, +0.145, 0.701 | 20, +0.154, 0.824 |
+| Deadlock | 41, +0.000, 1.000 | 34, +0.149, 0.864 |
+| Gaming | 18, +0.203, 0.481 | 14, +0.270, 0.180 |
+| Ranked | 10, +0.205, 0.344 | 6, +0.319, 0.688 |
+| DropsEnabled | 37, -0.159, 0.175 | 33, -0.567, 0.296 |
 
-DropsEnabled control: the ftc effect is a time confound. The window holds 111 DropsEnabled sessions (58 streamers), 53 of them in October. Across 50 streamer-months, the ftc median raw difference is 0.0 (13 positive, 23 negative, p=0.132); uc median raw difference is -1.0 (16 positive, 28 negative, p=0.096). Raw medians: ftc 0.0 (drops) vs 1.0 (no drops); uc 3 vs 6.
+DropsEnabled control: the window holds 111 DropsEnabled sessions (58 streamers), 53 of them in October. Across 50 streamer-months with both kinds of session, the ftc median raw difference is -0.41 (18 positive, 26 negative, p=0.291). The chatter count (uc) median raw difference is -1.0 (11 positive, 33 negative, p=0.001, uncorrected): within the same streamer and month, DropsEnabled sessions have about one real chatter fewer. Raw medians: ftc 1 vs 1; uc 2 vs 2.
 
 ### 5. Category, within-channel (2026-10-09 to 2026-10-25)
 
@@ -123,10 +125,10 @@ Universe: 36,223 channels, 544 German. 131 tags tested; all BH q = 1.00.
 ## Actionable tips
 
 1. **Do not change tags to gain viewers.** No tag or count shows a measurable viewer effect (sections 1 to 3). Closest candidate: DropsEnabled, +0.163 (n=14, p=0.057). Confidence: low.
-2. **The German tag does not measurably help discovery or viewers.** Viewers -0.083 (n=53, CI [-0.205, +0.052]); ftc -0.218 (n=75, CI [-0.478, 0.000], p=0.101). Confidence: medium that no large effect exists; low for the direction of any small one.
-3. **DropsEnabled is an observation, not a lever.** Class A shows +0.287 (n=9, p=0.039, uncorrected), the same-week control gives +0.102 (n=35, p=0.175), and the chat effect disappears under the streamer-month control. Confidence: low.
+2. **The German tag does not measurably help discovery or viewers.** Viewers -0.083 (n=53, CI [-0.205, +0.052]); ftc +0.311 (n=72, CI [-0.020, +0.603], p=0.120). Confidence: medium that no large viewer effect exists; low for the direction of any chat effect.
+3. **DropsEnabled is an observation, not a lever.** Class A shows +0.287 viewers (n=9, p=0.039, uncorrected) and the same-week control gives +0.102 (n=35, p=0.175). In the same streamer-month, DropsEnabled sessions have about one real chatter fewer (median -1.0, 11 vs 33 streamer-months, p=0.001, uncorrected). Drops may add watchers who do not talk. Confidence: low for viewers, low to medium for fewer chatters.
 4. **No tag-count target.** Class A 4-7 tags -0.119 (n=63, p=0.207); 0 tags +0.109 (n=38, p=0.418). Confidence: low.
-5. **Chat per viewer:** 0-tag sessions +0.081 uc/avg (n=28, p=0.036, uncorrected, one of many chat comparisons). Do not act on it. Confidence: low.
+5. **No tag count changes chat per viewer.** With message-based chatter counts, 0-tag sessions show +0.081 uc/avg (n=24, p=0.839) and 4-7 tags -0.129 (n=29, p=0.265). The earlier 0-tag signal (p=0.036) came from the lurker-inflated session field and is gone. Confidence: low to medium that no large effect exists.
 6. **Underused category tags (rerun, arcraiders, lash) are candidates for a later controlled check, not for action.** Rerun is the only raw p below 0.05 among positive candidates, and it does not survive correction. Confidence: low.
 7. **Tag edits have no measurable viewer cost or gain.** Median -0.086 with CI [-0.238, +0.165]. Confidence: low to medium that there is no large effect.
 8. **No tag tip for follower gains.** The metric is tie-dominated.
@@ -135,7 +137,7 @@ Universe: 36,223 channels, 544 German. 131 tags tested; all BH q = 1.00.
 
 - Association only. Tags are chosen by the streamer, not randomised.
 - Time confound: DropsEnabled sessions cluster in October, where most chat-window data sits.
-- Chat coverage starts 2026-06-22. Chat results rest on 4,359 sessions, most in October.
+- Chat coverage starts 2026-06-22. Chat results rest on 4,359 sessions, most in October. Chat counts are message-based from twitch_session_chatters; the session fields are not used.
 - Category covers 17 days only (2026-10-09 to 2026-10-25).
 - Size: support is mostly class A (13 of 17 events; 36 of 58 DropsEnabled streamers). Classes B and C are thin; class D is not estimable. Results mainly describe channels under about 20 average viewers.
 - Multiple comparisons: only the category run is corrected (BH over 131). Other p-values are uncorrected. Cells with p from 0.03 to 0.09 must not be read as findings.
@@ -146,7 +148,7 @@ Universe: 36,223 channels, 544 German. 131 tags tested; all BH q = 1.00.
 
 - Early German discovery effect (ftc -0.408) was an artifact of empty-tag rows and untracked chat fields. Dropped.
 - Single-tag ftc column is invalid (tied percentile ranks, median 0). Replaced by the mean-normalised window run (section 4).
-- DropsEnabled ftc effect (-0.810, p=0.007) disappears under the streamer-month control (p=0.132).
+- Session chat fields: `unique_chatters` and `first_time_chatters` include lurker rows (66,452 field chatters vs 18,622 message senders in the window). The earlier chat results built on them (DropsEnabled ftc -0.810, p=0.007; 0-tag uc/avg +0.081, p=0.036) are withdrawn and replaced by the message-based run in section 4.
 - Follower delta: tie-dominated, no signal.
 - Category: no tag survives BH.
 - Tag-set change placebo does not separate from the event effect.
@@ -155,6 +157,6 @@ Universe: 36,223 channels, 544 German. 131 tags tested; all BH q = 1.00.
 
 ## Files
 
-- Queries: /home/nathanael/.worktrees/twitch-reichweite/.tasks/2026-10-25-reichweite-auswertung/queries-P02.sql (sessions export, tag-pair template, per-day category export template; date windows as placeholders).
+- Queries: /home/nathanael/.worktrees/twitch-reichweite/.tasks/2026-10-25-reichweite-auswertung/queries-P02.sql (sessions export, message-based chatter counts per session, tag-pair template, per-day category export template; date windows as placeholders).
 - FINDINGS-P02.md: not written (Write rejected). This text is the deliverable.
 - Scratch exports and scripts (not deliverables): /tmp/reichweite-scratch/P02/

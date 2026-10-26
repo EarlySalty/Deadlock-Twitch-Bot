@@ -7,10 +7,10 @@ rows = SM["rows"]
 
 
 def vbin(v):
-    for lo, hi, lab in ((1, 2, "1-2"), (3, 4, "3-4"), (5, 9, "5-9"), (10, 19, "10-19"), (20, 49, "20-49"), (50, 10**9, "50+")):
-        if lo <= v <= hi:
+    for hi, lab in ((3, "1-2"), (5, "3-4"), (10, "5-9"), (20, "10-19"), (50, "20-49")):
+        if v < hi:
             return lab
-    return None
+    return "50+"
 
 
 def nbin(n):
@@ -35,8 +35,6 @@ for r in rows:
     if p is None or v is None or v <= 0 or n is None or n < 1:
         continue
     vb = vbin(v)
-    if vb is None:
-        continue
     key = (r[ix["streamer"]], vb, hband(r[ix["hour"]]), r[ix["weekday"]] >= 5)
     c = cells[key][nbin(n)]
     c[0] += 1

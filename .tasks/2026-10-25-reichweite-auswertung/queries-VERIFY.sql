@@ -221,8 +221,8 @@ ev as (
   left join fol on fol.login = fe.streamer_login and fol.follower_login = fe.chatter_login
   left join reach r on r.chatter_login = fe.chatter_login
   where fe.first_ts >= trk.t0
-    and fe.first_ts < now() - interval '1 day'
-    and not (extract(month from fe.first_ts) in (4, 5) and extract(year from fe.first_ts) = 2026)
+    and fe.first_ts <= timestamptz '2026-10-25 17:28:00+00' - interval '24 hours'
+    and not (fe.first_ts > timestamptz '2026-03-15 18:00:00+00' - interval '24 hours' and fe.first_ts < timestamptz '2026-06-16 16:45:00+00')
     and coalesce(r.n_ch, 0) < 10
     and (fol.fol_at is null or fol.fol_at >= fe.first_ts)
 )
@@ -234,25 +234,50 @@ select md5(streamer_login) as st,
        bc_pre
 from ev;
 
--- V8 end-to-peak ratio and the next start, session pairs within 48 h (streamer fixed effects in verify-v8-end-next.py)
-with s as (
-  select id, streamer_login, started_at, ended_at, duration_seconds,
-         start_viewers, peak_viewers, end_viewers, avg_viewers
+-- V8 end-to-peak ratio and the next start on merged broadcasts (stream_id deduplicated, sessions within 10 min of the previous end merged), pairs within 48 h (streamer fixed effects in verify-v8-end-next.py)
+with base as (
+  select id, stream_id, streamer_login, started_at, ended_at,
+         coalesce(ended_at, started_at + make_interval(secs => duration_seconds)) as end_at,
+         duration_seconds, start_viewers, peak_viewers, end_viewers, avg_viewers,
+         row_number() over (partition by stream_id order by duration_seconds desc nulls last, id desc) as rn
   from twitch_stream_sessions
-  where started_at >= '2026-01-09' and ended_at is not null
-    and duration_seconds >= 3600 and peak_viewers > 0 and avg_viewers is not null
+  where started_at >= '2026-01-09'
 ),
-med as (
-  select streamer_login, percentile_cont(0.5) within group (order by avg_viewers) as m, count(*) as n
-  from s group by 1
+u as (
+  select * from base where rn = 1
+),
+o as (
+  select u.*,
+         max(end_at) over (partition by streamer_login order by started_at, id rows between unbounded preceding and 1 preceding) as prev_max_end
+  from u
+),
+g as (
+  select o.*,
+         sum(case when prev_max_end is null or started_at > prev_max_end + interval '10 minutes' then 1 else 0 end)
+           over (partition by streamer_login order by started_at, id) as bid
+  from o
+),
+b as (
+  select streamer_login, bid,
+         min(started_at) as started_at,
+         max(end_at) as end_at,
+         bool_and(ended_at is not null) as ended,
+         (array_agg(id order by started_at, id))[1] as first_id,
+         (array_agg(start_viewers order by started_at, id))[1] as start_viewers,
+         (array_agg(end_viewers order by end_at desc, id desc))[1] as end_viewers,
+         max(peak_viewers) as peak_viewers,
+         sum(avg_viewers * duration_seconds) filter (where avg_viewers is not null and duration_seconds > 0)
+           / nullif(sum(duration_seconds) filter (where avg_viewers is not null and duration_seconds > 0), 0) as avg_viewers
+  from g
+  group by streamer_login, bid
 ),
 f as (
-  select s.*, fs.first_min
-  from s
+  select b.*, extract(epoch from (b.end_at - b.started_at)) as dur_s, fs.first_min
+  from b
   left join lateral (
     select v.minutes_from_start as first_min
     from twitch_session_viewers v
-    where v.session_id = s.id
+    where v.session_id = b.first_id
     order by v.ts_utc
     limit 1
   ) fs on true
@@ -265,25 +290,33 @@ w as (
     lag(start_viewers) over p as prev_start,
     lag(first_min) over p as prev_first_min,
     avg(avg_viewers) over (partition by streamer_login order by started_at rows between 3 preceding and 1 preceding) as lvl3,
-    count(*) over (partition by streamer_login order by started_at rows between 3 preceding and 1 preceding) as lvl3_n
+    count(avg_viewers) over (partition by streamer_login order by started_at rows between 3 preceding and 1 preceding) as lvl3_n
   from f
   window p as (partition by streamer_login order by started_at)
+),
+e as (
+  select * from w
+  where ended and dur_s >= 3600 and peak_viewers > 0 and avg_viewers is not null and end_viewers is not null
+),
+med as (
+  select streamer_login, percentile_cont(0.5) within group (order by avg_viewers) as m, count(*) as n
+  from e group by 1
 )
-select md5(w.streamer_login) as st, med.m as med_avg,
-       round((w.end_viewers::numeric / w.peak_viewers), 4) as endpeak,
-       round((w.start_viewers / med.m)::numeric, 4) as cur_start_n,
-       round((w.avg_viewers / med.m)::numeric, 4) as cur_avg_n,
-       round((w.peak_viewers / med.m)::numeric, 4) as cur_peak_n,
-       round((w.lvl3 / med.m)::numeric, 4) as lvl3_n,
-       round((w.next_start / med.m)::numeric, 4) as next_start_n,
-       round((w.prev_start / med.m)::numeric, 4) as prev_start_n,
-       w.first_min, w.next_first_min, w.prev_first_min,
-       round(w.duration_seconds / 3600.0, 2) as dur_h,
-       round(extract(epoch from (w.next_started_at - w.ended_at)) / 3600.0, 2) as gap_h
-from w join med using (streamer_login)
-where med.m > 0 and med.n >= 6 and w.lvl3_n = 3
-  and w.next_start is not null
-  and w.next_started_at - w.ended_at <= interval '48 hours';
+select md5(e.streamer_login) as st, med.m as med_avg,
+       round((e.end_viewers::numeric / e.peak_viewers), 4) as endpeak,
+       round((e.start_viewers / med.m)::numeric, 4) as cur_start_n,
+       round((e.avg_viewers / med.m)::numeric, 4) as cur_avg_n,
+       round((e.peak_viewers / med.m)::numeric, 4) as cur_peak_n,
+       round((e.lvl3 / med.m)::numeric, 4) as lvl3_n,
+       round((e.next_start / med.m)::numeric, 4) as next_start_n,
+       round((e.prev_start / med.m)::numeric, 4) as prev_start_n,
+       e.first_min, e.next_first_min, e.prev_first_min,
+       round((e.dur_s / 3600.0)::numeric, 2) as dur_h,
+       round((extract(epoch from (e.next_started_at - e.end_at)) / 3600.0)::numeric, 2) as gap_h
+from e join med using (streamer_login)
+where med.m > 0 and med.n >= 6 and e.lvl3_n = 3
+  and e.next_start is not null and e.start_viewers is not null
+  and e.next_started_at - e.end_at <= interval '48 hours';
 
 -- V9 title features, per-session export (local +-14 day matching in verify-v9-titles.py)
 select md5(streamer_login) as st,

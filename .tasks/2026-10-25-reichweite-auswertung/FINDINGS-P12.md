@@ -108,7 +108,7 @@ Pooled new presence per viewer is higher in rising and falling windows than in f
 
 With 6 to 20 German streams live, each viewer brings about 15 to 20 percent fewer new people per 15 minutes than with 1 to 5 live, at the same month and hour.
 
-Orchestrator check (VERIFY-ORCHESTRATOR.md V5): the pooled ratio mixes channel size with competition. Within streamer x viewer bin x hour band x weekend, 6-10 live minus 1-5 live is +0.027 new presences per 15 min (95 % CI -0.003 to +0.062, 329 streamers); 11+ minus 1-5 is +0.003 (CI -0.046 to +0.065, 196 streamers). No measurable competition cost.
+Orchestrator check (VERIFY-ORCHESTRATOR.md V5): the pooled ratio mixes channel size with competition. Within streamer x viewer bin x hour band x weekend, 6-10 live minus 1-5 live is +0.027 new presences per 15 min (95 % CI -0.001 to +0.064, 337 streamers); 11+ minus 1-5 is +0.004 (CI -0.045 to +0.066, 199 streamers). No measurable competition cost.
 
 ### Q6. Day after a big organic jump
 

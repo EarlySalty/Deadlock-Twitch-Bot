@@ -1,4 +1,4 @@
-# TODO: Twitch reach analysis (state 2026-10-25, after gate round 1)
+# TODO: Twitch reach analysis (state 2026-10-26, after gate round 3 fixes)
 
 User goal: deep analysis of all Twitch data on how German Deadlock streams win new viewers, turn
 lurkers into chatters and newcomers into followers, subs and regulars; also when Twitch shows a
@@ -22,7 +22,7 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
 | P08 | follows and subs | done, FINDINGS-P08.md (tip 1 downgraded to an association by V7) |
 | P09 | raids, shared chat | done, FINDINGS-P09.md |
 | P10 | global category benchmark | done, FINDINGS-P10.md |
-| P11 | stream opening, games | done, FINDINGS-P11.md (tip 8 annotated by V8) |
+| P11 | stream opening, games | done, FINDINGS-P11.md (tip 8 withdrawn by V8) |
 | P12 | exposure triggers | done, FINDINGS-P12.md |
 
 ## Corrections the orchestrator must apply
@@ -43,8 +43,8 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
   call a quick reply a likely-helpful habit, not a lever.
 - More German streams live costs no new viewers within streamer (V5). Early-stream jumps are
   returning regulars, not discovery (V6).
-- Ending near the peak lifts the next start by about +0.07 of the streamer median, placebo null
-  (V8). Title word effects mostly vanish against a +-14 day local baseline; only titles under 30
+- Ending near the peak does not lift the next start once reconnects are merged into one broadcast
+  (+0.007, CI -0.015 to +0.025, V8; the earlier +0.07 was a reconnect artifact). Title word effects mostly vanish against a +-14 day local baseline; only titles under 30
   characters keep a small cost (V9). Neither a broadcaster chat message nor an active chat raises new chatters
   in the next 5 minutes within the session (V10, after trimming the late start of tracked chat;
   the first run's +1.7 pp for active chat was that artifact). Social messages draw no extra
@@ -56,5 +56,17 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
    return gap rechecked against live days (`p06-live-days.py`); P08 exposure cut at t0, next
    sample and session end; V6 rerun on the 30-second presence poll; V7 rerun with the order of
    message, reply and follow respected; wording fixes in P07, P10, V9, V11 and the synthesis.
-2. Re-run `gate_hook.py --review` (skill rolle-merge-schleuse) until ALLOW, merge to main, clean
+2. Gate round 3 (BLOCK, 6 findings) is fixed: P08 rates take follows and viewer-hours from the
+   same sampled intervals (q2f, 2.81 per 100 vh, collection gap 2026-03-15 to 2026-06-16
+   excluded); V8 merges reconnects into one broadcast (null result); P02 counts chatters from
+   messages; P06 no longer drops newcomers with earlier silent presence (`prior_silent` split);
+   P07 bounds each label window over every message source; V5 viewer bins are contiguous.
+   The follow-gap class is fixed in every follow outcome: a unit with outcome window [a, b) counts
+   only if b <= 2026-10-25 17:28 UTC and the window does not overlap 2026-03-15 18:00 to
+   2026-06-16 16:45 UTC (V7 in `queries-VERIFY.sql`, P08 first chat in statement 10, P08 lurker
+   presence in `p08-chat-follow-rates.py`, P09 raids in `p09-raid-follows.py`). P09 also counts
+   follows only in channels with follow tracking. New numbers: V7 +12.1 pp (78 replies), lurker
+   presence 10.1 vs 81.2 per 1,000, P09 +0.087 follows per raid within 60 min. The blog needs the
+   V7 and lurker numbers updated after the merge.
+3. Re-run `gate_hook.py --review` (skill rolle-merge-schleuse) until ALLOW, merge to main, clean
    up branch and worktree, cancel wakeup `reichweite`. Report to the user in English.

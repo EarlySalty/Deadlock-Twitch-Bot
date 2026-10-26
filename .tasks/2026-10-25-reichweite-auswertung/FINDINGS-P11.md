@@ -225,7 +225,7 @@ Confidence: low. The pop effect shrinks from p 0.023 (unrestricted) to p 0.065 (
 | 7 | Starting in Just Chatting shows no clear gain or loss. | +0.175 (12 streamers); +0.536 (5 streamers) | p 0.15 and p 0.06 | low (inconclusive) |
 | 8 | Keep the end near the peak. A strong finish goes with a stronger next start. | +0.120 mean | 56 streamers, 1,591 pairs, p 0.0003; pop +0.172, 12 of 12 positive | medium |
 
-Orchestrator note on tip 8: V8 in `VERIFY-ORCHESTRATOR.md` confirms the direction at about half the size (+0.067, CI +0.040 to +0.101, 80 streamers, with level, duration and peak controls; placebo against the previous start +0.005).
+Orchestrator note on tip 8: withdrawn. V8 in `VERIFY-ORCHESTRATOR.md` merges reconnects into one broadcast; the effect on the next start is then +0.007 (CI -0.015 to +0.025, 74 streamers, with level, duration and peak controls; placebo against the previous start -0.006). Session pairs that were reconnects of one broadcast produced the raw figure.
 
 | 9 | Chat silent for more than 10 minutes before the end goes with a weaker next start. | -0.149 mean | 34 streamers, p 0.003; not significant within either period alone | low |
 | 10 | An outgoing raid at the end shows no measurable effect on the next start. | -0.067 | 38 streamers, p 0.51 | low (null) |

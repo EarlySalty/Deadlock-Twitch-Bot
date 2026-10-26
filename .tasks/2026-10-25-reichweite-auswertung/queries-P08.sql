@@ -269,6 +269,8 @@ select fm.session_id, fm.streamer_login, fm.chatter_login, fm.first_ts,
           where f.streamer_login = fm.streamer_login and f.follower_login = fm.chatter_login
             and f.followed_at >= fm.first_ts and f.followed_at <= fm.first_ts + interval '24 hours') as follow_24h
 from fm
+where fm.first_ts <= timestamptz '2026-10-25 17:28:00+00' - interval '24 hours'
+    and not (fm.first_ts > timestamptz '2026-03-15 18:00:00+00' - interval '24 hours' and fm.first_ts < timestamptz '2026-06-16 16:45:00+00')
 order by fm.first_ts;
 
 with off as (
@@ -395,3 +397,59 @@ from ss
 left join chat c on c.session_id = ss.session_id
 order by ss.started_at;
 
+
+select max(followed_at) filter (where followed_at < '2026-04-15') as last_before, min(followed_at) filter (where followed_at > '2026-04-15') as first_after from twitch_follow_events;
+
+with trk as (
+  select lower(streamer_login) as login, min(followed_at) as t0 from twitch_follow_events group by 1
+),
+ss as (
+  select s.id, lower(s.streamer_login) as login, s.started_at, t.t0,
+         coalesce(s.ended_at, s.started_at + make_interval(secs => s.duration_seconds)) as end_at
+  from twitch_stream_sessions s join trk t on t.login = lower(s.streamer_login)
+  where coalesce(s.ended_at, s.started_at + make_interval(secs => s.duration_seconds)) >= t.t0
+),
+raw as (
+  select sv.session_id, ss.login, ss.started_at, sv.ts_utc, sv.minutes_from_start, sv.viewer_count, ss.t0, ss.end_at,
+         lead(sv.ts_utc) over (partition by sv.session_id order by sv.ts_utc) as next_ts
+  from twitch_session_viewers sv
+  join ss on ss.id = sv.session_id
+  where sv.ts_utc >= :'m1'::timestamptz - interval '2 days' and sv.ts_utc < :'m2'::timestamptz + interval '2 days'
+),
+pk as (
+  select distinct on (session_id) session_id, ts_utc as peak_ts from raw order by session_id, viewer_count desc, ts_utc
+),
+iv as (
+  select session_id, login, started_at, ts_utc, minutes_from_start, viewer_count,
+         greatest(ts_utc, t0) as a,
+         least(coalesce(next_ts, end_at), ts_utc + interval '300 seconds', end_at, :'cut'::timestamptz) as b
+  from raw
+  where ts_utc >= :'m1'::timestamptz and ts_utc < :'m2'::timestamptz and ts_utc < :'cut'::timestamptz
+    and not (ts_utc >= :'g1'::timestamptz and ts_utc < :'g2'::timestamptz)
+),
+ivf as (
+  select iv.*, extract(epoch from (iv.b - iv.a)) as dt,
+         case when iv.minutes_from_start is null then null else floor(iv.minutes_from_start / 5) * 5 end as min5,
+         case when iv.viewer_count < 5 then '0-4' when iv.viewer_count < 10 then '5-9' when iv.viewer_count < 20 then '10-19'
+              when iv.viewer_count < 50 then '20-49' when iv.viewer_count < 100 then '50-99' when iv.viewer_count < 300 then '100-299' else '300+' end as band,
+         floor(extract(epoch from (iv.ts_utc - pk.peak_ts)) / 300) * 5 as peak5,
+         exists (select 1 from twitch_raid_history rh where rh.to_broadcaster_login = iv.login and rh.success
+                 and rh.executed_at <= iv.ts_utc and rh.executed_at > iv.ts_utc - interval '10 minutes') as in_raid
+  from iv join pk using (session_id)
+  where iv.b > iv.a
+),
+fol as (
+  select f.id as follow_id, lower(f.streamer_login) as login, f.followed_at
+  from twitch_follow_events f
+  where f.followed_at >= :'m1'::timestamptz - interval '1 day' and f.followed_at < :'m2'::timestamptz + interval '1 day'
+    and f.followed_at < :'cut'::timestamptz
+)
+select 'exp' as kind, null::bigint as follow_id, null::timestamptz as followed_at, null::timestamptz as session_start, null::numeric as follow_min,
+       min5, band, peak5, in_raid, sum(dt) as seconds, sum(dt * viewer_count) as viewer_seconds
+from ivf
+group by min5, band, peak5, in_raid
+union all
+select 'fol', fol.follow_id, fol.followed_at, ivf.started_at,
+       round((extract(epoch from (fol.followed_at - ivf.started_at)) / 60)::numeric, 2),
+       ivf.min5, ivf.band, ivf.peak5, ivf.in_raid, null, null
+from fol join ivf on ivf.login = fol.login and fol.followed_at >= ivf.a and fol.followed_at < ivf.b;

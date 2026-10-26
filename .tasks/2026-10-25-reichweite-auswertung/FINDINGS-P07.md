@@ -6,7 +6,7 @@ Saved by the orchestrator from the P07 agent's final report (the agent's Write c
 Which message types, newcomer entry patterns, viewer questions, commands, emotes and message lengths go with more follow-up chat, longer newcomer stays and livelier sessions in German Deadlock streams?
 
 ## Data used
-- `twitch_chat_messages`, 2026-02-01 to 2026-10-04: 339,444 messages, 690 streamers, 4,098 sessions with tracked chat, 11,008 logins. All messages in this window are labelled (Q0).
+- `twitch_chat_messages`, 2026-02-01 to 2026-10-04: 339,444 messages, 690 streamers, 4,098 sessions with tracked chat, 11,008 logins. All messages in this window are labelled (Q0). Every label-based query (Q1 to Q3, Q7) reads messages only from this window; Q4 selects questions from this window and looks for replies in the minutes after them. The label-free command and activity queries (Q5a to Q5d) read messages to 2026-10-24; their 30-channel bot list comes from the labelled window.
 - `category_chat_messages`, German subset, 2026-09-27 to 2026-10-24: 109,166 messages, 522 rooms, 6,043 chatter IDs (Q0). Not bot-filtered by login (see caveats).
 - `twitch_stream_sessions`: `started_at` (Q9) and `avg_viewers` (size classes, Q5b).
 - Bot exclusion ("x30"): role bot if the login matches `%bot`, `streamelements` or `streamlabs`, or is seen in 30+ channels. Six logins seen in 30+ channels hold 33,998 messages (10.02 percent). Only 2 of them match the name pattern (Q8).
@@ -28,19 +28,19 @@ Which message types, newcomer entry patterns, viewer questions, commands, emotes
 
 | Label | Streamers | Sessions | Messages | Lift 2 min (median) | Share above 1 (2 min) | p (2 min) | Lift 5 min | Share above 1 (5 min) | p (5 min) | Any-follow-up lift 2 min | New-chatter lift 5 min |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Social | 301 | 1,261 | 15,659 | 1.12 | 0.62 | 3e-5 | 1.09 | 0.61 | 1e-4 | 1.11 | 0.75 |
-| Feedback | 201 | 800 | 5,567 | 0.79 | 0.29 | 2e-9 | 0.84 | 0.34 | 5e-6 | 0.91 | 0.57 |
-| Game-Related | 378 | 1,677 | 30,954 | 0.75 | 0.24 | 9e-25 | 0.81 | 0.27 | 1e-19 | 0.89 | 0.74 |
-| Technical | 128 | 443 | 3,052 | 0.82 | 0.39 | 0.017 | 0.84 | 0.34 | 5e-4 | 0.99 | 0.61 |
-| Other | 196 | 735 | 9,441 | 0.83 | 0.36 | 1e-4 | 0.88 | 0.37 | 4e-4 | 0.96 | 0.68 |
-| Statement | 449 | 2,130 | 133,719 | 0.93 | 0.32 | 2e-14 | 0.95 | 0.36 | 4e-9 | 0.97 | 0.95 |
-| Question | 427 | 1,978 | 37,472 | 0.92 | 0.41 | 2e-4 | 0.94 | 0.40 | 5e-5 | 0.97 | 0.90 |
-| Reaction | 445 | 2,044 | 60,961 | 0.94 | 0.42 | 9e-4 | 0.95 | 0.44 | 0.014 | 0.99 | 0.92 |
-| Hype | 290 | 1,219 | 10,893 | 0.94 | 0.45 | 0.088 | 0.95 | 0.46 | 0.18 | 1.00 | 0.78 |
-| Command | 211 | 796 | 12,072 | 0.98 | 0.47 | 0.41 | 0.94 | 0.45 | 0.17 | 1.05 | 0.79 |
-| Greeting | 254 | 1,057 | 8,040 | 1.00 | 0.49 | 0.75 | 0.98 | 0.48 | 0.57 | 1.03 | 0.84 |
+| Social | 233 | 978 | 12,663 | 1.10 | 0.60 | 0.003 | 1.05 | 0.57 | 0.036 | 1.09 | 0.74 |
+| Feedback | 170 | 685 | 4,906 | 0.80 | 0.29 | 3e-8 | 0.84 | 0.34 | 4e-5 | 0.93 | 0.64 |
+| Game-Related | 288 | 1,300 | 24,956 | 0.70 | 0.21 | 3e-24 | 0.79 | 0.26 | 2e-16 | 0.86 | 0.69 |
+| Technical | 112 | 396 | 2,791 | 0.81 | 0.38 | 0.018 | 0.83 | 0.34 | 9e-4 | 0.99 | 0.63 |
+| Other | 195 | 729 | 9,340 | 0.83 | 0.36 | 1e-4 | 0.87 | 0.37 | 3e-4 | 0.96 | 0.67 |
+| Statement | 338 | 1,599 | 101,541 | 0.92 | 0.30 | 1e-13 | 0.94 | 0.35 | 3e-8 | 0.96 | 0.93 |
+| Question | 318 | 1,468 | 27,378 | 0.88 | 0.37 | 5e-6 | 0.91 | 0.36 | 5e-7 | 0.94 | 0.84 |
+| Reaction | 339 | 1,556 | 49,949 | 0.94 | 0.42 | 0.003 | 0.95 | 0.45 | 0.082 | 0.99 | 0.94 |
+| Hype | 222 | 938 | 8,791 | 0.92 | 0.44 | 0.093 | 0.96 | 0.45 | 0.16 | 0.99 | 0.70 |
+| Command | 171 | 665 | 10,479 | 0.95 | 0.46 | 0.36 | 0.92 | 0.43 | 0.092 | 1.04 | 0.78 |
+| Greeting | 209 | 861 | 6,677 | 1.03 | 0.54 | 0.27 | 0.98 | 0.47 | 0.41 | 1.03 | 0.84 |
 
-Broadcaster and bot rows are excluded. The System label (14 streamers) is too small to read. The same values as the earlier non-x30 run (Social 1.12, 62 percent; Game-Related 0.75, 24 percent).
+Both message sources are bounded to 2026-02-01 to 2026-10-04 before the follow-up windows are computed, so only fully labelled messages are scored and counted. Broadcaster and bot rows are excluded. The System label (14 streamers) is too small to read. The non-x30 run with the same bounds gives Social 1.10 (63 percent above 1) and Game-Related 0.74 (24 percent). An earlier run without the upper bound (messages to 2026-10-24, partly unlabelled) gave Social 1.12 and Game-Related 0.75; it is withdrawn.
 
 **R2. Newcomer pre-context vs same-session minute grid (viewers, x30, paired)**
 
@@ -170,8 +170,8 @@ Orchestrator note: V11 in `VERIFY-ORCHESTRATOR.md` holds chat speed equal (same 
 
 | Tip | Evidence | Effect | Support n | Confidence |
 |---|---|---|---|---|
-| Social-style viewer messages draw more follow-up than average. Expect quick chat responses after them. | Social lift 1.12 (2 min), 62% of streamers above 1 | Lift 1.12, p about 3e-5 | 301 streamers, 1,261 sessions, 15,659 messages | Medium (direction robust to bot exclusion; association) |
-| If the aim is quick chat response, prefer social prompts over game commentary. Game-related messages have the weakest follow-up. Whether swapping them changes long-term activity is not measured. | Game-Related lift 0.75, 24% above 1 | Lift 0.75, p about 9e-25 | 378 streamers, 1,677 sessions, 30,954 messages | Medium-high (direction); low (causal effect) |
+| Social-style viewer messages draw more follow-up than average. Expect quick chat responses after them. | Social lift 1.10 (2 min), 60% of streamers above 1 | Lift 1.10, p about 0.003 | 233 streamers, 978 sessions, 12,663 messages | Medium (direction robust to bot exclusion; association) |
+| If the aim is quick chat response, prefer social prompts over game commentary. Game-related messages have the weakest follow-up. Whether swapping them changes long-term activity is not measured. | Game-Related lift 0.70, 21% above 1 | Lift 0.70, p about 3e-24 | 288 streamers, 1,300 sessions, 24,956 messages | Medium-high (direction); low (causal effect) |
 | Greet newcomers and react to their first messages; a command as first message is the weakest entry. | First-message stay 3+: Greeting 63.9%, Question 61.0%, Game-Related 66.3% vs Command 21.8%, Other 15.4% | Association, not causal | 1,199 / 881 / 442 / 559 / 579 first messages | Medium |
 | Do not expect answers to raise a viewer's follow-up. Reply rates are low, so reply speed is a capacity problem, not a measured lever. | 2.8% broadcaster reply within 2 min; asker follow-up answered vs unanswered +0.07 messages (51% positive) | Null | 34,037 questions, 224 streamers, 827 sessions | High (reply rates); medium (null) |
 | Keep messages short if you want follow-up. Long messages (61+ characters) draw less. | Lift 1.07 (1-10 characters, 64% of rooms above 1) vs 0.87 (61+, 26%) | Ratio 1.07 vs 0.87 | 304 / 256 rooms; 25,793 / 16,183 messages | Low-medium (category data, not bot-filtered) |
@@ -180,7 +180,7 @@ Orchestrator note: V11 in `VERIFY-ORCHESTRATOR.md` holds chat speed equal (same 
 | Do not promise activity gains from viewer commands. Activation is a hypothesis to test, not a result. | Channels with commands: 0.58 to 1.18 (73% higher after). Placebo: 0.375 to 0.383 | Possible, unvalidated | 48 channels (command), 36 channels (placebo) | Low (selection, no x30, no causal claim) |
 
 ## Caveats and dead ends
-- **Bots and x30:** viewer tables use the 30-channel exclusion (6 logins, 10.02 percent of messages, 2 of 6 match the name pattern). Q1 and Q3 values hold within about one point of the non-x30 runs.
+- **Bots and x30:** viewer tables use the 30-channel exclusion (6 logins, 10.02 percent of messages, 2 of 6 match the name pattern). Q1 lifts move by up to 0.04 and shares above 1 by up to 3 points against the non-x30 run; Q3 shares by about one point.
 - **Late chat start (R8):** only 4,096 of 12,378 sessions have tracked chat. Tracked chat starts after minute 15 in 62.9 percent of these sessions; in the 200+ message class, 39.9 percent. Cause not verified. The coordinator's ~25 percent figure refers to the first viewer sample (V1), not chat, so it is not reconciled here.
 - **Label coverage:** all messages to 2026-10-04 are labelled; later messages are partially labelled. The label source mix was not re-verified, so no source-mix figure is reported.
 - **Q2 speed:** paired (-0.07) and unpaired absolute levels (0.78 vs 0.62) disagree in direction. Low confidence; only the share differences are consistent.
