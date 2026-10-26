@@ -676,6 +676,9 @@ fn cut_changes(base: &super::EditPlan, next: &super::EditPlan) -> Vec<String> {
         };
         changes.push(label.to_owned());
     }
+    if changes.is_empty() {
+        changes.push("Schnitt geändert".to_owned());
+    }
     changes
 }
 

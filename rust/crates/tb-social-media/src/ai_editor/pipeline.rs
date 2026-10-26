@@ -941,6 +941,9 @@ async fn plan_edit(
     let mut result: Planning = serde_json::from_value(response.content)
         .map_err(|error| AiEditorError::plan_rejected(&format!("response shape: {error}")))?;
     result.clean_texts(runtime.limits.plan.max_text_bytes);
+    if base.is_some() {
+        result.fit_revision_cut();
+    }
     validate_variants(&result, &frozen.publication, runtime)?;
     let origin = if base.is_some() {
         PlanOrigin::Revision
@@ -959,7 +962,6 @@ async fn plan_edit(
             },
             origin,
         )?;
-        result.fit_revision_cut();
         let mut proposal = result.revision_proposal.take().ok_or(AiEditorError::Plan)?;
         if revision.is_some_and(|request| request.reanalysis_confirmed) {
             proposal.reanalyze = false;
@@ -1522,9 +1524,17 @@ async fn render(
             }
         }
     }
-    let mut checkpoint = render_one(ctx, frozen, runtime, &result, 0).await?;
+    let mut checkpoint = render_one(ctx, frozen, runtime, &result, result.origin(), 0).await?;
     for (index, variant) in result.variants.iter().enumerate() {
-        let child = render_one(ctx, frozen, runtime, &variant.planning(), index as i32 + 1).await?;
+        let child = render_one(
+            ctx,
+            frozen,
+            runtime,
+            &variant.planning(),
+            result.origin(),
+            index as i32 + 1,
+        )
+        .await?;
         if let (
             StageCheckpoint::Rendering { rendering_ms, .. },
             StageCheckpoint::Rendering {
@@ -1560,6 +1570,7 @@ async fn render_one(
     frozen: &PreparingSnapshot,
     runtime: &EditorRuntime,
     result: &Planning,
+    origin: PlanOrigin,
     variant_index: i32,
 ) -> Result<StageCheckpoint, AiEditorError> {
     let validated = result.validate(
@@ -1567,7 +1578,7 @@ async fn render_one(
         &runtime.limits.plan,
         &runtime.limits.copy,
         &analysis(ctx.checkpoints)?,
-        result.origin(),
+        origin,
     )?;
     let video = allocation(ctx, runtime, variant_index).await?;
     let output = output_path(runtime, video.id);
@@ -1702,10 +1713,17 @@ async fn validate(
     runtime: &EditorRuntime,
 ) -> Result<StageCheckpoint, AiEditorError> {
     let (result, _) = planning(ctx.checkpoints, frozen, runtime)?;
-    let mut checkpoint = validate_one(ctx, frozen, runtime, &result, 0).await?;
+    let mut checkpoint = validate_one(ctx, frozen, runtime, &result, result.origin(), 0).await?;
     for (index, variant) in result.variants.iter().enumerate() {
-        let extra =
-            validate_one(ctx, frozen, runtime, &variant.planning(), index as i32 + 1).await?;
+        let extra = validate_one(
+            ctx,
+            frozen,
+            runtime,
+            &variant.planning(),
+            result.origin(),
+            index as i32 + 1,
+        )
+        .await?;
         if let (
             StageCheckpoint::Validating { review_reasons },
             StageCheckpoint::Validating {
@@ -1726,6 +1744,7 @@ async fn validate_one(
     frozen: &PreparingSnapshot,
     runtime: &EditorRuntime,
     planning: &Planning,
+    origin: PlanOrigin,
     variant_index: i32,
 ) -> Result<StageCheckpoint, AiEditorError> {
     let validated = planning.validate(
@@ -1733,7 +1752,7 @@ async fn validate_one(
         &runtime.limits.plan,
         &runtime.limits.copy,
         &analysis(ctx.checkpoints)?,
-        planning.origin(),
+        origin,
     )?;
     let video = allocation(ctx, runtime, variant_index).await?;
     let Some(StageCheckpoint::Rendering {

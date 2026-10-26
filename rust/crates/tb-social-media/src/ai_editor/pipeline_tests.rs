@@ -3666,4 +3666,10 @@ fn trimmed_revision_names_the_cut_and_the_new_length() {
         super::super::revision::revision_summary(&base, &later, "EZ", 512),
         "Geändert: Start 3 Sekunden später, jetzt 8,8 s lang."
     );
+    let mut nudged = base.clone();
+    nudged.plan.kept_intervals[0].start_ms = 50;
+    assert_eq!(
+        super::super::revision::revision_summary(&base, &nudged, "EZ", 512),
+        "Geändert: Schnitt geändert, jetzt 11,8 s lang."
+    );
 }
