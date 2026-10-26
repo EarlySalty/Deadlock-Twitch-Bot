@@ -324,12 +324,25 @@ fn contact_sheet_tile_width(fps: u32, frame_width: u32) -> u32 {
     (frame_width.min(MAX_CONTACT_SHEET_WIDTH / columns) & !1).max(2)
 }
 
-fn contact_sheet_filter(fps: u32, frame_width: u32, start_ms: u64) -> String {
+fn contact_sheet_padding(window_ms: u64) -> String {
+    let pad_ms = CONTACT_SHEET_WINDOW_MS.saturating_sub(window_ms);
+    if pad_ms == 0 {
+        return String::new();
+    }
+    format!(
+        "tpad=stop_mode=clone:stop_duration={}.{:03},",
+        pad_ms / 1000,
+        pad_ms % 1000
+    )
+}
+
+fn contact_sheet_filter(fps: u32, frame_width: u32, start_ms: u64, window_ms: u64) -> String {
     let (columns, rows) = contact_sheet_grid(fps);
     let tile_width = contact_sheet_tile_width(fps, frame_width);
     let font_size = (tile_width / 36).max(12);
     format!(
-        "fps={fps},scale={tile_width}:-2,drawtext=text='%{{pts\\:hms\\:{}}}':x=4:y=(h-th)/2:fontsize={font_size}:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=3,tile={columns}x{rows}",
+        "{}fps={fps},scale={tile_width}:-2,drawtext=text='%{{pts\\:hms\\:{}}}':x=4:y=(h-th)/2:fontsize={font_size}:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=3,tile={columns}x{rows}",
+        contact_sheet_padding(window_ms),
         format_time(start_ms)
     )
 }
@@ -357,7 +370,12 @@ async fn write_contact_sheet(
             .arg("-i")
             .arg(path)
             .args(["-an", "-vf"])
-            .arg(contact_sheet_filter(fps, limits.frame_width, start_ms))
+            .arg(contact_sheet_filter(
+                fps,
+                limits.frame_width,
+                start_ms,
+                window_ms,
+            ))
             .args(["-frames:v", "1", "-q:v"])
             .arg(quality.to_string())
             .arg("-threads:v")
@@ -856,6 +874,18 @@ mod tests {
     }
 
     #[test]
+    fn short_contact_sheet_windows_are_padded_to_a_full_second() {
+        assert_eq!(contact_sheet_padding(1_000), "");
+        assert_eq!(
+            contact_sheet_padding(5),
+            "tpad=stop_mode=clone:stop_duration=0.995,"
+        );
+        assert!(contact_sheet_filter(16, 640, 0, 20)
+            .starts_with("tpad=stop_mode=clone:stop_duration=0.980,fps=16,"));
+        assert!(contact_sheet_filter(4, 640, 0, 1_000).starts_with("fps=4,"));
+    }
+
+    #[test]
     fn contact_sheets_skip_tail_windows_without_a_frame() {
         assert_eq!(contact_sheet_starts(3_010, 10, 4), vec![0, 1_000, 2_000]);
         assert_eq!(
@@ -1060,6 +1090,52 @@ mod tests {
         let retained = preview.clone();
         drop(workspace);
         assert!(!retained.exists());
+    }
+
+    async fn synthetic_video(root: &Path, name: &str, seconds: &str) -> PathBuf {
+        let source = root.join(name);
+        let mut fixture = Command::new("ffmpeg");
+        fixture
+            .kill_on_drop(true)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=s=160x90:r=60",
+                "-t",
+                seconds,
+                "-c:v",
+                "libx264",
+                "-threads",
+                "1",
+                "-y",
+            ])
+            .arg(&source);
+        run_status(fixture, 15_000)
+            .await
+            .expect("create synthetic video");
+        source
+    }
+
+    #[tokio::test]
+    async fn short_windows_still_yield_a_contact_sheet() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let resources = limits();
+        for (name, seconds, fps, sheets) in [
+            ("tiny.mp4", "0.02", 16, 1),
+            ("tail.mp4", "2.3", 16, 3),
+            ("tail4.mp4", "1.3", 4, 2),
+        ] {
+            let source = synthetic_video(root.path(), name, seconds).await;
+            let frames = extract_frames(root.path(), &source, root.path(), &resources, fps)
+                .await
+                .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+            assert_eq!(frames.frames().len(), sheets, "{name}");
+        }
     }
 
     #[tokio::test]
