@@ -1041,6 +1041,27 @@ pub async fn fail_job(
     }
 }
 
+pub(super) async fn save_revision_answer(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    job_id: i64,
+    proposal: &super::revision::RevisionProposal,
+) -> Result<(), AiStoreError> {
+    let owner = numeric_owner(twitch_user_id)?;
+    let proposal = serde_json::to_string(proposal).map_err(|_| AiStoreError::InvalidInput)?;
+    let changed = sqlx::query("UPDATE social_ai_jobs SET revision_proposal=$3::jsonb, updated_at=NOW() WHERE id=$1 AND twitch_user_id=$2 AND status='planning' AND revision_feedback IS NOT NULL")
+        .bind(job_id)
+        .bind(owner)
+        .bind(proposal)
+        .execute(pool)
+        .await?;
+    if changed.rows_affected() == 1 {
+        Ok(())
+    } else {
+        Err(AiStoreError::Conflict)
+    }
+}
+
 pub(super) async fn render_retry_available(
     pool: &PgPool,
     twitch_user_id: &str,
@@ -1112,7 +1133,8 @@ pub async fn retry_job(
     }
     let changed = sqlx::query(
         "UPDATE social_ai_jobs SET status = 'queued', failure_code = NULL, \
-         failure_message = NULL, updated_at = NOW() \
+         failure_message = NULL, updated_at = NOW(), \
+         revision_proposal = CASE WHEN stage = 'planning' THEN NULL ELSE revision_proposal END \
          WHERE id = $1 AND twitch_user_id = $2 AND status = 'failed' \
          AND COALESCE((attempts ->> stage)::integer, 0) < $3 \
          AND EXISTS (SELECT 1 FROM twitch_clips_social_media c \

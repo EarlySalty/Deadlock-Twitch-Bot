@@ -1,4 +1,4 @@
-use super::model::{EditPlan, KeptInterval, PlanLimits};
+use super::model::{EditPlan, Highlight, KeptInterval, PlanLimits};
 use crate::subtitles::{build_branded_ass, segment_subtitles, SubtitleSegment};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +82,38 @@ fn preserves_highlight(intervals: &[KeptInterval], start_ms: u64, end_ms: u64) -
     intervals
         .iter()
         .any(|interval| interval.start_ms <= start_ms && interval.end_ms >= end_ms)
+}
+
+fn overlap_with_kept(intervals: &[KeptInterval], start_ms: u64, end_ms: u64) -> Option<(u64, u64)> {
+    intervals
+        .iter()
+        .map(|interval| (start_ms.max(interval.start_ms), end_ms.min(interval.end_ms)))
+        .filter(|(start, end)| start < end)
+        .max_by_key(|(start, end)| end - start)
+}
+
+pub(super) fn fit_to_kept(plan: &mut EditPlan) {
+    let kept = plan.kept_intervals.clone();
+    plan.hook = plan.hook.take().and_then(|hook| {
+        let (start_ms, end_ms) = overlap_with_kept(&kept, hook.start_ms, hook.end_ms)?;
+        (end_ms - start_ms >= MIN_HOOK_MS).then_some(KeptInterval {
+            start_ms,
+            end_ms,
+            reason: hook.reason,
+        })
+    });
+    plan.observed_highlights = std::mem::take(&mut plan.observed_highlights)
+        .into_iter()
+        .filter_map(|highlight| {
+            let (start_ms, end_ms) =
+                overlap_with_kept(&kept, highlight.start_ms, highlight.end_ms)?;
+            Some(Highlight {
+                start_ms,
+                end_ms,
+                ..highlight
+            })
+        })
+        .collect();
 }
 
 #[derive(Debug, Clone, PartialEq)]

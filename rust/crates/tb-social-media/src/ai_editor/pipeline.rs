@@ -29,7 +29,9 @@ use crate::{
 use super::{
     brain,
     source::{SourceIdentity, Workspace},
-    stage_contract::{analysis_schema, planning_schema, Analysis, Planning},
+    stage_contract::{
+        analysis_schema, planning_schema, Analysis, PlanOrigin, PlanRejection, Planning,
+    },
     store::{AiStage, StageCheckpoint, TimelineEntry, TranscriptSegment},
     AiEditorError, EditPlan, EditorRuntime, MediaInfo, SkillId, SourceSubtitle, ValidatedPlan,
 };
@@ -352,11 +354,13 @@ fn planning(
     let result: Planning = serde_json::from_value(Value::Object(edit_plan.clone()))
         .map_err(|_| AiEditorError::Plan)?;
     validate_variants(&result, &frozen.publication, runtime)?;
+    let origin = result.origin();
     let plan = result.validate(
         frozen.media.duration_ms,
         &runtime.limits.plan,
         &runtime.limits.copy,
         &analysis(checkpoints)?,
+        origin,
     )?;
     Ok((result, plan))
 }
@@ -785,20 +789,87 @@ async fn planning_audio_levels(frozen: &PreparingSnapshot, runtime: &EditorRunti
     }
 }
 
+pub(super) enum PlanFailure {
+    Rejected(PlanRejection),
+    Failed(AiEditorError),
+}
+
+impl From<PlanRejection> for PlanFailure {
+    fn from(rejection: PlanRejection) -> Self {
+        Self::Rejected(rejection)
+    }
+}
+
+impl From<AiEditorError> for PlanFailure {
+    fn from(error: AiEditorError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl From<PlanFailure> for AiEditorError {
+    fn from(failure: PlanFailure) -> Self {
+        match failure {
+            PlanFailure::Rejected(rejection) => rejection.into(),
+            PlanFailure::Failed(error) => error,
+        }
+    }
+}
+
+impl PlanFailure {
+    pub(super) fn answer(&self) -> String {
+        match self {
+            Self::Rejected(rejection) => rejection.answer().to_owned(),
+            Self::Failed(AiEditorError::Plan) => {
+                "Die Antwort der KI ließ sich nicht als gültiger Schnittplan verwenden.".to_owned()
+            }
+            Self::Failed(error) => error.to_string(),
+        }
+    }
+}
+
 async fn plan(
     ctx: &StageContext<'_>,
     frozen: &PreparingSnapshot,
     runtime: &EditorRuntime,
 ) -> Result<StageCheckpoint, AiEditorError> {
+    let revision = match ctx.identity.manual() {
+        Some(id) => super::revision::request(ctx.pool, ctx.owner, id)
+            .await?
+            .map(|request| (id, request)),
+        None => None,
+    };
+    let outcome = plan_edit(
+        ctx,
+        frozen,
+        runtime,
+        revision.as_ref().map(|(_, request)| request),
+    )
+    .await;
+    if let (Err(failure), Some((id, _))) = (&outcome, &revision) {
+        let proposal = super::revision::rejected_proposal(
+            &failure.answer(),
+            runtime.limits.plan.max_text_bytes,
+        );
+        if let Err(error) =
+            super::store::save_revision_answer(ctx.pool, ctx.owner, *id, &proposal).await
+        {
+            tracing::warn!(job_id = id, error = ?error, "Social AI revision answer not stored");
+        }
+    }
+    outcome.map_err(Into::into)
+}
+
+async fn plan_edit(
+    ctx: &StageContext<'_>,
+    frozen: &PreparingSnapshot,
+    runtime: &EditorRuntime,
+    revision: Option<&super::revision::RevisionRequest>,
+) -> Result<StageCheckpoint, PlanFailure> {
     let analysis = analysis(ctx.checkpoints)?;
     analysis.validate(frozen.media.duration_ms, &runtime.limits.plan)?;
     let (_, language, segments) = transcription(ctx.checkpoints)?;
     let segments = speech_segments(segments);
-    let revision = match ctx.identity.manual() {
-        Some(id) => super::revision::request(ctx.pool, ctx.owner, id).await?,
-        None => None,
-    };
-    let base = match &revision {
+    let base = match revision {
         Some(request) => Some(
             super::revision::parent_planning(ctx.pool, ctx.owner, request.parent_version_id)
                 .await?,
@@ -849,7 +920,7 @@ async fn plan(
     let request = EditorRequest {
         system: frozen.system(&skill_ids)?,
         text: planning_text(
-            json!({ "task": "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. analysis.uncertainty is already shown to the user next to review_reasons: put only concerns about this edit that the analysis does not already state into review_reasons, and never restate an analysis uncertainty in other words. Publication copy follows the requested language and template, not subtitle language. overlay_title controls the large title burned in during the first seconds: clip_title shows clip_title, custom shows your own short text, none shows no title. Use custom or none when clip_title is misleading, shouty or not supported by the analysis. subtitles_enabled switches the burned-in speech captions on or off; keep it true for a new edit, and for a revision follow revision.instruction and keep the value from revision.previous unless the feedback asks to change the captions.", "source_duration_ms": frozen.media.duration_ms, "clip_title": frozen.source.title, "streamer": streamer_context(&frozen.source.login), "analysis": analysis, "language": language, "segments": segments, "audio_levels": audio_levels, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base,&frozen.source.title)) }),
+            json!({ "task": "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. analysis.uncertainty is already shown to the user next to review_reasons: put only concerns about this edit that the analysis does not already state into review_reasons, and never restate an analysis uncertainty in other words. Publication copy follows the requested language and template, not subtitle language. overlay_title controls the large title burned in during the first seconds: clip_title shows clip_title, custom shows your own short text, none shows no title. Use custom or none when clip_title is misleading, shouty or not supported by the analysis. subtitles_enabled switches the burned-in speech captions on or off; keep it true for a new edit, and for a revision follow revision.instruction and keep the value from revision.previous unless the feedback asks to change the captions.", "source_duration_ms": frozen.media.duration_ms, "clip_title": frozen.source.title, "streamer": streamer_context(&frozen.source.login), "analysis": analysis, "language": language, "segments": segments, "audio_levels": audio_levels, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base,&frozen.source.title)) }),
             &personal,
         ),
         frames: vec![],
@@ -865,11 +936,17 @@ async fn plan(
         &runtime.configuration,
         &request,
     )
-    .await?;
+    .await
+    .map_err(AiEditorError::from)?;
     let mut result: Planning = serde_json::from_value(response.content)
         .map_err(|error| AiEditorError::plan_rejected(&format!("response shape: {error}")))?;
     result.clean_texts(runtime.limits.plan.max_text_bytes);
     validate_variants(&result, &frozen.publication, runtime)?;
+    let origin = if base.is_some() {
+        PlanOrigin::Revision
+    } else {
+        PlanOrigin::FirstPlan
+    };
     if let Some(base) = &base {
         base.validate(
             frozen.media.duration_ms,
@@ -880,12 +957,11 @@ async fn plan(
                 uncertainty: vec![],
                 analysis_notes: vec![],
             },
+            origin,
         )?;
+        result.fit_revision_cut();
         let mut proposal = result.revision_proposal.take().ok_or(AiEditorError::Plan)?;
-        if revision
-            .as_ref()
-            .is_some_and(|request| request.reanalysis_confirmed)
-        {
+        if revision.is_some_and(|request| request.reanalysis_confirmed) {
             proposal.reanalyze = false;
         }
         let estimate = match ctx.identity.manual() {
@@ -903,9 +979,7 @@ async fn plan(
         super::revision::validate_proposal(&mut proposal, base, &result, runtime, estimate)?;
         result.revision_proposal = Some(proposal);
     } else if result.revision_proposal.is_some() {
-        return Err(AiEditorError::plan_rejected(
-            "revision proposal without a revision",
-        ));
+        return Err(AiEditorError::plan_rejected("revision proposal without a revision").into());
     }
     if !analysis.uncertainty.is_empty() {
         result.plan.significant_uncertainty = true;
@@ -915,11 +989,12 @@ async fn plan(
             }
         }
     }
-    let validated = result.validate(
+    let validated = result.check(
         frozen.media.duration_ms,
         &runtime.limits.plan,
         &runtime.limits.copy,
         &analysis,
+        origin,
     )?;
     let _ = subtitles(ctx.checkpoints, &validated, runtime)?;
     let decisions = result
@@ -1492,6 +1567,7 @@ async fn render_one(
         &runtime.limits.plan,
         &runtime.limits.copy,
         &analysis(ctx.checkpoints)?,
+        result.origin(),
     )?;
     let video = allocation(ctx, runtime, variant_index).await?;
     let output = output_path(runtime, video.id);
@@ -1657,6 +1733,7 @@ async fn validate_one(
         &runtime.limits.plan,
         &runtime.limits.copy,
         &analysis(ctx.checkpoints)?,
+        planning.origin(),
     )?;
     let video = allocation(ctx, runtime, variant_index).await?;
     let Some(StageCheckpoint::Rendering {

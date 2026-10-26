@@ -505,7 +505,7 @@ fn output_identity(planning: &Planning, clip_title: &str) -> Value {
     })
 }
 
-pub(super) const REVISION_INSTRUCTION: &str = "Interpret feedback as a bounded edit of saved analysis. Set reanalyze=true only if new visual understanding is necessary and not yet authorized. Mark substantial changes for confirmation. The video shows exactly two kinds of text and each has its own control. Speech captions are the burned-in lines of the real speech in the lower part of the picture during the whole video: subtitles_enabled switches them on or off and subtitle_scale_percent only changes their size. The hook title is the large text at the very start of the video, previous_overlay_text shows what the previous version displayed: overlay_title controls it (mode clip_title shows clip_title, custom shows text, none shows no title). Map the feedback like this. Untertitel, Untertitel entfernen, subtitle, subtitles, caption, captions or the spoken words mean the speech captions: set subtitles_enabled=false to remove them or change subtitle_scale_percent to resize them. Titel, title, hook title, Überschrift or the big text at the start mean overlay_title. Kein Text, ohne Text, alle Texte entfernen, no text, remove every text or remove all text mean both: set subtitles_enabled=false and overlay_title.mode=none; the small channel name stays as source credit and cannot be removed, so say that in impact. Ambiguous wording about subtitles or captions always targets the speech captions and never the title; change the title only when the feedback names the title or all text. Keep every element the feedback does not mention exactly as in previous. kept_intervals and hook control the cut and the teaser. Caption wording cannot change because it is the real speech; preserve real speech and its language, stable layout and original audio. The server derives the list of changes from the real difference between previous and your plan and shows it to the user, so summary only needs a short note. Use impact to explain in German in one or two plain sentences what the change means for the video, or what could not be done and why, and never claim an edit that your returned plan does not contain. If nothing of the requested change can be done, return the previous plan unchanged and explain in impact what could not be done and why; no new version is produced then. Explain unsupported layout, creative or speech-rewriting requests honestly; never fabricate commands or cost estimates. Return a complete main plan and no extra variants for ordinary revisions.";
+pub(super) const REVISION_INSTRUCTION: &str = "Interpret feedback as a bounded edit of saved analysis. Set reanalyze=true only if new visual understanding is necessary and not yet authorized. Mark substantial changes for confirmation. The video shows exactly two kinds of text and each has its own control. Speech captions are the burned-in lines of the real speech in the lower part of the picture during the whole video: subtitles_enabled switches them on or off and subtitle_scale_percent only changes their size. The hook title is the large text at the very start of the video, previous_overlay_text shows what the previous version displayed: overlay_title controls it (mode clip_title shows clip_title, custom shows text, none shows no title). Map the feedback like this. Untertitel, Untertitel entfernen, subtitle, subtitles, caption, captions or the spoken words mean the speech captions: set subtitles_enabled=false to remove them or change subtitle_scale_percent to resize them. Titel, title, hook title, Überschrift or the big text at the start mean overlay_title. Kein Text, ohne Text, alle Texte entfernen, no text, remove every text or remove all text mean both: set subtitles_enabled=false and overlay_title.mode=none; the small channel name stays as source credit and cannot be removed, so say that in impact. Ambiguous wording about subtitles or captions always targets the speech captions and never the title; change the title only when the feedback names the title or all text. Keep every element the feedback does not mention exactly as in previous. kept_intervals and hook control the cut and the teaser. A cut the feedback asks for, such as starting later, ending earlier, making the video shorter or cutting after a moment, takes precedence over the analysis highlights: apply it to kept_intervals even when it removes part of a highlight. Start and end requests refer to the first and last kept interval of previous. The output length is the kept intervals plus the hook, so for a shorter video also shorten or drop the hook, and keep the hook inside the kept footage. Caption wording cannot change because it is the real speech; preserve real speech and its language, stable layout and original audio. The server derives the list of changes from the real difference between previous and your plan and shows it to the user, so summary only needs a short note. Use impact to explain in German in one or two plain sentences what the change means for the video, or what could not be done and why, and never claim an edit that your returned plan does not contain. If nothing of the requested change can be done, return the previous plan unchanged and explain in impact what could not be done and why; no new version is produced then. Explain unsupported layout, creative or speech-rewriting requests honestly; never fabricate commands or cost estimates. Return a complete main plan and no extra variants for ordinary revisions.";
 
 pub(super) fn request_context(
     request: &RevisionRequest,
@@ -542,7 +542,7 @@ pub(super) fn plan_changes(base: &Planning, next: &Planning, clip_title: &str) -
     let old = output_identity(base, clip_title);
     let new = output_identity(next, clip_title);
     if old["cut"] != new["cut"] {
-        changes.push("Schnitt geändert".to_owned());
+        changes.extend(cut_changes(&base.plan, &next.plan));
     }
     if old["hook"] != new["hook"] {
         let hook = match (old["hook"].is_null(), new["hook"].is_null()) {
@@ -571,18 +571,125 @@ pub(super) fn revision_summary(
 ) -> String {
     let only_channel_left =
         !next.subtitles_enabled && next.overlay_title.resolve(clip_title).trim().is_empty();
+    let length = (cut_identity(&base.plan) != cut_identity(&next.plan))
+        .then(|| format!("jetzt {} s lang", seconds(output_ms(&next.plan))));
     change_summary(
         &plan_changes(base, next, clip_title),
+        length.as_deref(),
         only_channel_left.then_some(CHANNEL_NOTE),
         max_bytes,
     )
 }
 
-pub(super) fn change_summary(changes: &[String], note: Option<&str>, max_bytes: usize) -> String {
+const UNCHANGED_VERSION: &str = "Die bisherige Fassung bleibt unverändert.";
+
+pub(super) fn rejected_proposal(reason: &str, max_bytes: usize) -> RevisionProposal {
+    let full = format!("{reason} {UNCHANGED_VERSION}");
+    let summary = if full.len() <= max_bytes {
+        full
+    } else {
+        truncate_to(reason, max_bytes)
+    };
+    RevisionProposal {
+        summary,
+        impact: String::new(),
+        reanalyze: false,
+        requires_confirmation: false,
+        estimated_provider_cost_usd: Some(0.0),
+    }
+}
+
+fn output_ms(plan: &super::EditPlan) -> u64 {
+    plan.kept_intervals
+        .iter()
+        .chain(&plan.hook)
+        .map(|interval| interval.end_ms.saturating_sub(interval.start_ms))
+        .sum()
+}
+
+type CutIdentity = (Vec<(u64, u64)>, Option<(u64, u64)>);
+
+fn cut_identity(plan: &super::EditPlan) -> CutIdentity {
+    let bounds = |interval: &super::KeptInterval| (interval.start_ms, interval.end_ms);
+    (
+        plan.kept_intervals.iter().map(bounds).collect(),
+        plan.hook.as_ref().map(bounds),
+    )
+}
+
+fn seconds(ms: u64) -> String {
+    let tenths = ms.saturating_add(50) / 100;
+    match tenths % 10 {
+        0 => format!("{}", tenths / 10),
+        rest => format!("{},{rest}", tenths / 10),
+    }
+}
+
+fn shift(label: &str, from_ms: u64, to_ms: u64) -> Option<String> {
+    let amount = from_ms.abs_diff(to_ms);
+    if amount < 100 {
+        return None;
+    }
+    let value = seconds(amount);
+    let unit = if value == "1" { "Sekunde" } else { "Sekunden" };
+    let direction = if to_ms > from_ms {
+        "später"
+    } else {
+        "früher"
+    };
+    Some(format!("{label} {value} {unit} {direction}"))
+}
+
+fn cut_changes(base: &super::EditPlan, next: &super::EditPlan) -> Vec<String> {
+    let edges = |plan: &super::EditPlan| {
+        plan.kept_intervals
+            .first()
+            .zip(plan.kept_intervals.last())
+            .map(|(first, last)| (first.start_ms, last.end_ms))
+    };
+    let (Some((base_start, base_end)), Some((next_start, next_end))) = (edges(base), edges(next))
+    else {
+        return vec!["Schnitt geändert".to_owned()];
+    };
+    let mut changes = [
+        shift("Start", base_start, next_start),
+        shift("Ende", base_end, next_end),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let inner = |plan: &super::EditPlan| {
+        let mut bounds = cut_identity(plan).0;
+        if let Some(first) = bounds.first_mut() {
+            first.0 = 0;
+        }
+        if let Some(last) = bounds.last_mut() {
+            last.1 = 0;
+        }
+        bounds
+    };
+    if inner(base) != inner(next) {
+        let label = if changes.is_empty() {
+            "Schnitt geändert"
+        } else {
+            "Mittelteil neu geschnitten"
+        };
+        changes.push(label.to_owned());
+    }
+    changes
+}
+
+pub(super) fn change_summary(
+    changes: &[String],
+    length: Option<&str>,
+    note: Option<&str>,
+    max_bytes: usize,
+) -> String {
+    let tail = length.map(|text| format!(", {text}")).unwrap_or_default();
     let sentence = |items: &[String]| match items {
         [] => "Am Video wurde nichts geändert.".to_owned(),
-        [only] => format!("Geändert: {only}."),
-        [rest @ .., last] => format!("Geändert: {} und {last}.", rest.join(", ")),
+        [only] => format!("Geändert: {only}{tail}."),
+        [rest @ .., last] => format!("Geändert: {} und {last}{tail}.", rest.join(", ")),
     };
     let bases = if changes.is_empty() {
         vec![sentence(changes), "Nichts geändert.".to_owned()]

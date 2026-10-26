@@ -4,8 +4,64 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::{
-    runtime_config::CopyLimits, store::TimelineEntry, AiEditorError, EditPlan, PlanLimits,
+    runtime_config::CopyLimits, store::TimelineEntry, AiEditorError, EditPlan, ErrorCode,
+    PlanLimits,
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PlanOrigin {
+    FirstPlan,
+    Revision,
+}
+
+const REJECTED_PLAN: &str = "Der neue Plan hat die technische Prüfung nicht bestanden.";
+
+#[derive(Debug)]
+pub(super) struct PlanRejection {
+    reason: String,
+    answer: &'static str,
+}
+
+impl PlanRejection {
+    fn new(reason: impl Into<String>, answer: &'static str) -> Self {
+        Self {
+            reason: reason.into(),
+            answer,
+        }
+    }
+
+    fn technical(reason: &str) -> Self {
+        Self::new(reason, REJECTED_PLAN)
+    }
+
+    fn edit_plan(code: ErrorCode) -> Self {
+        let answer = match code {
+            ErrorCode::TooMuchRemoved => {
+                "So viel lässt sich nicht wegschneiden, ein Mindestanteil des Clips muss erhalten bleiben."
+            }
+            ErrorCode::OutputTooLong => "Das Video wäre länger geworden als erlaubt.",
+            ErrorCode::InvalidHook => {
+                "Die Vorschau am Anfang muss 1 bis 5 Sekunden lang sein und aus dem behaltenen Teil stammen."
+            }
+            ErrorCode::HighlightRemoved => "Der Schnitt hätte einen markierten Höhepunkt entfernt.",
+            ErrorCode::InvalidInterval | ErrorCode::IntervalOrder | ErrorCode::TooManyIntervals => {
+                "Der neue Schnitt passt nicht zur Länge des Clips."
+            }
+            _ => REJECTED_PLAN,
+        };
+        Self::new(format!("edit plan: {code:?}"), answer)
+    }
+
+    pub fn answer(&self) -> &'static str {
+        self.answer
+    }
+}
+
+impl From<PlanRejection> for AiEditorError {
+    fn from(rejection: PlanRejection) -> Self {
+        AiEditorError::plan_rejected(&rejection.reason)
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -212,18 +268,16 @@ impl Analysis {
         }
     }
 
-    pub fn validate(&self, duration: u64, limits: &PlanLimits) -> Result<(), AiEditorError> {
+    pub fn validate(&self, duration: u64, limits: &PlanLimits) -> Result<(), PlanRejection> {
         let valid_text =
             |text: &String| !text.trim().is_empty() && text.len() <= limits.max_text_bytes;
         if self.highlights.len() > limits.max_highlights {
-            return Err(AiEditorError::plan_rejected(
-                "analysis: too many highlights",
-            ));
+            return Err(PlanRejection::technical("analysis: too many highlights"));
         }
         if self.highlights.iter().any(|entry| {
             entry.start_ms < 0 || entry.end_ms <= entry.start_ms || entry.end_ms as u64 > duration
         }) {
-            return Err(AiEditorError::plan_rejected(
+            return Err(PlanRejection::technical(
                 "analysis: highlight outside the source",
             ));
         }
@@ -232,7 +286,7 @@ impl Analysis {
             .iter()
             .any(|entry| !valid_text(&entry.description))
         {
-            return Err(AiEditorError::plan_rejected(
+            return Err(PlanRejection::technical(
                 "analysis: highlight text empty or too long",
             ));
         }
@@ -242,7 +296,7 @@ impl Analysis {
                 values.len() > limits.max_review_reasons || !values.iter().all(valid_text)
             })
         {
-            return Err(AiEditorError::plan_rejected(
+            return Err(PlanRejection::technical(
                 "analysis: notes or uncertainty over limits",
             ));
         }
@@ -258,38 +312,66 @@ impl Planning {
         }
     }
 
+    pub fn fit_revision_cut(&mut self) {
+        super::validation::fit_to_kept(&mut self.plan);
+        for variant in &mut self.variants {
+            super::validation::fit_to_kept(&mut variant.plan);
+        }
+    }
+
+    pub fn origin(&self) -> PlanOrigin {
+        if self.revision_proposal.is_some() {
+            PlanOrigin::Revision
+        } else {
+            PlanOrigin::FirstPlan
+        }
+    }
+
     pub fn validate(
         &self,
         duration: u64,
         limits: &PlanLimits,
         copy_limits: &CopyLimits,
         analysis: &Analysis,
+        origin: PlanOrigin,
     ) -> Result<super::ValidatedPlan, AiEditorError> {
+        self.check(duration, limits, copy_limits, analysis, origin)
+            .map_err(Into::into)
+    }
+
+    pub fn check(
+        &self,
+        duration: u64,
+        limits: &PlanLimits,
+        copy_limits: &CopyLimits,
+        analysis: &Analysis,
+        origin: PlanOrigin,
+    ) -> Result<super::ValidatedPlan, PlanRejection> {
         analysis.validate(duration, limits)?;
         if !(60..=140).contains(&self.subtitle_scale_percent) {
-            return Err(AiEditorError::plan_rejected(
+            return Err(PlanRejection::new(
                 "subtitle_scale_percent outside 60..=140",
+                "Die Untertitelgröße muss zwischen 60 und 140 % liegen.",
             ));
         }
         if self.variants.len() > 2 {
-            return Err(AiEditorError::plan_rejected("more than two variants"));
+            return Err(PlanRejection::technical("more than two variants"));
         }
         if let Some(reason) = self.overlay_title.rejection() {
-            return Err(AiEditorError::plan_rejected(reason));
+            return Err(PlanRejection::new(
+                reason,
+                "Der neue Titel ist leer, zu lang oder enthält ungültige Zeichen.",
+            ));
         }
         for variant in &self.variants {
             variant
                 .planning()
-                .validate(duration, limits, copy_limits, analysis)?;
+                .check(duration, limits, copy_limits, analysis, origin)?;
         }
-        if serde_json::to_vec(self)
-            .map_err(|_| AiEditorError::Plan)?
-            .len()
-            > limits.max_plan_bytes
-        {
-            return Err(AiEditorError::plan_rejected(
-                "plan larger than max_plan_bytes",
-            ));
+        let encoded = serde_json::to_vec(self)
+            .map_err(|_| PlanRejection::technical("plan not serializable"))?;
+        if encoded.len() > limits.max_plan_bytes {
+            return Err(PlanRejection::technical("plan larger than max_plan_bytes"));
         }
         if self.platforms.len() != crate::posting_plan::PLATFORMS.len()
             || self
@@ -297,24 +379,26 @@ impl Planning {
                 .keys()
                 .any(|platform| !crate::posting_plan::PLATFORMS.contains(&platform.as_str()))
         {
-            return Err(AiEditorError::plan_rejected(
-                "platform copy set does not match",
-            ));
+            return Err(PlanRejection::technical("platform copy set does not match"));
         }
         for copy in self.platforms.values() {
             if let Some(reason) = copy_rejection(copy, copy_limits) {
-                return Err(AiEditorError::plan_rejected(reason));
+                return Err(PlanRejection::new(
+                    reason,
+                    "Die Plattformtexte sind leer, zu lang oder enthalten ungültige Hashtags.",
+                ));
             }
         }
-        let validated =
-            super::validate_plan(self.plan.clone(), duration, limits).map_err(|error| {
-                AiEditorError::plan_rejected(&format!("edit plan: {:?}", error.code))
-            })?;
-        if analysis.highlights.iter().any(|highlight| {
-            !validated.preserves_highlight(highlight.start_ms as u64, highlight.end_ms as u64)
-        }) {
-            return Err(AiEditorError::plan_rejected(
+        let validated = super::validate_plan(self.plan.clone(), duration, limits)
+            .map_err(|error| PlanRejection::edit_plan(error.code))?;
+        if origin == PlanOrigin::FirstPlan
+            && analysis.highlights.iter().any(|highlight| {
+                !validated.preserves_highlight(highlight.start_ms as u64, highlight.end_ms as u64)
+            })
+        {
+            return Err(PlanRejection::new(
                 "analysis highlight cut out of the plan",
+                "Der Schnitt hätte den erkannten Höhepunkt entfernt.",
             ));
         }
         if !analysis.uncertainty.is_empty()
@@ -324,7 +408,7 @@ impl Planning {
                     .iter()
                     .any(|reason| !self.plan.review_reasons.contains(reason)))
         {
-            return Err(AiEditorError::plan_rejected(
+            return Err(PlanRejection::technical(
                 "analysis uncertainty missing in review reasons",
             ));
         }

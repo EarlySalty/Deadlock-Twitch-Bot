@@ -1,3 +1,4 @@
+use super::super::stage_contract::PlanOrigin;
 use super::*;
 
 use crate::test_support::postgres;
@@ -225,6 +226,7 @@ async fn prepared(
         &runtime.limits.plan,
         &runtime.limits.copy,
         &analysis(&checkpoints).expect("persisted analysis"),
+        PlanOrigin::FirstPlan,
     )
     .expect("real deterministic plan validation");
     checkpoints.insert(
@@ -281,10 +283,20 @@ async fn analyzed_highlights_guard_fresh_and_resumed_plans_before_render_and_qa(
                 frozen.media.duration_ms,
                 &runtime.limits.plan,
                 &runtime.limits.copy,
-                &analyzed
+                &analyzed,
+                PlanOrigin::FirstPlan,
             ),
             Err(AiEditorError::Plan)
         ));
+        changed
+            .validate(
+                frozen.media.duration_ms,
+                &runtime.limits.plan,
+                &runtime.limits.copy,
+                &analyzed,
+                PlanOrigin::Revision,
+            )
+            .expect("requested revision cut overrides the highlight");
         checkpoints.insert(
             AiStage::Planning,
             StageCheckpoint::Planning {
@@ -333,6 +345,7 @@ async fn analyzed_highlights_guard_fresh_and_resumed_plans_before_render_and_qa(
             &runtime.limits.plan,
             &runtime.limits.copy,
             &analyzed,
+            PlanOrigin::FirstPlan,
         )
         .expect("full context and reaction preserved despite empty planner observations");
     let mut uncertain = analyzed;
@@ -344,7 +357,8 @@ async fn analyzed_highlights_guard_fresh_and_resumed_plans_before_render_and_qa(
             frozen.media.duration_ms,
             &runtime.limits.plan,
             &runtime.limits.copy,
-            &uncertain
+            &uncertain,
+            PlanOrigin::FirstPlan,
         )
         .is_err());
     let mut reviewed = original;
@@ -355,7 +369,8 @@ async fn analyzed_highlights_guard_fresh_and_resumed_plans_before_render_and_qa(
             frozen.media.duration_ms,
             &runtime.limits.plan,
             &runtime.limits.copy,
-            &uncertain
+            &uncertain,
+            PlanOrigin::FirstPlan,
         )
         .expect("uncertainty remains visible")
         .needs_review());
@@ -2161,6 +2176,7 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
         &runtime.limits.plan,
         &runtime.limits.copy,
         &analysis(&checkpoints).expect("persisted analysis"),
+        PlanOrigin::FirstPlan,
     )
     .expect("bounded variant");
     let mut duplicate = plan.clone();
@@ -3535,3 +3551,119 @@ fn disabled_captions_render_without_speech_burn_in() {
 
 #[path = "acceptance_tests.rs"]
 mod acceptance;
+
+fn whole_clip_highlight() -> Analysis {
+    Analysis {
+        highlights: vec![TimelineEntry {
+            start_ms: 0,
+            end_ms: 11_833,
+            description: "Ganzer Kampf".into(),
+        }],
+        uncertainty: vec![],
+        analysis_notes: vec![],
+    }
+}
+
+fn publishable_fixture() -> Planning {
+    let mut planning = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
+    planning.platforms = crate::posting_plan::PLATFORMS
+        .iter()
+        .map(|platform| {
+            (
+                (*platform).into(),
+                super::super::stage_contract::PublicationCopy {
+                    title: "Fixture".into(),
+                    description: "Fixture".into(),
+                    hashtags: vec!["#Deadlock".into()],
+                },
+            )
+        })
+        .collect();
+    planning
+}
+
+fn trimmed_revision() -> Planning {
+    let mut trimmed = publishable_fixture();
+    trimmed.plan.kept_intervals[0].start_ms = 3_000;
+    trimmed.plan.hook = Some(super::super::KeptInterval {
+        start_ms: 1_000,
+        end_ms: 4_500,
+        reason: "Vorschau".into(),
+    });
+    trimmed.fit_revision_cut();
+    trimmed
+}
+
+#[test]
+fn requested_revision_cut_overrides_the_analysis_highlight() {
+    let root = tempfile::tempdir().expect("package root");
+    let runtime = runtime(root.path());
+    let trimmed = trimmed_revision();
+    let hook = trimmed
+        .plan
+        .hook
+        .as_ref()
+        .expect("hook kept inside the cut");
+    assert_eq!((hook.start_ms, hook.end_ms), (3_000, 4_500));
+    trimmed
+        .check(
+            11_833,
+            &runtime.limits.plan,
+            &runtime.limits.copy,
+            &whole_clip_highlight(),
+            PlanOrigin::Revision,
+        )
+        .expect("streamer cut is accepted");
+}
+
+#[test]
+fn autonomous_cut_into_the_analysis_highlight_stays_rejected() {
+    let root = tempfile::tempdir().expect("package root");
+    let runtime = runtime(root.path());
+    let rejection = trimmed_revision()
+        .check(
+            11_833,
+            &runtime.limits.plan,
+            &runtime.limits.copy,
+            &whole_clip_highlight(),
+            PlanOrigin::FirstPlan,
+        )
+        .expect_err("first plan keeps the highlight");
+    assert!(rejection.answer().contains("Höhepunkt"));
+}
+
+#[test]
+fn rejected_revision_plan_yields_an_answer() {
+    use super::super::revision::rejected_proposal;
+    let root = tempfile::tempdir().expect("package root");
+    let runtime = runtime(root.path());
+    let mut too_short = publishable_fixture();
+    too_short.plan.kept_intervals[0].start_ms = 11_500;
+    let rejection = too_short
+        .check(
+            11_833,
+            &runtime.limits.plan,
+            &runtime.limits.copy,
+            &whole_clip_highlight(),
+            PlanOrigin::Revision,
+        )
+        .expect_err("almost nothing left");
+    let failure = PlanFailure::from(rejection);
+    let proposal = rejected_proposal(&failure.answer(), runtime.limits.plan.max_text_bytes);
+    assert!(proposal.summary.starts_with(&failure.answer()));
+    assert!(proposal
+        .summary
+        .ends_with("Die bisherige Fassung bleibt unverändert."));
+    assert!(!proposal.requires_confirmation);
+}
+
+#[test]
+fn trimmed_revision_names_the_cut_and_the_new_length() {
+    let base = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
+    let mut later = base.clone();
+    later.plan.kept_intervals[0].start_ms = 3_000;
+    assert_eq!(
+        super::super::revision::revision_summary(&base, &later, "EZ", 512),
+        "Geändert: Start 3 Sekunden später, jetzt 8,8 s lang."
+    );
+}
