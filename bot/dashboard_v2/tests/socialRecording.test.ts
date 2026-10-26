@@ -132,6 +132,40 @@ test('A final keepalive flush waits behind a chunk that is still retrying', asyn
   assert.deepEqual(seqs, [0, 0, 1]);
 });
 
+test('A stalled upload is aborted after the deadline and retried', async () => {
+  const seqs: number[] = [];
+  let aborted = 0;
+  const uploader = new RecordingUploader('s', (body, _keepalive, signal) => {
+    seqs.push((JSON.parse(body) as { seq: number }).seq);
+    if (seqs.length > 1) return Promise.resolve({ status: 200 });
+    return new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => { aborted += 1; reject(new Error('aborted')); });
+    });
+  }, META, () => {}, async () => {}, 5);
+  uploader.push({ type: 2, timestamp: 1 });
+  await uploader.flush(false);
+  assert.equal(aborted, 1);
+  assert.deepEqual(seqs, [0, 0]);
+});
+
+test('Queued bodies count against the session cap before they are sent', async () => {
+  let calls = 0;
+  let stopped = 0;
+  const uploader = new RecordingUploader('s', () => {
+    calls += 1;
+    return new Promise(() => {});
+  }, META, () => { stopped += 1; }, async () => {}, 60_000);
+  const filler = 'x'.repeat(1024 * 1024);
+  for (let index = 0; index < 25 && !uploader.stopped; index += 1) {
+    uploader.push({ type: 3, timestamp: index, data: filler });
+    void uploader.flush(false);
+  }
+  await Promise.resolve();
+  assert.equal(uploader.stopped, true);
+  assert.equal(stopped, 1);
+  assert.ok(calls <= 1);
+});
+
 test('Keepalive is only used for bodies the browser accepts', async () => {
   const calls: boolean[] = [];
   const uploader = new RecordingUploader('s', async (_body, keepalive) => {

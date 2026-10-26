@@ -3,8 +3,9 @@ export const SESSION_MAX_BYTES = 20 * 1024 * 1024;
 export const KEEPALIVE_MAX_BYTES = 60 * 1024;
 
 export const RETRY_DELAYS_MS = [1_000, 4_000, 15_000];
+export const UPLOAD_TIMEOUT_MS = 30_000;
 
-export type ChunkSender = (body: string, keepalive: boolean) => Promise<{ status: number }>;
+export type ChunkSender = (body: string, keepalive: boolean, signal: AbortSignal) => Promise<{ status: number }>;
 export type Sleep = (ms: number) => Promise<void>;
 
 export interface ChunkMeta {
@@ -32,21 +33,30 @@ export class RecordingUploader {
   private buffer: string[] = [];
   private bufferBytes = 0;
   private seq = 0;
-  private sentBytes = 0;
+  private committedBytes = 0;
   private queue: Promise<void> = Promise.resolve();
   private readonly sessionId: string;
   private readonly send: ChunkSender;
   private readonly meta: ChunkMeta;
   private readonly onStop: () => void;
   private readonly sleep: Sleep;
+  private readonly timeoutMs: number;
   stopped = false;
 
-  constructor(sessionId: string, send: ChunkSender, meta: ChunkMeta, onStop: () => void, sleep: Sleep = defaultSleep) {
+  constructor(
+    sessionId: string,
+    send: ChunkSender,
+    meta: ChunkMeta,
+    onStop: () => void,
+    sleep: Sleep = defaultSleep,
+    timeoutMs: number = UPLOAD_TIMEOUT_MS,
+  ) {
     this.sessionId = sessionId;
     this.send = send;
     this.meta = meta;
     this.onStop = onStop;
     this.sleep = sleep;
+    this.timeoutMs = timeoutMs;
   }
 
   push(event: unknown): void {
@@ -65,7 +75,13 @@ export class RecordingUploader {
   flush(keepalive: boolean): Promise<void> {
     if (this.stopped || this.buffer.length === 0) return this.queue;
     const body = this.nextBody();
-    const useKeepalive = keepalive && byteLength(body) <= KEEPALIVE_MAX_BYTES;
+    const size = byteLength(body);
+    this.committedBytes += size;
+    if (this.committedBytes > SESSION_MAX_BYTES) {
+      this.stop();
+      return this.queue;
+    }
+    const useKeepalive = keepalive && size <= KEEPALIVE_MAX_BYTES;
     this.queue = this.queue.then(() => this.deliver(body, useKeepalive));
     return this.queue;
   }
@@ -87,11 +103,6 @@ export class RecordingUploader {
 
   private async deliver(body: string, keepalive: boolean): Promise<void> {
     if (this.stopped) return;
-    this.sentBytes += byteLength(body);
-    if (this.sentBytes > SESSION_MAX_BYTES) {
-      this.stop();
-      return;
-    }
     for (let attempt = 0; ; attempt += 1) {
       if (this.stopped) return;
       const status = await this.attempt(body, keepalive && attempt === 0);
@@ -108,10 +119,14 @@ export class RecordingUploader {
   }
 
   private async attempt(body: string, keepalive: boolean): Promise<number | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      return (await this.send(body, keepalive)).status;
+      return (await this.send(body, keepalive, controller.signal)).status;
     } catch {
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

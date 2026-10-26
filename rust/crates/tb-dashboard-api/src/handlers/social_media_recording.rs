@@ -166,6 +166,45 @@ fn parse_decision(body: &[u8]) -> Option<&'static str> {
     }
 }
 
+const CLOSE_SESSIONS_SQL: &str = "WITH closed AS (
+         UPDATE social_media_recording_sessions
+         SET deleted_at = now(), total_bytes = 0, chunk_count = 0
+         WHERE deleted_at IS NULL AND twitch_user_id = $1
+         RETURNING id
+     ), dropped AS (
+         DELETE FROM social_media_recording_chunks c USING closed WHERE c.session_id = closed.id
+     )
+     SELECT COUNT(*)::bigint FROM closed";
+
+const CLOSE_SESSION_SQL: &str = "WITH closed AS (
+         UPDATE social_media_recording_sessions
+         SET deleted_at = now(), total_bytes = 0, chunk_count = 0
+         WHERE deleted_at IS NULL AND id = $1::uuid
+         RETURNING id
+     ), dropped AS (
+         DELETE FROM social_media_recording_chunks c USING closed WHERE c.session_id = closed.id
+     )
+     SELECT COUNT(*)::bigint FROM closed";
+
+async fn close_user_sessions(
+    tx: &mut Transaction<'_, Postgres>,
+    twitch_user_id: &str,
+) -> Result<u64, sqlx::Error> {
+    let closed: i64 = sqlx::query_scalar(CLOSE_SESSIONS_SQL)
+        .bind(twitch_user_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    Ok(u64::try_from(closed).unwrap_or_default())
+}
+
+async fn close_session(pool: &PgPool, session_id: Uuid) -> Result<bool, sqlx::Error> {
+    let closed: i64 = sqlx::query_scalar(CLOSE_SESSION_SQL)
+        .bind(session_id.to_string())
+        .fetch_one(pool)
+        .await?;
+    Ok(closed > 0)
+}
+
 async fn save_decision(
     pool: &PgPool,
     recorder: &Recorder,
@@ -184,11 +223,7 @@ async fn save_decision(
     .execute(&mut *tx)
     .await?;
     let deleted = if decision == "declined" {
-        sqlx::query("DELETE FROM social_media_recording_sessions WHERE twitch_user_id = $1")
-            .bind(&recorder.twitch_user_id)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected()
+        close_user_sessions(&mut tx, &recorder.twitch_user_id).await?
     } else {
         0
     };
@@ -330,7 +365,7 @@ async fn lock_session(
     }
     let row = sqlx::query(
         "SELECT twitch_user_id, total_bytes FROM social_media_recording_sessions
-         WHERE id = $1::uuid FOR UPDATE",
+         WHERE id = $1::uuid AND deleted_at IS NULL FOR UPDATE",
     )
     .bind(chunk.session_id.to_string())
     .fetch_optional(&mut **tx)
@@ -514,7 +549,7 @@ async fn list_sessions(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
         "SELECT id::text AS id, twitch_user_id, twitch_login, started_at, last_chunk_at,
                 total_bytes, chunk_count, viewport_width, viewport_height, user_agent
          FROM social_media_recording_sessions
-         WHERE chunk_count > 0
+         WHERE chunk_count > 0 AND deleted_at IS NULL
          ORDER BY started_at DESC
          LIMIT $1",
     )
@@ -585,13 +620,9 @@ pub async fn admin_delete_handler(
     let Ok(session_id) = Uuid::parse_str(&session_id) else {
         return error(StatusCode::BAD_REQUEST, "invalid_session_id");
     };
-    let result = sqlx::query("DELETE FROM social_media_recording_sessions WHERE id = $1::uuid")
-        .bind(session_id.to_string())
-        .execute(&pool)
-        .await;
-    match result {
-        Ok(done) if done.rows_affected() > 0 => Json(json!({ "ok": true })).into_response(),
-        Ok(_) => error(StatusCode::NOT_FOUND, "not_found"),
+    match close_session(&pool, session_id).await {
+        Ok(true) => Json(json!({ "ok": true })).into_response(),
+        Ok(false) => error(StatusCode::NOT_FOUND, "not_found"),
         Err(e) => db_error("admin_delete", e),
     }
 }
@@ -797,18 +828,28 @@ mod tests {
         assert_eq!(decide(&pool, "111", "granted").await, StatusCode::OK);
         assert_eq!(send_chunk(&pool, "111", 0).await, StatusCode::OK);
         assert_eq!(send_chunk(&pool, "111", 1).await, StatusCode::OK);
+        let session = Uuid::parse_str(SESSION).unwrap();
+        assert!(close_session(&pool, session).await.unwrap());
+        assert!(!close_session(&pool, session).await.unwrap());
+        assert_eq!(chunk_rows(&pool).await, 0);
+        assert_eq!(send_chunk(&pool, "111", 0).await, StatusCode::GONE);
+        assert_eq!(send_chunk(&pool, "111", 2).await, StatusCode::GONE);
+        assert_eq!(chunk_rows(&pool).await, 0);
+        assert!(list_sessions(&pool).await.unwrap().is_empty());
+        assert_eq!(decide(&pool, "111", "declined").await, StatusCode::OK);
+        assert_eq!(decide(&pool, "111", "granted").await, StatusCode::OK);
+        assert_eq!(send_chunk(&pool, "111", 0).await, StatusCode::GONE);
         sqlx::query("DELETE FROM social_media_recording_sessions")
             .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(send_chunk(&pool, "111", 2).await, StatusCode::GONE);
+        assert_eq!(send_chunk(&pool, "111", 1).await, StatusCode::GONE);
         let sessions: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM social_media_recording_sessions")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(sessions, 0);
-        assert_eq!(chunk_rows(&pool).await, 0);
     }
 
     #[tokio::test]

@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS public.social_media_recording_sessions (
     viewport_width INTEGER,
     viewport_height INTEGER,
     total_bytes BIGINT NOT NULL DEFAULT 0,
-    chunk_count INTEGER NOT NULL DEFAULT 0
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    deleted_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS social_media_recording_sessions_user_started_idx

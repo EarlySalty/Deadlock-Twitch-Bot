@@ -28,10 +28,16 @@ export async function saveRecordingConsent(decision: RecordingDecision, csrfToke
   if (!response.ok) throw new Error(`http_${response.status}`);
 }
 
-export function postRecordingChunk(body: string, keepalive: boolean, csrfToken: string | null | undefined): Promise<Response> {
+export function postRecordingChunk(
+  body: string,
+  keepalive: boolean,
+  signal: AbortSignal,
+  csrfToken: string | null | undefined,
+): Promise<Response> {
   return fetch(`${BASE}/chunk`, withCookieCredentials({
     method: 'POST',
     keepalive,
+    signal,
     headers: writeHeaders(csrfToken),
     body,
   }));

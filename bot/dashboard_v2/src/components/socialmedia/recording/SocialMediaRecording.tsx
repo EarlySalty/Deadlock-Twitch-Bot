@@ -23,6 +23,7 @@ function recordingAvailable(): boolean {
 function useRecorder(recording: boolean, csrfToken: string | null) {
   const csrfRef = useRef(csrfToken);
   const handleRef = useRef<RecordingHandle | null>(null);
+  const discardedRef = useRef(false);
 
   useEffect(() => {
     csrfRef.current = csrfToken;
@@ -31,9 +32,10 @@ function useRecorder(recording: boolean, csrfToken: string | null) {
   useEffect(() => {
     if (!recording) return;
     let cancelled = false;
+    discardedRef.current = false;
     void import('./recorder').then(({ startRecording }) => {
-      if (cancelled) return;
-      handleRef.current = startRecording((body, keepalive) => postRecordingChunk(body, keepalive, csrfRef.current));
+      if (cancelled || discardedRef.current) return;
+      handleRef.current = startRecording((body, keepalive, signal) => postRecordingChunk(body, keepalive, signal, csrfRef.current));
     });
     return () => {
       cancelled = true;
@@ -45,6 +47,7 @@ function useRecorder(recording: boolean, csrfToken: string | null) {
   return {
     csrfRef,
     discard() {
+      discardedRef.current = true;
       handleRef.current?.stop(false);
       handleRef.current = null;
     },
