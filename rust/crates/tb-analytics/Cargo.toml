@@ -8,7 +8,7 @@ futures-util = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
 zeroize = { workspace = true }
 tb-config = { workspace = true }
-zstd = "0.13"
+zstd = "0.14"
 tempfile = "3"
 tb-stream-audit = { workspace = true }
 nix = { version = "0.31", features = ["fs"] }
