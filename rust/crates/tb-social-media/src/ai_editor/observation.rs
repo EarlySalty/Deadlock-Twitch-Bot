@@ -121,6 +121,7 @@ mod tests {
     fn config() -> VideoObserverConfig {
         VideoObserverConfig {
             steel_endpoint: "http://127.0.0.1:3000".into(),
+            devtools_endpoint: "http://127.0.0.1:9223".into(),
             chat_url: "https://gemini.google.com/app".into(),
             model_item: "4 Argon".into(),
             thinking_menu: "Thinking level".into(),

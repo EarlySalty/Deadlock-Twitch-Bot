@@ -45,7 +45,7 @@ impl SteelSession {
     pub(super) async fn upload(
         &self,
         name: &str,
-        bytes: Vec<u8>,
+        bytes: &[u8],
         timeout: Duration,
     ) -> Result<String, ObserverError> {
         let boundary = format!("steel{}", self.id.replace('-', ""));
@@ -53,7 +53,7 @@ impl SteelSession {
             "--{boundary}\r\nContent-Disposition: form-data; name=\"path\"\r\n\r\n{name}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\nContent-Type: video/mp4\r\n\r\n"
         )
         .into_bytes();
-        body.extend_from_slice(&bytes);
+        body.extend_from_slice(bytes);
         body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
         let stored: Value = self
             .client

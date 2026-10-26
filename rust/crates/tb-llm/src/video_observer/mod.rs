@@ -1,6 +1,9 @@
 mod cdp;
 mod gemini;
+mod keeper;
 mod steel;
+
+pub use keeper::{check_session, keep_alive, Session};
 
 use std::{fmt, path::Path, time::Duration};
 
@@ -43,6 +46,8 @@ impl std::error::Error for ObserverError {}
 #[serde(deny_unknown_fields)]
 pub struct VideoObserverConfig {
     pub steel_endpoint: String,
+    #[serde(default = "default_devtools_endpoint")]
+    pub devtools_endpoint: String,
     pub chat_url: String,
     pub model_item: String,
     pub thinking_menu: String,
@@ -56,9 +61,22 @@ pub struct VideoObserverConfig {
     pub total_deadline_ms: u64,
 }
 
+fn default_devtools_endpoint() -> String {
+    "http://127.0.0.1:9223".to_owned()
+}
+
+fn local_endpoint(value: &str) -> bool {
+    reqwest::Url::parse(value).is_ok_and(|url| {
+        url.scheme() == "http"
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
+            && url.port().is_some()
+            && url.path() == "/"
+            && !value.ends_with('/')
+    })
+}
+
 impl VideoObserverConfig {
     pub fn valid(&self) -> bool {
-        let endpoint = reqwest::Url::parse(&self.steel_endpoint).ok();
         let chat = reqwest::Url::parse(&self.chat_url).ok();
         let labels = [
             &self.model_item,
@@ -66,17 +84,14 @@ impl VideoObserverConfig {
             &self.thinking_item,
             &self.active_label,
         ];
-        endpoint.is_some_and(|url| {
-            url.scheme() == "http"
-                && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
-                && url.port().is_some()
-                && url.path() == "/"
-                && !self.steel_endpoint.ends_with('/')
-        }) && chat.is_some_and(|url| {
-            url.scheme() == "https" && url.host_str() == Some("gemini.google.com")
-        }) && labels
-            .iter()
-            .all(|label| !label.trim().is_empty() && label.len() <= 80)
+        local_endpoint(&self.steel_endpoint)
+            && local_endpoint(&self.devtools_endpoint)
+            && chat.is_some_and(|url| {
+                url.scheme() == "https" && url.host_str() == Some("gemini.google.com")
+            })
+            && labels
+                .iter()
+                .all(|label| !label.trim().is_empty() && label.len() <= 80)
             && (1..=512 * 1024 * 1024).contains(&self.max_video_bytes)
             && (1_000..=64_000).contains(&self.max_answer_bytes)
             && (1_000..=120_000).contains(&self.step_timeout_ms)
@@ -108,7 +123,13 @@ pub async fn observe(
     let prompt = prompt.to_owned();
     tokio::spawn(async move {
         let _browser = BROWSER.lock().await;
-        run(&config, bytes, &prompt).await
+        match run(&config, &bytes, &prompt).await {
+            Err(ObserverError::NotLoggedIn) => {
+                keeper::ensure(&config).await?;
+                run(&config, &bytes, &prompt).await
+            }
+            result => result,
+        }
     })
     .await
     .map_err(|_| ObserverError::Unavailable)?
@@ -128,7 +149,7 @@ async fn read_video(path: &Path, max_bytes: u64) -> Result<Vec<u8>, ObserverErro
 
 async fn run(
     config: &VideoObserverConfig,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     prompt: &str,
 ) -> Result<String, ObserverError> {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(config.total_deadline_ms);

@@ -44,6 +44,11 @@ impl Cdp {
             .as_str()
             .ok_or(ObserverError::Ui)?
             .to_owned();
+        self.attach_page(&target).await?;
+        Ok(target)
+    }
+
+    pub(super) async fn attach_page(&mut self, target: &str) -> Result<(), ObserverError> {
         let session = self
             .browser(
                 "Target.attachToTarget",
@@ -57,7 +62,7 @@ impl Cdp {
         for domain in ["Page.enable", "Runtime.enable", "DOM.enable"] {
             self.page(domain, json!({})).await?;
         }
-        Ok(target)
+        Ok(())
     }
 
     pub(super) async fn close_page(&mut self, target: &str) {
@@ -119,6 +124,28 @@ impl Cdp {
                 json!({ "type": kind, "key": key, "code": code, "windowsVirtualKeyCode": virtual_key }),
             )
             .await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn type_text(
+        &mut self,
+        text: &str,
+        delay: Duration,
+    ) -> Result<(), ObserverError> {
+        for character in text.chars() {
+            let key = character.to_string();
+            self.page(
+                "Input.dispatchKeyEvent",
+                json!({ "type": "keyDown", "key": key, "text": key }),
+            )
+            .await?;
+            self.page(
+                "Input.dispatchKeyEvent",
+                json!({ "type": "keyUp", "key": key }),
+            )
+            .await?;
+            tokio::time::sleep(delay).await;
         }
         Ok(())
     }

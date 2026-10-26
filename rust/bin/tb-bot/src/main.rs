@@ -1879,6 +1879,12 @@ async fn main() {
 
         match tb_social_media::ai_editor::EditorRuntime::load_packaged() {
             Ok(runtime) => {
+                if let Some(observer) = runtime.limits.video_observer.clone() {
+                    supervisor.spawn(
+                        "gemini_session_keeper",
+                        tb_llm::video_observer::keep_alive(observer),
+                    );
+                }
                 let worker = tb_social_media::ai_editor::ManualWorker::new(
                     pool.clone(),
                     runtime,
