@@ -1,0 +1,283 @@
+{
+ "clip": {
+  "key": "ez",
+  "owner": "1376724506",
+  "clip_db_id": 125390,
+  "why": "11.8 s, short kill; jobs 45, 47, 49, 52 (overlay title remove/replace)"
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer.",
+    "from": "root"
+   },
+   "parent_version_id": 99,
+   "http": 200,
+   "job_id": 138,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 104,
+   "proposal": {
+    "summary": "Geändert: Start 2 Sekunden später, Ende 1,2 Sekunden früher und Vorschau am Anfang geändert, jetzt 10,6 s lang.",
+    "impact": "Das Video ist jetzt etwa 10,6 statt rund 15,8 Sekunden lang. Die ersten 2 Sekunden mit der Frage Are you good, das Ende nach dem zweiten Kill samt Shop-Menü und ein Teil des Teasers fallen weg, alle wichtigen Momente bleiben drin.",
+    "reanalyze": false,
+    "requires_confirmation": true,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 12179,
+    "shown_output": 1985,
+    "tokens_in": 2,
+    "tokens_out": 1985,
+    "cache_creation": 8448,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      11833
+     ]
+    ],
+    "hook": [
+     6500,
+     10500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Mit 5 HP entkommen und nachgelegt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "5 HP und trotzdem der zweite Kill",
+     "youtube": "Mit 5 HP entkommen und noch einen Kill geholt",
+     "instagram": "Mit 5 HP zum zweiten Kill"
+    },
+    "output_duration_ms": 15833,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "signature": {
+    "kept": [
+     [
+      2000,
+      10600
+     ]
+    ],
+    "hook": [
+     7000,
+     9000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Mit 5 HP entkommen und nachgelegt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "5 HP und trotzdem der zweite Kill",
+     "youtube": "Mit 5 HP entkommen und noch einen Kill geholt",
+     "instagram": "Mit 5 HP zum zweiten Kill"
+    },
+    "output_duration_ms": 10600,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "hook",
+    "kept",
+    "output_duration_ms"
+   ],
+   "version_id": 100,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Im Treppenhaus fällt der Streamer nach dem ersten Kill auf 5 HP, entkommt mit Sanguine Retreat und holt sich mit wenigen HP noch den zweiten Kill.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Clutch"
+      ],
+      "title": "Mit 5 HP zum zweiten Kill"
+     },
+     "tiktok": {
+      "description": "Erster Kill, runter auf 5 HP, raus mit Sanguine Retreat und dann noch der zweite Kill auf der Treppe.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Clutch"
+      ],
+      "title": "5 HP und trotzdem der zweite Kill"
+     },
+     "youtube": {
+      "description": "Erster Kill im Treppenhaus, danach nur noch 5 HP. Sanguine Retreat rettet das Leben und mit wenigen HP kommt direkt der zweite Kill hinterher.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Mit 5 HP entkommen und noch einen Kill geholt"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 100
+   },
+   "frames": {
+    "duration_s": 10.7,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-trim-270865120-r2/ez/v100_sheet.jpg",
+    "points_s": [
+     0.5,
+     3.53,
+     7.06,
+     9.7
+    ]
+   }
+  }
+ ],
+ "create_http": 200,
+ "root": {
+  "job_id": 137,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 319,
+  "review_reasons": [
+   "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+  ],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 11833,
+    "description": "Der Streamer greift im Treppenhaus an, holt einen Kill, fällt dabei auf 5 HP, entkommt mit einer Fluchtfähigkeit und sichert mit wenigen HP einen zweiten Kill. Der ganze Clip ist der Highlight."
+   },
+   {
+    "start_ms": 3700,
+    "end_ms": 5000,
+    "description": "Direkt nach dem ersten Kill sinken die HP von 27 auf 5, dann rettet die Fluchtfähigkeit Sanguine Retreat den Streamer."
+   },
+   {
+    "start_ms": 6800,
+    "end_ms": 10600,
+    "description": "Mit nur rund 10 bis 17 HP kämpft der Streamer auf der Treppe weiter, schreit erschrocken auf und landet dann einen zweiten Eintrag im Killfeed."
+   }
+  ],
+  "original_duration_ms": 11833,
+  "version_id": 99,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Im Treppenhaus fällt der Streamer nach dem ersten Kill auf 5 HP, entkommt mit Sanguine Retreat und holt sich mit wenigen HP noch den zweiten Kill.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Clutch"
+     ],
+     "title": "Mit 5 HP zum zweiten Kill"
+    },
+    "tiktok": {
+     "description": "Erster Kill, runter auf 5 HP, raus mit Sanguine Retreat und dann noch der zweite Kill auf der Treppe.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Clutch"
+     ],
+     "title": "5 HP und trotzdem der zweite Kill"
+    },
+    "youtube": {
+     "description": "Erster Kill im Treppenhaus, danach nur noch 5 HP. Sanguine Retreat rettet das Leben und mit wenigen HP kommt direkt der zweite Kill hinterher.",
+     "hashtags": [
+      "Deadlock",
+      "Shorts",
+      "Gaming"
+     ],
+     "title": "Mit 5 HP entkommen und noch einen Kill geholt"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 99
+  },
+  "frames": {
+   "duration_s": 15.9,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/revision-trim-270865120-r2/ez/v99_sheet.jpg",
+   "points_s": [
+    0.5,
+    5.25,
+    10.49,
+    14.9
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     11833
+    ]
+   ],
+   "hook": [
+    6500,
+    10500
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "Mit 5 HP entkommen und nachgelegt"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "5 HP und trotzdem der zweite Kill",
+    "youtube": "Mit 5 HP entkommen und noch einen Kill geholt",
+    "instagram": "Mit 5 HP zum zweiten Kill"
+   },
+   "output_duration_ms": 15833,
+   "subtitles_enabled": true,
+   "plan_keys": [
+    "overlay_title",
+    "plan",
+    "platforms",
+    "revision_proposal",
+    "subtitle_scale_percent",
+    "subtitles_enabled",
+    "variants"
+   ]
+  },
+  "tokens": {
+   "shown_input": 27933,
+   "shown_output": 3093,
+   "tokens_in": 4,
+   "tokens_out": 3093,
+   "cache_creation": 27929,
+   "cache_read": 0,
+   "calls": 2
+  }
+ }
+}

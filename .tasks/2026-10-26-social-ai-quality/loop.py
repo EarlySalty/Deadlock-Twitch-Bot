@@ -228,15 +228,26 @@ def main():
     parser.add_argument("--only", nargs="*")
     parser.add_argument("--evidence", default="/home/nathanael/.cache/social-ai-quality")
     parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--requests", nargs="*")
+    parser.add_argument("--from-root", action="store_true")
+    parser.add_argument("--seed-root")
     args = parser.parse_args()
     config = json.loads((HERE / "testset.json").read_text())
+    requests = [r for r in config["requests"] if not args.requests or r["key"] in args.requests]
+    if args.from_root:
+        requests = [dict(r, **{"from": "root"}) for r in requests]
     evidence = Path(args.evidence) / args.run
     out_dir = HERE / "runs" / args.run
     out_dir.mkdir(parents=True, exist_ok=True)
     for clip in config["clips"]:
         if args.only and clip["key"] not in args.only:
             continue
-        run_clip(clip, config["requests"], evidence, args.timeout, out_dir / f"{clip['key']}.json")
+        target = out_dir / f"{clip['key']}.json"
+        seed = HERE / "runs" / (args.seed_root or "") / f"{clip['key']}.json"
+        if args.seed_root and seed.exists() and not target.exists():
+            root = json.loads(seed.read_text())
+            target.write_text(json.dumps({"clip": root["clip"], "root": root["root"], "revisions": []}, ensure_ascii=False, indent=1))
+        run_clip(clip, requests, evidence, args.timeout, target)
     return 0
 
 

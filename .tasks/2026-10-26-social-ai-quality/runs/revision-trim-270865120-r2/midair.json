@@ -1,0 +1,260 @@
+{
+ "clip": {
+  "key": "midair",
+  "owner": "1376724506",
+  "clip_db_id": 140447,
+  "why": "14.4 s, kill moment (mid air kidnap)"
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer.",
+    "from": "root"
+   },
+   "parent_version_id": 101,
+   "http": 200,
+   "job_id": 140,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 72,
+   "proposal": {
+    "summary": "Geändert: Start 2 Sekunden später, Ende 0,4 Sekunden früher und Vorschau am Anfang entfernt, jetzt 12 s lang.",
+    "impact": "Das Video ist jetzt etwa 12 statt rund 19 Sekunden lang, weil der Teaser am Anfang wegfällt und die ersten 2 Sekunden sowie das kurze Ende nach der Reaktion geschnitten sind. Aufbau, Hakentreffer und die vollständige Reaktion bleiben erhalten.",
+    "reanalyze": false,
+    "requires_confirmation": true,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 11724,
+    "shown_output": 1788,
+    "tokens_in": 2,
+    "tokens_out": 1788,
+    "cache_creation": 7993,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      14416
+     ]
+    ],
+    "hook": [
+     9000,
+     13820
+    ],
+    "overlay": {
+     "mode": "clip_title",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Mitten in der Luft entführt",
+     "youtube": "Gegner mitten in der Luft vom Himmel geholt",
+     "instagram": "Vom Himmel geholt"
+    },
+    "output_duration_ms": 19236,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "signature": {
+    "kept": [
+     [
+      2000,
+      14000
+     ]
+    ],
+    "hook": null,
+    "overlay": {
+     "mode": "clip_title",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Mitten in der Luft entführt",
+     "youtube": "Gegner mitten in der Luft vom Himmel geholt",
+     "instagram": "Vom Himmel geholt"
+    },
+    "output_duration_ms": 12000,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "hook",
+    "kept",
+    "output_duration_ms"
+   ],
+   "version_id": 102,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Ein Verbündeter erwischt einen hoch fliegenden Gegner mit einem extrem langen Haken und zieht ihn herunter. Der Streamer reagiert fassungslos.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming"
+      ],
+      "title": "Vom Himmel geholt"
+     },
+     "tiktok": {
+      "description": "Ein Verbündeter holt einen hoch fliegenden Gegner mit einem extrem langen Haken vom Himmel. Die Reaktion sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming"
+      ],
+      "title": "Mitten in der Luft entführt"
+     },
+     "youtube": {
+      "description": "Ein Verbündeter erwischt einen hoch fliegenden Gegner mit einem extrem langen Haken und zieht ihn vom Himmel. Der Streamer kann es kaum glauben.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts"
+      ],
+      "title": "Gegner mitten in der Luft vom Himmel geholt"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 102
+   },
+   "frames": {
+    "duration_s": 12.0,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-trim-270865120-r2/midair/v102_sheet.jpg",
+    "points_s": [
+     0.5,
+     3.96,
+     7.92,
+     11.0
+    ]
+   }
+  }
+ ],
+ "create_http": 200,
+ "root": {
+  "job_id": 139,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 206,
+  "review_reasons": [],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 14416,
+    "description": "Ein verbündeter Bebop holt einen hoch in der Luft fliegenden Gegner mit einem extrem langen Haken vom Himmel. Der Streamer reagiert ungläubig und lachend. Aufbau, Treffer und Reaktion bilden zusammen den ganzen Clip."
+   }
+  ],
+  "original_duration_ms": 14416,
+  "version_id": 101,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Ein Verbündeter erwischt einen hoch fliegenden Gegner mit einem extrem langen Haken und zieht ihn herunter. Der Streamer reagiert fassungslos.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming"
+     ],
+     "title": "Vom Himmel geholt"
+    },
+    "tiktok": {
+     "description": "Ein Verbündeter holt einen hoch fliegenden Gegner mit einem extrem langen Haken vom Himmel. Die Reaktion sagt alles.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming"
+     ],
+     "title": "Mitten in der Luft entführt"
+    },
+    "youtube": {
+     "description": "Ein Verbündeter erwischt einen hoch fliegenden Gegner mit einem extrem langen Haken und zieht ihn vom Himmel. Der Streamer kann es kaum glauben.",
+     "hashtags": [
+      "Deadlock",
+      "Shorts"
+     ],
+     "title": "Gegner mitten in der Luft vom Himmel geholt"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 101
+  },
+  "frames": {
+   "duration_s": 19.3,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/revision-trim-270865120-r2/midair/v101_sheet.jpg",
+   "points_s": [
+    0.5,
+    6.37,
+    12.74,
+    18.3
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     14416
+    ]
+   ],
+   "hook": [
+    9000,
+    13820
+   ],
+   "overlay": {
+    "mode": "clip_title",
+    "text": null
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Mitten in der Luft entführt",
+    "youtube": "Gegner mitten in der Luft vom Himmel geholt",
+    "instagram": "Vom Himmel geholt"
+   },
+   "output_duration_ms": 19236,
+   "subtitles_enabled": true,
+   "plan_keys": [
+    "overlay_title",
+    "plan",
+    "platforms",
+    "revision_proposal",
+    "subtitle_scale_percent",
+    "subtitles_enabled",
+    "variants"
+   ]
+  },
+  "tokens": {
+   "shown_input": 27440,
+   "shown_output": 2531,
+   "tokens_in": 4,
+   "tokens_out": 2531,
+   "cache_creation": 27436,
+   "cache_read": 0,
+   "calls": 2
+  }
+ }
+}

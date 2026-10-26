@@ -1,0 +1,384 @@
+{
+ "clip": {
+  "key": "talon",
+  "owner": "1376724506",
+  "clip_db_id": 140451,
+  "why": "8.1 s, very short"
+ },
+ "root": {
+  "job_id": 98,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 153,
+  "review_reasons": [],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 8128,
+    "description": "Der Streamer kämpft bei voller HP an einem großen Gegner und verliert durch zwei starke Treffer in kurzer Zeit den Großteil seiner HP. Er reagiert auf den hohen Schaden, stirbt kurz danach und schaut sich in der Death Cam einen Gegenstand mit Zusatzschaden an."
+   },
+   {
+    "start_ms": 1000,
+    "end_ms": 4960,
+    "description": "Kernmoment mit den zwei großen Schadensspitzen von 1690 über 906 auf 348 HP und dem direkten Kommentar des Streamers zu den 800 Schaden."
+   }
+  ],
+  "original_duration_ms": 8128,
+  "version_id": 73,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Zwei Treffer kurz hintereinander und die HP fallen von 1690 über 906 auf 348. Kurz danach ist der Streamer tot und sucht nach der Ursache.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Reels"
+     ],
+     "title": "Von 1690 auf 348 HP in Sekunden"
+    },
+    "tiktok": {
+     "description": "Zwei Treffer, und die HP fallen von 1690 über 906 auf 348. Danach geht es direkt in die Death Cam.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "fyp"
+     ],
+     "title": "Von 1690 auf 348 HP in Sekunden"
+    },
+    "youtube": {
+     "description": "Zwei Treffer kurz hintereinander und die HP fallen von 1690 über 906 auf 348. Kurz danach ist der Streamer tot und sucht im Scoreboard nach der Ursache.",
+     "hashtags": [
+      "Deadlock",
+      "Shorts",
+      "Gaming"
+     ],
+     "title": "Von 1690 auf 348 HP in Sekunden"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 73
+  },
+  "frames": {
+   "duration_s": 8.2,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/talon/v73_sheet.jpg",
+   "points_s": [
+    0.5,
+    2.71,
+    5.41,
+    7.2
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     8128
+    ]
+   ],
+   "hook": null,
+   "overlay": {
+    "mode": "custom",
+    "text": "Von 1690 auf 348 HP"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Von 1690 auf 348 HP in Sekunden",
+    "youtube": "Von 1690 auf 348 HP in Sekunden",
+    "instagram": "Von 1690 auf 348 HP in Sekunden"
+   },
+   "output_duration_ms": 8128
+  },
+  "tokens": {
+   "shown_input": 4,
+   "shown_output": 2911,
+   "tokens_in": 4,
+   "tokens_out": 2911,
+   "cache_creation": 26339,
+   "cache_read": 0,
+   "calls": 2
+  }
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "start_later",
+    "text": "Fang bitte 3 Sekunden später an.",
+    "from": "root"
+   },
+   "parent_version_id": 73,
+   "http": 200,
+   "job_id": 133,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 41,
+   "proposal": {
+    "summary": "Geändert: Start 2,9 Sekunden später, jetzt 5,2 s lang.",
+    "impact": "Das Video startet jetzt bei 2,88 Sekunden statt genau bei 3 Sekunden, damit der Satz über die 800 Schaden nicht abgeschnitten wird. Die beiden Treffer davor sind nicht mehr zu sehen, Titel und Untertitel bleiben unverändert.",
+    "reanalyze": false,
+    "requires_confirmation": true,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Durch den späteren Start fehlen die sichtbaren Schadensspitzen von 1690 über 906 HP. Titel und Beschreibungen nennen diese Werte aber weiterhin."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 11866,
+    "shown_output": 1723,
+    "tokens_in": 2,
+    "tokens_out": 1723,
+    "cache_creation": 11864,
+    "cache_read": 0,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      8128
+     ]
+    ],
+    "hook": null,
+    "overlay": {
+     "mode": "custom",
+     "text": "Von 1690 auf 348 HP"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Von 1690 auf 348 HP in Sekunden",
+     "youtube": "Von 1690 auf 348 HP in Sekunden",
+     "instagram": "Von 1690 auf 348 HP in Sekunden"
+    },
+    "output_duration_ms": 8128
+   },
+   "signature": {
+    "kept": [
+     [
+      2880,
+      8128
+     ]
+    ],
+    "hook": null,
+    "overlay": {
+     "mode": "custom",
+     "text": "Von 1690 auf 348 HP"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Von 1690 auf 348 HP in Sekunden",
+     "youtube": "Von 1690 auf 348 HP in Sekunden",
+     "instagram": "Von 1690 auf 348 HP in Sekunden"
+    },
+    "output_duration_ms": 5248,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "kept",
+    "output_duration_ms",
+    "plan_keys",
+    "subtitles_enabled"
+   ],
+   "version_id": 95,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Zwei Treffer kurz hintereinander und die HP fallen von 1690 über 906 auf 348. Kurz danach ist der Streamer tot und sucht nach der Ursache.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Von 1690 auf 348 HP in Sekunden"
+     },
+     "tiktok": {
+      "description": "Zwei Treffer, und die HP fallen von 1690 über 906 auf 348. Danach geht es direkt in die Death Cam.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Von 1690 auf 348 HP in Sekunden"
+     },
+     "youtube": {
+      "description": "Zwei Treffer kurz hintereinander und die HP fallen von 1690 über 906 auf 348. Kurz danach ist der Streamer tot und sucht im Scoreboard nach der Ursache.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Von 1690 auf 348 HP in Sekunden"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 95
+   },
+   "frames": {
+    "duration_s": 5.3,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-trim-270865120/talon/v95_sheet.jpg",
+    "points_s": [
+     0.5,
+     1.75,
+     3.5,
+     4.3
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer.",
+    "from": "root"
+   },
+   "parent_version_id": 73,
+   "http": 200,
+   "job_id": 134,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 41,
+   "proposal": {
+    "summary": "Geändert: Start 1 Sekunde später, Ende 2,9 Sekunden früher und Plattformtexte geändert, jetzt 4,3 s lang.",
+    "impact": "Das Video dauert jetzt etwa 4,3 statt 8,1 Sekunden. Es beginnt kurz vor dem ersten Treffer und endet nach dem Kommentar zu den 800 Schaden und dem Tod, der Blick ins Scoreboard ist nicht mehr dabei.",
+    "reanalyze": false,
+    "requires_confirmation": true,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 11860,
+    "shown_output": 1534,
+    "tokens_in": 2,
+    "tokens_out": 1534,
+    "cache_creation": 8129,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      8128
+     ]
+    ],
+    "hook": null,
+    "overlay": {
+     "mode": "custom",
+     "text": "Von 1690 auf 348 HP"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Von 1690 auf 348 HP in Sekunden",
+     "youtube": "Von 1690 auf 348 HP in Sekunden",
+     "instagram": "Von 1690 auf 348 HP in Sekunden"
+    },
+    "output_duration_ms": 8128
+   },
+   "signature": {
+    "kept": [
+     [
+      1000,
+      5250
+     ]
+    ],
+    "hook": null,
+    "overlay": {
+     "mode": "custom",
+     "text": "Von 1690 auf 348 HP"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Von 1690 auf 348 HP in Sekunden",
+     "youtube": "Von 1690 auf 348 HP in Sekunden",
+     "instagram": "Von 1690 auf 348 HP in Sekunden"
+    },
+    "output_duration_ms": 4250,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "kept",
+    "output_duration_ms",
+    "plan_keys",
+    "subtitles_enabled"
+   ],
+   "version_id": 96,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Zwei Treffer kurz hintereinander und die HP fallen von 1690 über 906 auf 348. Kurz danach ist der Streamer tot.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Von 1690 auf 348 HP in Sekunden"
+     },
+     "tiktok": {
+      "description": "Zwei Treffer, und die HP fallen von 1690 über 906 auf 348. Danach geht es direkt in die Death Cam.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Von 1690 auf 348 HP in Sekunden"
+     },
+     "youtube": {
+      "description": "Zwei Treffer kurz hintereinander und die HP fallen von 1690 über 906 auf 348. Kurz danach ist der Streamer tot.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Von 1690 auf 348 HP in Sekunden"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 96
+   },
+   "frames": {
+    "duration_s": 4.3,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-trim-270865120/talon/v96_sheet.jpg",
+    "points_s": [
+     0.5,
+     1.42,
+     2.84,
+     3.3
+    ]
+   }
+  }
+ ]
+}

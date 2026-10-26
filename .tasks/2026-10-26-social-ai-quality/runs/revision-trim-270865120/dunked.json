@@ -1,0 +1,265 @@
+{
+ "clip": {
+  "key": "dunked",
+  "owner": "1376724506",
+  "clip_db_id": 140450,
+  "why": "29.9 s, kill on Vindicta; jobs 54, 58, 59, 60 (shorten, remove subtitle)"
+ },
+ "root": {
+  "job_id": 62,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 214,
+  "review_reasons": [
+   "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+  ],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 22020,
+    "description": "Der Streamer kämpft an der Treppe bei Downtown und erzielt um 11,5 Sekunden einen Kill. Er steigt auf Stufe 6 auf und kommentiert danach begeistert, wie er die Gegnerin aus der Höhe zu Boden geschlagen hat."
+   }
+  ],
+  "original_duration_ms": 29917,
+  "version_id": 59,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Kampf an der Treppe bei Downtown, Kill und Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Reels"
+     ],
+     "title": "Kill an der Treppe bei Downtown"
+    },
+    "tiktok": {
+     "description": "Kampf an der Treppe bei Downtown, Kill und Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "fyp"
+     ],
+     "title": "Kill an der Treppe bei Downtown"
+    },
+    "youtube": {
+     "description": "Kampf an der Treppe bei Downtown, Kill und direkt der Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+     "hashtags": [
+      "Deadlock",
+      "Shorts",
+      "Gaming"
+     ],
+     "title": "Kill an der Treppe bei Downtown in Deadlock"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 59
+  },
+  "frames": {
+   "duration_s": 26.9,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/dunked/v59_sheet.jpg",
+   "points_s": [
+    0.5,
+    8.88,
+    17.75,
+    25.9
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     22300
+    ]
+   ],
+   "hook": [
+    11000,
+    15500
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "Kill an der Treppe bei Downtown"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Kill an der Treppe bei Downtown",
+    "youtube": "Kill an der Treppe bei Downtown in Deadlock",
+    "instagram": "Kill an der Treppe bei Downtown"
+   },
+   "output_duration_ms": 26800
+  },
+  "tokens": {
+   "shown_input": 6,
+   "shown_output": 3934,
+   "tokens_in": 6,
+   "tokens_out": 3934,
+   "cache_creation": 28316,
+   "cache_read": 9716,
+   "calls": 2
+  }
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "start_later",
+    "text": "Fang bitte 3 Sekunden später an.",
+    "from": "root"
+   },
+   "parent_version_id": 59,
+   "http": 200,
+   "job_id": 125,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 113,
+   "proposal": {
+    "summary": "Geändert: Start 3 Sekunden später, jetzt 23,8 s lang.",
+    "impact": "Das Video beginnt jetzt bei drei Sekunden statt am Anfang, der Anlauf durch den Torbogen bleibt aber drin. Teaser, Titel, Untertitel und Texte bleiben unverändert.",
+    "reanalyze": false,
+    "requires_confirmation": true,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 12307,
+    "shown_output": 2202,
+    "tokens_in": 2,
+    "tokens_out": 2202,
+    "cache_creation": 12305,
+    "cache_read": 0,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Kill an der Treppe bei Downtown"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Kill an der Treppe bei Downtown",
+     "youtube": "Kill an der Treppe bei Downtown in Deadlock",
+     "instagram": "Kill an der Treppe bei Downtown"
+    },
+    "output_duration_ms": 26800
+   },
+   "signature": {
+    "kept": [
+     [
+      3000,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Kill an der Treppe bei Downtown"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Kill an der Treppe bei Downtown",
+     "youtube": "Kill an der Treppe bei Downtown in Deadlock",
+     "instagram": "Kill an der Treppe bei Downtown"
+    },
+    "output_duration_ms": 23800,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "kept",
+    "output_duration_ms",
+    "plan_keys",
+    "subtitles_enabled"
+   ],
+   "version_id": 92,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Kill an der Treppe bei Downtown"
+     },
+     "tiktok": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Kill an der Treppe bei Downtown"
+     },
+     "youtube": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und direkt der Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Kill an der Treppe bei Downtown in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 92
+   },
+   "frames": {
+    "duration_s": 23.9,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-trim-270865120/dunked/v92_sheet.jpg",
+    "points_s": [
+     0.5,
+     7.89,
+     15.77,
+     22.9
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer.",
+    "from": "root"
+   },
+   "parent_version_id": 59,
+   "http": 409,
+   "error": {
+    "error": "Die erlaubten Versuche sind aufgebraucht."
+   }
+  }
+ ]
+}

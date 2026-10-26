@@ -1,0 +1,253 @@
+{
+ "clip": {
+  "key": "holybag",
+  "owner": "1376724506",
+  "clip_db_id": 140448,
+  "why": "59.9 s, long clip"
+ },
+ "root": {
+  "job_id": 86,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 471,
+  "review_reasons": [],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 60000,
+    "description": "Der ganze Clip zeigt einen durchgehenden Lauf mit mehreren Kills oder Assists und stark steigenden Seelen bis zur abschließenden Reaktion des Streamers. Darum sollte er komplett erhalten bleiben."
+   },
+   {
+    "start_ms": 22000,
+    "end_ms": 23000,
+    "description": "Ein Kill Assist mit plus 198 Seelen auf einer Treppe bei Downtown, während der Streamer mit niedrigen HP weiterkämpft."
+   },
+   {
+    "start_ms": 37000,
+    "end_ms": 38000,
+    "description": "Boon Received mit Ability Point und Power Increase, dazu eine sichtbare Serie von 7 Kills."
+   },
+   {
+    "start_ms": 52000,
+    "end_ms": 58000,
+    "description": "Der Streamer bekommt plus 233 Seelen und kommentiert danach, dass er es sich holen musste, und entschuldigt sich beim Mitspieler."
+   }
+  ],
+  "original_duration_ms": 60000,
+  "version_id": 69,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Von 3.978 auf 7.001 Seelen mit einer Serie von 7 Kills. Was für ein Lauf in Deadlock.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Reels"
+     ],
+     "title": "7 Kill Streak und über 3.000 Seelen"
+    },
+    "tiktok": {
+     "description": "Deadlock Lauf mit 7 Kill Streak, die Seelen steigen von 3.978 auf 7.001.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "fyp"
+     ],
+     "title": "7 Kill Streak und über 3.000 Seelen"
+    },
+    "youtube": {
+     "description": "Ein durchgehender Lauf in Deadlock: Die Seelen steigen von 3.978 auf 7.001, dazu kommt eine Serie von 7 Kills.",
+     "hashtags": [
+      "Deadlock",
+      "Shorts",
+      "Gaming"
+     ],
+     "title": "7 Kill Streak und über 3.000 Seelen in Deadlock"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 69
+  },
+  "frames": {
+   "duration_s": 65.0,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/holybag/v69_sheet.jpg",
+   "points_s": [
+    0.5,
+    21.45,
+    42.9,
+    64.0
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     60000
+    ]
+   ],
+   "hook": [
+    33000,
+    38000
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "7 Kill Streak und über 3.000 Seelen"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "7 Kill Streak und über 3.000 Seelen",
+    "youtube": "7 Kill Streak und über 3.000 Seelen in Deadlock",
+    "instagram": "7 Kill Streak und über 3.000 Seelen"
+   },
+   "output_duration_ms": 65000
+  },
+  "tokens": {
+   "shown_input": 4,
+   "shown_output": 3148,
+   "tokens_in": 4,
+   "tokens_out": 3148,
+   "cache_creation": 27215,
+   "cache_read": 0,
+   "calls": 2
+  }
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "start_later",
+    "text": "Fang bitte 3 Sekunden später an.",
+    "from": "root"
+   },
+   "parent_version_id": 69,
+   "http": 200,
+   "job_id": 129,
+   "status": "failed",
+   "failure_code": "provider_unavailable",
+   "failure_message": "Der KI-Dienst ist derzeit nicht verfügbar.",
+   "waited_s": 10,
+   "proposal": {
+    "summary": "Der KI-Dienst ist derzeit nicht verfügbar. Die bisherige Fassung bleibt unverändert.",
+    "impact": "",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": null,
+    "shown_output": null,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cache_creation": 0,
+    "cache_read": 0,
+    "calls": 0
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      60000
+     ]
+    ],
+    "hook": [
+     33000,
+     38000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "7 Kill Streak und über 3.000 Seelen"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "7 Kill Streak und über 3.000 Seelen",
+     "youtube": "7 Kill Streak und über 3.000 Seelen in Deadlock",
+     "instagram": "7 Kill Streak und über 3.000 Seelen"
+    },
+    "output_duration_ms": 65000
+   },
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null,
+    "subtitles_enabled": null,
+    "plan_keys": []
+   },
+   "changed": []
+  },
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer.",
+    "from": "root"
+   },
+   "parent_version_id": 69,
+   "http": 200,
+   "job_id": 130,
+   "status": "failed",
+   "failure_code": "provider_unavailable",
+   "failure_message": "Der KI-Dienst ist derzeit nicht verfügbar.",
+   "waited_s": 10,
+   "proposal": {
+    "summary": "Der KI-Dienst ist derzeit nicht verfügbar. Die bisherige Fassung bleibt unverändert.",
+    "impact": "",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": null,
+    "shown_output": null,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cache_creation": 0,
+    "cache_read": 0,
+    "calls": 0
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      60000
+     ]
+    ],
+    "hook": [
+     33000,
+     38000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "7 Kill Streak und über 3.000 Seelen"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "7 Kill Streak und über 3.000 Seelen",
+     "youtube": "7 Kill Streak und über 3.000 Seelen in Deadlock",
+     "instagram": "7 Kill Streak und über 3.000 Seelen"
+    },
+    "output_duration_ms": 65000
+   },
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null,
+    "subtitles_enabled": null,
+    "plan_keys": []
+   },
+   "changed": []
+  }
+ ]
+}

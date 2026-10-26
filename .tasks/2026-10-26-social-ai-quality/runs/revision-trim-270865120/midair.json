@@ -1,0 +1,263 @@
+{
+ "clip": {
+  "key": "midair",
+  "owner": "1376724506",
+  "clip_db_id": 140447,
+  "why": "14.4 s, kill moment (mid air kidnap)"
+ },
+ "root": {
+  "job_id": 80,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 205,
+  "review_reasons": [],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 14416,
+    "description": "Der Streamer schießt auf einen Gegner, der hoch in der Luft schwebt. Laut Clip-Titel wird der Gegner mitten in der Luft geschnappt. Danach folgen Bewegung über die Brücke und die Treppen sowie die ungläubige Reaktion des Streamers. Der ganze Ablauf ist der Highlight."
+   }
+  ],
+  "original_duration_ms": 14416,
+  "version_id": 66,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Reels"
+     ],
+     "title": "Schuss auf einen Gegner hoch in der Luft"
+    },
+    "tiktok": {
+     "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "fyp"
+     ],
+     "title": "Gegner hoch in der Luft erwischt"
+    },
+    "youtube": {
+     "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+     "hashtags": [
+      "Deadlock",
+      "Shorts",
+      "Gaming"
+     ],
+     "title": "Schuss auf einen Gegner hoch in der Luft"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 66
+  },
+  "frames": {
+   "duration_s": 18.9,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/midair/v66_sheet.jpg",
+   "points_s": [
+    0.5,
+    6.24,
+    12.47,
+    17.9
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     14416
+    ]
+   ],
+   "hook": [
+    9380,
+    13820
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "Gegner hoch in der Luft"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Gegner hoch in der Luft erwischt",
+    "youtube": "Schuss auf einen Gegner hoch in der Luft",
+    "instagram": "Schuss auf einen Gegner hoch in der Luft"
+   },
+   "output_duration_ms": 18856
+  },
+  "tokens": {
+   "shown_input": 4,
+   "shown_output": 2366,
+   "tokens_in": 4,
+   "tokens_out": 2366,
+   "cache_creation": 26219,
+   "cache_read": 0,
+   "calls": 2
+  }
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "start_later",
+    "text": "Fang bitte 3 Sekunden später an.",
+    "from": "root"
+   },
+   "parent_version_id": 66,
+   "http": 200,
+   "job_id": 128,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 82,
+   "proposal": {
+    "summary": "Geändert: Start 3 Sekunden später, jetzt 15,9 s lang.",
+    "impact": "Das Video beginnt jetzt bei 3 Sekunden, der Teaser mit der Reaktion bleibt am Anfang. Dadurch fehlt der Schuss auf den schwebenden Gegner bei etwa 1,3 Sekunden, auf den sich Titel und Texte noch beziehen.",
+    "reanalyze": false,
+    "requires_confirmation": true,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Durch den späteren Start fehlt der Schuss auf den schwebenden Gegner bei etwa 1,3 Sekunden. Titel und Plattformtexte erwähnen diesen Moment weiterhin und sollten geprüft werden."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 11591,
+    "shown_output": 1470,
+    "tokens_in": 2,
+    "tokens_out": 1470,
+    "cache_creation": 11589,
+    "cache_read": 0,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      14416
+     ]
+    ],
+    "hook": [
+     9380,
+     13820
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Gegner hoch in der Luft"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Gegner hoch in der Luft erwischt",
+     "youtube": "Schuss auf einen Gegner hoch in der Luft",
+     "instagram": "Schuss auf einen Gegner hoch in der Luft"
+    },
+    "output_duration_ms": 18856
+   },
+   "signature": {
+    "kept": [
+     [
+      3000,
+      14416
+     ]
+    ],
+    "hook": [
+     9380,
+     13820
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Gegner hoch in der Luft"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Gegner hoch in der Luft erwischt",
+     "youtube": "Schuss auf einen Gegner hoch in der Luft",
+     "instagram": "Schuss auf einen Gegner hoch in der Luft"
+    },
+    "output_duration_ms": 15856,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "kept",
+    "output_duration_ms",
+    "plan_keys",
+    "subtitles_enabled"
+   ],
+   "version_id": 94,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Schuss auf einen Gegner hoch in der Luft"
+     },
+     "tiktok": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Gegner hoch in der Luft erwischt"
+     },
+     "youtube": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Schuss auf einen Gegner hoch in der Luft"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 94
+   },
+   "frames": {
+    "duration_s": 15.9,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-trim-270865120/midair/v94_sheet.jpg",
+    "points_s": [
+     0.5,
+     5.25,
+     10.49,
+     14.9
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer.",
+    "from": "root"
+   },
+   "parent_version_id": 66,
+   "http": 409,
+   "error": {
+    "error": "Die erlaubten Versuche sind aufgebraucht."
+   }
+  }
+ ]
+}

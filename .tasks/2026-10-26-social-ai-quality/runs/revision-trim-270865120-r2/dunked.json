@@ -1,0 +1,279 @@
+{
+ "clip": {
+  "key": "dunked",
+  "owner": "1376724506",
+  "clip_db_id": 140450,
+  "why": "29.9 s, kill on Vindicta; jobs 54, 58, 59, 60 (shorten, remove subtitle); first e2e case: root job 54 before/after pair from luckymakkydead (title gone, caption 'Yeah' stays after job 60)"
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer.",
+    "from": "root"
+   },
+   "parent_version_id": 97,
+   "http": 200,
+   "job_id": 136,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 113,
+   "proposal": {
+    "summary": "Geändert: Start 2,5 Sekunden später, Ende 0,4 Sekunden früher und Vorschau am Anfang geändert, jetzt 18,6 s lang.",
+    "impact": "Das Video wird von etwa 23,5 auf etwa 18,6 Sekunden gekürzt. Es beginnt später im Aufstieg, endet direkt nach dem Holy fuck und der Teaser am Anfang dauert nur noch 3 Sekunden.",
+    "reanalyze": false,
+    "requires_confirmation": true,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Der neue Einstieg bei 6,5 Sekunden kürzt den Aufstieg über den Luftschacht. Es sollte geprüft werden, ob der Anlauf zum Luftfang noch verständlich bleibt.",
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 12272,
+    "shown_output": 2259,
+    "tokens_in": 2,
+    "tokens_out": 2259,
+    "cache_creation": 8541,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      4000,
+      22500
+     ]
+    ],
+    "hook": [
+     10500,
+     15500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Aus der Luft geholt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Gegnerin aus der Luft geholt und direkt der Kill",
+     "youtube": "Gegnerin aus der Luft geholt und direkt der Kill",
+     "instagram": "Gegnerin aus der Luft geholt und direkt der Kill"
+    },
+    "output_duration_ms": 23500,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "signature": {
+    "kept": [
+     [
+      6500,
+      22100
+     ]
+    ],
+    "hook": [
+     12000,
+     15000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Aus der Luft geholt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Gegnerin aus der Luft geholt und direkt der Kill",
+     "youtube": "Gegnerin aus der Luft geholt und direkt der Kill",
+     "instagram": "Gegnerin aus der Luft geholt und direkt der Kill"
+    },
+    "output_duration_ms": 18600,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "hook",
+    "kept",
+    "output_duration_ms"
+   ],
+   "version_id": 98,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Hoch über den Luftschacht, in der Luft gepackt, zu Boden gerissen und der Kill sitzt. Die Reaktion im Voice Chat sagt alles.",
+      "hashtags": [
+       "deadlock",
+       "gaming",
+       "reels"
+      ],
+      "title": "Gegnerin aus der Luft geholt und direkt der Kill"
+     },
+     "tiktok": {
+      "description": "Hoch über den Luftschacht, in der Luft gepackt, zu Boden gerissen und der Kill sitzt. Die Reaktion im Voice Chat sagt alles.",
+      "hashtags": [
+       "deadlock",
+       "gaming",
+       "fyp"
+      ],
+      "title": "Gegnerin aus der Luft geholt und direkt der Kill"
+     },
+     "youtube": {
+      "description": "Hoch über den Luftschacht, in der Luft gepackt, zu Boden gerissen und der Kill sitzt. Die Reaktion im Voice Chat sagt alles.",
+      "hashtags": [
+       "deadlock",
+       "shorts",
+       "gaming"
+      ],
+      "title": "Gegnerin aus der Luft geholt und direkt der Kill"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 98
+   },
+   "frames": {
+    "duration_s": 18.7,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-trim-270865120-r2/dunked/v98_sheet.jpg",
+    "points_s": [
+     0.5,
+     6.17,
+     12.34,
+     17.7
+    ]
+   }
+  }
+ ],
+ "create_http": 200,
+ "root": {
+  "job_id": 135,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 288,
+  "review_reasons": [
+   "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+  ],
+  "highlights": [
+   {
+    "start_ms": 4000,
+    "end_ms": 13500,
+    "description": "Lash nimmt den Luftschacht auf die Brücke, springt per Grapple zur fliegenden Vindicta, reißt sie mit Ground Strike zu Boden und sichert den Kill. Dadurch wird die Ultimate freigeschaltet."
+   },
+   {
+    "start_ms": 13500,
+    "end_ms": 22500,
+    "description": "Der Streamer reagiert überrascht darauf, dass er sie aus der Luft runtergeholt hat. Ein Mitspieler fragt nach, und am Ende fällt ein ungläubiges Holy fuck."
+   }
+  ],
+  "original_duration_ms": 29917,
+  "version_id": 97,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Hoch über den Luftschacht, in der Luft gepackt, zu Boden gerissen und der Kill sitzt. Die Reaktion im Voice Chat sagt alles.",
+     "hashtags": [
+      "deadlock",
+      "gaming",
+      "reels"
+     ],
+     "title": "Gegnerin aus der Luft geholt und direkt der Kill"
+    },
+    "tiktok": {
+     "description": "Hoch über den Luftschacht, in der Luft gepackt, zu Boden gerissen und der Kill sitzt. Die Reaktion im Voice Chat sagt alles.",
+     "hashtags": [
+      "deadlock",
+      "gaming",
+      "fyp"
+     ],
+     "title": "Gegnerin aus der Luft geholt und direkt der Kill"
+    },
+    "youtube": {
+     "description": "Hoch über den Luftschacht, in der Luft gepackt, zu Boden gerissen und der Kill sitzt. Die Reaktion im Voice Chat sagt alles.",
+     "hashtags": [
+      "deadlock",
+      "shorts",
+      "gaming"
+     ],
+     "title": "Gegnerin aus der Luft geholt und direkt der Kill"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 97
+  },
+  "frames": {
+   "duration_s": 23.6,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/revision-trim-270865120-r2/dunked/v97_sheet.jpg",
+   "points_s": [
+    0.5,
+    7.79,
+    15.58,
+    22.6
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     4000,
+     22500
+    ]
+   ],
+   "hook": [
+    10500,
+    15500
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "Aus der Luft geholt"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Gegnerin aus der Luft geholt und direkt der Kill",
+    "youtube": "Gegnerin aus der Luft geholt und direkt der Kill",
+    "instagram": "Gegnerin aus der Luft geholt und direkt der Kill"
+   },
+   "output_duration_ms": 23500,
+   "subtitles_enabled": true,
+   "plan_keys": [
+    "overlay_title",
+    "plan",
+    "platforms",
+    "revision_proposal",
+    "subtitle_scale_percent",
+    "subtitles_enabled",
+    "variants"
+   ]
+  },
+  "tokens": {
+   "shown_input": 28263,
+   "shown_output": 3416,
+   "tokens_in": 4,
+   "tokens_out": 3416,
+   "cache_creation": 28259,
+   "cache_read": 0,
+   "calls": 2
+  }
+ }
+}

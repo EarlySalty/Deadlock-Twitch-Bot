@@ -1,0 +1,253 @@
+{
+ "clip": {
+  "key": "doorman",
+  "owner": "1376724506",
+  "clip_db_id": 140452,
+  "why": "39.3 s, one-shot kill moment"
+ },
+ "root": {
+  "job_id": 92,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 359,
+  "review_reasons": [
+   "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+  ],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 39309,
+    "description": "Der ganze Clip ist ein einziges Highlight. Er zeigt den Kampfaufbau, die ungläubige Reaktion auf einen sofortigen Tod, den Streamer mit wenig HP und den Death Cam mit der Schadensübersicht."
+   },
+   {
+    "start_ms": 17730,
+    "end_ms": 23360,
+    "description": "Der Streamer reagiert fassungslos und sagt, dass sie sofort gestorben sei. Diese Reaktion ist der Kern des Clips."
+   },
+   {
+    "start_ms": 24068,
+    "end_ms": 39309,
+    "description": "Der Streamer hat nur noch 96 HP und kann sich nicht mit Fähigkeiten bewegen. Danach zeigt der Death Cam 3731 Gesamtschaden, und der Streamer fragt, wie das passieren konnte."
+   }
+  ],
+  "original_duration_ms": 39309,
+  "version_id": 71,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Ein sofortiger Tod sorgt für pure Fassungslosigkeit. Kurz danach liegt der Streamer selbst bei 96 HP und die Death Cam zeigt 3731 Gesamtschaden.",
+     "hashtags": [
+      "Deadlock",
+      "DeadlockClips",
+      "Gaming",
+      "Reels"
+     ],
+     "title": "Sofort gestorben?!"
+    },
+    "tiktok": {
+     "description": "Plötzlich ist jemand sofort tot und der Streamer ist fassungslos. Danach liegt er selbst bei 96 HP und die Death Cam zeigt 3731 Gesamtschaden.",
+     "hashtags": [
+      "Deadlock",
+      "DeadlockClips",
+      "Gaming",
+      "fyp"
+     ],
+     "title": "Sofort gestorben?!"
+    },
+    "youtube": {
+     "description": "Ein Gegner stirbt plötzlich sofort und der Streamer kann es nicht fassen. Kurz danach liegt er selbst bei 96 HP und die Death Cam zeigt 3731 Gesamtschaden.",
+     "hashtags": [
+      "Deadlock",
+      "DeadlockClips",
+      "Gaming",
+      "Shorts"
+     ],
+     "title": "Sofort gestorben?! Fassungslose Reaktion in Deadlock"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 71
+  },
+  "frames": {
+   "duration_s": 44.4,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/doorman/v71_sheet.jpg",
+   "points_s": [
+    0.5,
+    14.65,
+    29.3,
+    43.4
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     39309
+    ]
+   ],
+   "hook": [
+    18360,
+    23360
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "Sofort gestorben?!"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Sofort gestorben?!",
+    "youtube": "Sofort gestorben?! Fassungslose Reaktion in Deadlock",
+    "instagram": "Sofort gestorben?!"
+   },
+   "output_duration_ms": 44309
+  },
+  "tokens": {
+   "shown_input": 4,
+   "shown_output": 3408,
+   "tokens_in": 4,
+   "tokens_out": 3408,
+   "cache_creation": 27001,
+   "cache_read": 0,
+   "calls": 2
+  }
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "start_later",
+    "text": "Fang bitte 3 Sekunden später an.",
+    "from": "root"
+   },
+   "parent_version_id": 71,
+   "http": 200,
+   "job_id": 131,
+   "status": "failed",
+   "failure_code": "provider_unavailable",
+   "failure_message": "Der KI-Dienst ist derzeit nicht verfügbar.",
+   "waited_s": 10,
+   "proposal": {
+    "summary": "Der KI-Dienst ist derzeit nicht verfügbar. Die bisherige Fassung bleibt unverändert.",
+    "impact": "",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": null,
+    "shown_output": null,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cache_creation": 0,
+    "cache_read": 0,
+    "calls": 0
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      39309
+     ]
+    ],
+    "hook": [
+     18360,
+     23360
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Sofort gestorben?!"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Sofort gestorben?!",
+     "youtube": "Sofort gestorben?! Fassungslose Reaktion in Deadlock",
+     "instagram": "Sofort gestorben?!"
+    },
+    "output_duration_ms": 44309
+   },
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null,
+    "subtitles_enabled": null,
+    "plan_keys": []
+   },
+   "changed": []
+  },
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer.",
+    "from": "root"
+   },
+   "parent_version_id": 71,
+   "http": 200,
+   "job_id": 132,
+   "status": "failed",
+   "failure_code": "provider_unavailable",
+   "failure_message": "Der KI-Dienst ist derzeit nicht verfügbar.",
+   "waited_s": 10,
+   "proposal": {
+    "summary": "Der KI-Dienst ist derzeit nicht verfügbar. Die bisherige Fassung bleibt unverändert.",
+    "impact": "",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": null,
+    "shown_output": null,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cache_creation": 0,
+    "cache_read": 0,
+    "calls": 0
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      39309
+     ]
+    ],
+    "hook": [
+     18360,
+     23360
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Sofort gestorben?!"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Sofort gestorben?!",
+     "youtube": "Sofort gestorben?! Fassungslose Reaktion in Deadlock",
+     "instagram": "Sofort gestorben?!"
+    },
+    "output_duration_ms": 44309
+   },
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null,
+    "subtitles_enabled": null,
+    "plan_keys": []
+   },
+   "changed": []
+  }
+ ]
+}

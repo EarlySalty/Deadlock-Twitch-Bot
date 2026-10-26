@@ -1,0 +1,9 @@
+{
+ "dunked": {"cut": 2, "note": "cut judged on the shorter output v98: kept 6.5-22.1 s plus a 3 s kill teaser, 18.6 s from a 29.9 s source, start and end close to the kill and the reaction"},
+ "ez": {"cut": 1, "note": "shorter output v100: kept 2.0-10.6 s plus a 2 s teaser, 10.6 s from an 11.8 s source; now shorter than the source but the teaser still repeats part of the kept footage"},
+ "clipdesstreams": {"cut": 0, "note": "both revisions failed before the AI call (request over max_text_bytes), output unchanged at 62.5 s"},
+ "midair": {"cut": 2, "note": "shorter output v102: kept 2.0-14.0 s, hook dropped, 12.0 s from a 14.4 s source"},
+ "holybag": {"cut": 0, "note": "both revisions failed before the AI call (request over max_text_bytes), output unchanged at 65 s"},
+ "doorman": {"cut": 0, "note": "both revisions failed before the AI call (request over max_text_bytes), output unchanged at 44.3 s"},
+ "talon": {"cut": 2, "note": "start_later v95 starts at 2.88 s (5.2 s), shorter v96 keeps 1.0-5.25 s (4.3 s) from an 8.1 s source"}
+}
