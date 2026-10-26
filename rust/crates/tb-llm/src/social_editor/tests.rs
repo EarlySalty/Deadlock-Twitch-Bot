@@ -36,7 +36,7 @@ async fn cumulative_usage_is_owner_scoped_and_unknown_attempts_never_form_partia
             && empty.estimated_provider_cost_usd.is_none()
             && empty.provider_latency_ms.is_none()
     );
-    sqlx::raw_sql("INSERT INTO public.llm_usage (ts,purpose,provider,model,attempt_state,social_ai_twitch_user_id,social_ai_job_id,tokens_in,tokens_out,estimated_micro_usd,cost_basis,latency_ms) VALUES ('test','social_editor','anthropic','model','failed','101','manual:1',100,20,800,'usage_priced_estimate',12), ('test','social_editor','anthropic','model','succeeded','101','manual:1',150,30,1200,'usage_priced_estimate',18), ('test','social_editor','anthropic','model','succeeded','202','manual:1',9000,9000,9000,'usage_priced_estimate',9000), ('test','social_editor','anthropic','model','succeeded','101','production:1',9000,9000,9000,'usage_priced_estimate',9000)")
+    sqlx::raw_sql("INSERT INTO public.llm_usage (ts,purpose,provider,model,attempt_state,social_ai_twitch_user_id,social_ai_job_id,tokens_in,tokens_out,cache_creation_input_tokens,cache_read_input_tokens,estimated_micro_usd,cost_basis,latency_ms) VALUES ('test','social_editor','anthropic','model','failed','101','manual:1',100,20,0,0,800,'usage_priced_estimate',12), ('test','social_editor','anthropic','model','succeeded','101','manual:1',150,30,0,0,1200,'usage_priced_estimate',18), ('test','social_editor','anthropic','model','succeeded','202','manual:1',9000,9000,0,0,9000,'usage_priced_estimate',9000), ('test','social_editor','anthropic','model','succeeded','101','production:1',9000,9000,0,0,9000,'usage_priced_estimate',9000)")
         .execute(pool).await.expect("durable attempts");
     let totals = job_usage(pool, "101", "manual:1")
         .await
@@ -70,7 +70,7 @@ async fn cumulative_usage_is_owner_scoped_and_unknown_attempts_never_form_partia
             && partial.estimated_provider_cost_usd.is_none()
     );
     assert_eq!(partial.provider_latency_ms, Some(39));
-    sqlx::query("UPDATE public.llm_usage SET tokens_in=50,tokens_out=10,estimated_micro_usd=400,cost_basis='usage_priced_estimate' WHERE id=$1").bind(pending).execute(pool).await.expect("recovery usage");
+    sqlx::query("UPDATE public.llm_usage SET tokens_in=50,tokens_out=10,cache_creation_input_tokens=0,cache_read_input_tokens=0,estimated_micro_usd=400,cost_basis='usage_priced_estimate' WHERE id=$1").bind(pending).execute(pool).await.expect("recovery usage");
     let recovered = job_usage(pool, "101", "manual:1")
         .await
         .expect("recovered totals");
@@ -81,6 +81,16 @@ async fn cumulative_usage_is_owner_scoped_and_unknown_attempts_never_form_partia
         .await
         .expect("cached totals");
     assert_eq!(cached.input_tokens, Some(11_800));
+    sqlx::query("UPDATE public.llm_usage SET cache_read_input_tokens=NULL WHERE id=$1")
+        .bind(pending)
+        .execute(pool)
+        .await
+        .expect("missing cache counter");
+    let missing = job_usage(pool, "101", "manual:1")
+        .await
+        .expect("missing cache totals");
+    assert_eq!(missing.input_tokens, None);
+    assert_eq!(missing.output_tokens, Some(60));
     sqlx::query("UPDATE public.llm_usage SET latency_ms=9007199254740991 WHERE id=$1")
         .bind(pending)
         .execute(pool)

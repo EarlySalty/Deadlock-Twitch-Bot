@@ -849,7 +849,7 @@ async fn plan(
     let request = EditorRequest {
         system: frozen.system(&skill_ids)?,
         text: planning_text(
-            json!({ "task": "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. analysis.uncertainty is already shown to the user next to review_reasons: put only concerns about this edit that the analysis does not already state into review_reasons, and never restate an analysis uncertainty in other words. Publication copy follows the requested language and template, not subtitle language. overlay_title controls the large title burned in during the first seconds: clip_title shows clip_title, custom shows your own short text, none shows no title. Use custom or none when clip_title is misleading, shouty or not supported by the analysis. subtitles_enabled switches the burned-in speech captions on or off; keep it true.", "source_duration_ms": frozen.media.duration_ms, "clip_title": frozen.source.title, "streamer": streamer_context(&frozen.source.login), "analysis": analysis, "language": language, "segments": segments, "audio_levels": audio_levels, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base,&frozen.source.title)) }),
+            json!({ "task": "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. analysis.uncertainty is already shown to the user next to review_reasons: put only concerns about this edit that the analysis does not already state into review_reasons, and never restate an analysis uncertainty in other words. Publication copy follows the requested language and template, not subtitle language. overlay_title controls the large title burned in during the first seconds: clip_title shows clip_title, custom shows your own short text, none shows no title. Use custom or none when clip_title is misleading, shouty or not supported by the analysis. subtitles_enabled switches the burned-in speech captions on or off; keep it true for a new edit, and for a revision follow revision.instruction and keep the value from revision.previous unless the feedback asks to change the captions.", "source_duration_ms": frozen.media.duration_ms, "clip_title": frozen.source.title, "streamer": streamer_context(&frozen.source.login), "analysis": analysis, "language": language, "segments": segments, "audio_levels": audio_levels, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base,&frozen.source.title)) }),
             &personal,
         ),
         frames: vec![],
@@ -894,8 +894,10 @@ async fn plan(
             }
             _ => None,
         };
-        proposal.summary = super::revision::change_summary(
-            &super::revision::plan_changes(base, &result, &frozen.source.title),
+        proposal.summary = super::revision::revision_summary(
+            base,
+            &result,
+            &frozen.source.title,
             runtime.limits.plan.max_text_bytes,
         );
         super::revision::validate_proposal(&mut proposal, base, &result, runtime, estimate)?;
@@ -1681,8 +1683,7 @@ async fn validate_one(
     if matches!(video.status.as_str(), "rendering" | "review") {
         let _ = check_original_preview(runtime, frozen, &video).await?;
     }
-    let all_subtitles = subtitles(ctx.checkpoints, &validated, runtime)?;
-    let mapped = burned_subtitles(planning, &all_subtitles);
+    let mapped = subtitles(ctx.checkpoints, &validated, runtime)?;
     let mut reasons = validated.review_reasons().to_vec();
     if !frozen.media.has_audio {
         reasons.push("Der ursprüngliche Clip enthält keine Audiospur.".into());
@@ -1706,7 +1707,7 @@ async fn validate_one(
         .unwrap_or(0);
     let ass = super::validation::build_scaled_subtitle_ass(
         &validated,
-        mapped,
+        burned_subtitles(planning, &mapped),
         &planning.overlay_title.resolve(&frozen.source.title),
         &frozen.source.login,
         cam_height,

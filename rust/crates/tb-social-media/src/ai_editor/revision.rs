@@ -505,7 +505,7 @@ fn output_identity(planning: &Planning, clip_title: &str) -> Value {
     })
 }
 
-pub(super) const REVISION_INSTRUCTION: &str = "Interpret feedback as a bounded edit of saved analysis. Set reanalyze=true only if new visual understanding is necessary and not yet authorized. Mark substantial changes for confirmation. The video shows exactly two kinds of text and each has its own control. Speech captions are the burned-in lines of the real speech in the lower part of the picture during the whole video: subtitles_enabled switches them on or off and subtitle_scale_percent only changes their size. The hook title is the large text at the very start of the video, previous_overlay_text shows what the previous version displayed: overlay_title controls it (mode clip_title shows clip_title, custom shows text, none shows no title). Map the feedback like this. Untertitel, Untertitel entfernen, subtitle, subtitles, caption, captions or the spoken words mean the speech captions: set subtitles_enabled=false to remove them or change subtitle_scale_percent to resize them. Titel, title, hook title, Überschrift or the big text at the start mean overlay_title. Kein Text, ohne Text, alle Texte entfernen, no text, remove every text or remove all text mean both: set subtitles_enabled=false and overlay_title.mode=none. Ambiguous wording about subtitles or captions always targets the speech captions and never the title; change the title only when the feedback names the title or all text. Keep every element the feedback does not mention exactly as in previous. kept_intervals and hook control the cut and the teaser. Caption wording cannot change because it is the real speech; preserve real speech and its language, stable layout and original audio. The server derives the list of changes from the real difference between previous and your plan and shows it to the user, so summary only needs a short note. Use impact to explain in German in one or two plain sentences what the change means for the video, or what could not be done and why, and never claim an edit that your returned plan does not contain. If nothing of the requested change can be done, return the previous plan unchanged and explain in impact what could not be done and why; no new version is produced then. Explain unsupported layout, creative or speech-rewriting requests honestly; never fabricate commands or cost estimates. Return a complete main plan and no extra variants for ordinary revisions.";
+pub(super) const REVISION_INSTRUCTION: &str = "Interpret feedback as a bounded edit of saved analysis. Set reanalyze=true only if new visual understanding is necessary and not yet authorized. Mark substantial changes for confirmation. The video shows exactly two kinds of text and each has its own control. Speech captions are the burned-in lines of the real speech in the lower part of the picture during the whole video: subtitles_enabled switches them on or off and subtitle_scale_percent only changes their size. The hook title is the large text at the very start of the video, previous_overlay_text shows what the previous version displayed: overlay_title controls it (mode clip_title shows clip_title, custom shows text, none shows no title). Map the feedback like this. Untertitel, Untertitel entfernen, subtitle, subtitles, caption, captions or the spoken words mean the speech captions: set subtitles_enabled=false to remove them or change subtitle_scale_percent to resize them. Titel, title, hook title, Überschrift or the big text at the start mean overlay_title. Kein Text, ohne Text, alle Texte entfernen, no text, remove every text or remove all text mean both: set subtitles_enabled=false and overlay_title.mode=none; the small channel name stays as source credit and cannot be removed, so say that in impact. Ambiguous wording about subtitles or captions always targets the speech captions and never the title; change the title only when the feedback names the title or all text. Keep every element the feedback does not mention exactly as in previous. kept_intervals and hook control the cut and the teaser. Caption wording cannot change because it is the real speech; preserve real speech and its language, stable layout and original audio. The server derives the list of changes from the real difference between previous and your plan and shows it to the user, so summary only needs a short note. Use impact to explain in German in one or two plain sentences what the change means for the video, or what could not be done and why, and never claim an edit that your returned plan does not contain. If nothing of the requested change can be done, return the previous plan unchanged and explain in impact what could not be done and why; no new version is produced then. Explain unsupported layout, creative or speech-rewriting requests honestly; never fabricate commands or cost estimates. Return a complete main plan and no extra variants for ordinary revisions.";
 
 pub(super) fn request_context(
     request: &RevisionRequest,
@@ -528,12 +528,14 @@ pub(super) fn plan_changes(base: &Planning, next: &Planning, clip_title: &str) -
         }
         _ => {}
     }
-    let before = base.overlay_title.resolve(clip_title);
-    let after = next.overlay_title.resolve(clip_title);
-    if before != after {
+    let raw_before = base.overlay_title.resolve(clip_title);
+    let raw_after = next.overlay_title.resolve(clip_title);
+    if raw_before != raw_after {
+        let (before, after) = (one_line(&raw_before), one_line(&raw_after));
         changes.push(match (before.is_empty(), after.is_empty()) {
             (false, true) => format!("Titel „{before}“ entfernt"),
             (true, false) => format!("Titel „{after}“ eingeblendet"),
+            _ if before == after => "Titel geändert".to_owned(),
             _ => format!("Titel von „{before}“ auf „{after}“ geändert"),
         });
     }
@@ -559,30 +561,71 @@ pub(super) fn plan_changes(base: &Planning, next: &Planning, clip_title: &str) -
     changes
 }
 
-pub(super) fn change_summary(changes: &[String], max_bytes: usize) -> String {
+const CHANNEL_NOTE: &str = "Der Kanalname bleibt als Quellenangabe eingeblendet.";
+
+pub(super) fn revision_summary(
+    base: &Planning,
+    next: &Planning,
+    clip_title: &str,
+    max_bytes: usize,
+) -> String {
+    let only_channel_left =
+        !next.subtitles_enabled && next.overlay_title.resolve(clip_title).trim().is_empty();
+    change_summary(
+        &plan_changes(base, next, clip_title),
+        only_channel_left.then_some(CHANNEL_NOTE),
+        max_bytes,
+    )
+}
+
+pub(super) fn change_summary(changes: &[String], note: Option<&str>, max_bytes: usize) -> String {
     let sentence = |items: &[String]| match items {
         [] => "Am Video wurde nichts geändert.".to_owned(),
         [only] => format!("Geändert: {only}."),
         [rest @ .., last] => format!("Geändert: {} und {last}.", rest.join(", ")),
     };
-    let detailed = sentence(changes);
-    if detailed.len() <= max_bytes {
-        return detailed;
-    }
-    let compact = changes
-        .iter()
-        .map(|change| {
-            if change.starts_with("Titel ") {
-                "Titel geändert".to_owned()
-            } else {
-                change.clone()
-            }
-        })
-        .collect::<Vec<_>>();
-    let compact = sentence(&compact);
-    if compact.len() <= max_bytes {
-        compact
+    let bases = if changes.is_empty() {
+        vec![sentence(changes), "Nichts geändert.".to_owned()]
     } else {
-        "Video geändert.".to_owned()
+        let compact = changes
+            .iter()
+            .map(|change| {
+                if change.starts_with("Titel ") {
+                    "Titel geändert".to_owned()
+                } else {
+                    change.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        vec![
+            sentence(changes),
+            sentence(&compact),
+            "Video geändert.".to_owned(),
+        ]
+    };
+    let mut candidates = bases
+        .iter()
+        .filter_map(|base| note.map(|note| format!("{base} {note}")))
+        .chain(bases.iter().cloned());
+    let shortest = bases.last().cloned().unwrap_or_default();
+    candidates
+        .find(|candidate| candidate.len() <= max_bytes)
+        .unwrap_or_else(|| truncate_to(&shortest, max_bytes))
+}
+
+fn truncate_to(text: &str, max_bytes: usize) -> String {
+    let mut end = text.len().min(max_bytes);
+    while !text.is_char_boundary(end) {
+        end -= 1;
     }
+    text[..end].trim_end().to_owned()
+}
+
+fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }

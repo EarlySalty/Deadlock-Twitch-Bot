@@ -1034,7 +1034,7 @@ async fn expire_fixture(pool: &PgPool, video_id: i64) {
 }
 
 async fn usage_fixture(pool: &PgPool, identity: Identity) {
-    sqlx::query("INSERT INTO llm_usage (purpose,provider,model,attempt_state,tokens_in,tokens_out,latency_ms,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ('social_editor','anthropic','fixture-model','succeeded',11,7,23,'101',$1,'planning',20,10,'usage_priced_estimate')")
+    sqlx::query("INSERT INTO llm_usage (purpose,provider,model,attempt_state,tokens_in,tokens_out,cache_creation_input_tokens,cache_read_input_tokens,latency_ms,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ('social_editor','anthropic','fixture-model','succeeded',11,7,0,0,23,'101',$1,'planning',20,10,'usage_priced_estimate')")
         .bind(identity.namespace()).execute(pool).await.expect("synthetic existing provider ledger");
 }
 
@@ -3394,48 +3394,83 @@ fn revised(base: &Planning, subtitles_enabled: bool, overlay: serde_json::Value)
 
 #[test]
 fn revision_summary_lists_only_the_real_plan_difference() {
-    use super::super::revision::{change_summary, changes_output, plan_changes};
+    use super::super::revision::{changes_output, revision_summary};
     let title = "Dunked on her ahh";
     let base = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
-    let summary = |next: &Planning| change_summary(&plan_changes(&base, next, title), 512);
-    let keep_title = json!({ "mode": "clip_title", "text": null });
-    let no_title = json!({ "mode": "none", "text": null });
-    for feedback in ["entferne den Untertitel", "remove the subtitle"] {
-        let next = revised(&base, false, keep_title.clone());
-        assert!(changes_output(&base, &next, title), "{feedback}");
-        assert_eq!(summary(&next), "Geändert: Untertitel ausgeblendet.");
-        assert_eq!(next.overlay_title.resolve(title), title);
-    }
-    for feedback in [
-        "kein Text mehr im Video",
-        "no remove every text in this video no text",
-    ] {
-        let next = revised(&base, false, no_title.clone());
-        assert!(changes_output(&base, &next, title), "{feedback}");
-        assert_eq!(
-            summary(&next),
-            "Geändert: Untertitel ausgeblendet und Titel „Dunked on her ahh“ entfernt."
-        );
-    }
-    let title_only = revised(&base, true, no_title.clone());
+    let summary = |next: &Planning| revision_summary(&base, next, title, 512);
+    let captions_off = revised(&base, false, json!({ "mode": "clip_title", "text": null }));
+    assert!(changes_output(&base, &captions_off, title));
+    assert_eq!(summary(&captions_off), "Geändert: Untertitel ausgeblendet.");
+    let no_text = revised(&base, false, json!({ "mode": "none", "text": null }));
+    assert!(changes_output(&base, &no_text, title));
+    assert_eq!(
+        summary(&no_text),
+        "Geändert: Untertitel ausgeblendet und Titel „Dunked on her ahh“ entfernt. Der Kanalname bleibt als Quellenangabe eingeblendet."
+    );
+    let title_only = revised(&base, true, json!({ "mode": "none", "text": null }));
     assert_eq!(
         summary(&title_only),
         "Geändert: Titel „Dunked on her ahh“ entfernt."
     );
-    let captions_gone = revised(&base, false, no_title.clone());
-    let mut resized_hidden = captions_gone.clone();
+    let mut resized_hidden = no_text.clone();
     resized_hidden.subtitle_scale_percent = 140;
-    assert!(!changes_output(&captions_gone, &resized_hidden, title));
+    assert!(!changes_output(&no_text, &resized_hidden, title));
     assert_eq!(
-        change_summary(&plan_changes(&captions_gone, &resized_hidden, title), 512),
+        revision_summary(&captions_off, &captions_off, title, 512),
         "Am Video wurde nichts geändert."
     );
-    let long = plan_changes(&base, &captions_gone, title);
-    assert_eq!(change_summary(&long, 50), "Video geändert.");
     assert_eq!(
-        change_summary(&long, 60),
+        revision_summary(&no_text, &resized_hidden, title, 512),
+        "Am Video wurde nichts geändert. Der Kanalname bleibt als Quellenangabe eingeblendet."
+    );
+    assert_eq!(
+        revision_summary(&base, &no_text, title, 108),
+        "Geändert: Untertitel ausgeblendet und Titel geändert. Der Kanalname bleibt als Quellenangabe eingeblendet."
+    );
+    assert_eq!(
+        revision_summary(&base, &no_text, title, 60),
         "Geändert: Untertitel ausgeblendet und Titel geändert."
     );
+}
+
+#[test]
+fn revision_summary_stays_valid_for_every_limit_and_title() {
+    use super::super::revision::revision_summary;
+    let title = "Erste Zeile\nzweite\tZeile\u{7}";
+    let base = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
+    let no_text = revised(&base, false, json!({ "mode": "none", "text": null }));
+    assert_eq!(
+        revision_summary(
+            &base,
+            &revised(&base, true, json!({ "mode": "none", "text": null })),
+            title,
+            512
+        ),
+        "Geändert: Titel „Erste Zeile zweite Zeile“ entfernt."
+    );
+    let unchanged = [
+        "Am Video wurde nichts geändert. Der Kanalname bleibt als Quellenangabe eingeblendet.",
+        "Nichts geändert. Der Kanalname bleibt als Quellenangabe eingeblendet.",
+        "Am Video wurde nichts geändert.",
+        "Nichts geändert.",
+    ];
+    for limit in 1..=200 {
+        for (before, after) in [(&base, &no_text), (&base, &base), (&no_text, &no_text)] {
+            let text = revision_summary(before, after, title, limit);
+            assert!(
+                !text.trim().is_empty()
+                    && text.len() <= limit
+                    && !text.chars().any(char::is_control),
+                "{limit}: {text:?}"
+            );
+            if std::ptr::eq(before, after) {
+                assert!(
+                    unchanged.iter().any(|full| full.starts_with(&text)),
+                    "{limit}: {text:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -3461,7 +3496,7 @@ fn disabled_captions_render_without_speech_burn_in() {
             &validated,
             burned_subtitles(planning, &mapped),
             &planning.overlay_title.resolve(title),
-            "",
+            "luckymakkydead",
             0,
             planning.subtitle_scale_percent,
         )
@@ -3486,7 +3521,16 @@ fn disabled_captions_render_without_speech_burn_in() {
         false,
         json!({ "mode": "none", "text": null }),
     ));
-    assert!(!no_text.lines().any(|line| line.starts_with("Dialogue:")));
+    let dialogue = no_text
+        .lines()
+        .filter(|line| line.starts_with("Dialogue:"))
+        .collect::<Vec<_>>();
+    assert!(
+        dialogue.len() == 1
+            && dialogue[0].contains(",Channel,")
+            && dialogue[0].ends_with("@luckymakkydead"),
+        "{dialogue:?}"
+    );
 }
 
 #[path = "acceptance_tests.rs"]
