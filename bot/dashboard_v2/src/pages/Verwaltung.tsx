@@ -29,6 +29,7 @@ import { PrivateVodSection } from '@/components/verwaltung/PrivateVodSection';
 import { OtherCommandNames } from '@/components/verwaltung/OtherCommandsSection';
 import { ConnectionCard, ScopeDisclosure, type ConnectionTone } from '@/components/verwaltung/ConnectionCard';
 import { SectionCard } from '@/components/verwaltung/ui';
+import { LanguageSwitch } from '@/components/layout/LanguageSwitch';
 import { STAT_COMMANDS } from '@/api/statCommands';
 import { resolveVerwaltungTab, type VerwaltungTabId } from '@/pages/verwaltungTabs';
 import {
@@ -258,6 +259,10 @@ export function VerwaltungPage() {
         <p className="mt-3 text-xs text-text-secondary">
           {t("Profiländerungen direkt auf Twitch vornehmen. Daten werden beim nächsten Login synchronisiert.")}
         </p>
+      </SectionCard>
+
+      <SectionCard eyebrow={t("Sprache")}>
+        <LanguageSwitch className="w-fit" />
       </SectionCard>
     </>
   );
