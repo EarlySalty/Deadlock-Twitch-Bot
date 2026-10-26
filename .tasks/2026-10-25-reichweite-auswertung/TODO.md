@@ -1,4 +1,4 @@
-# TODO: Twitch reach analysis (state 2026-10-26, after gate round 6 fixes)
+# TODO: Twitch reach analysis (state 2026-10-26, gate cap reached after round 6 fixes)
 
 User goal: deep analysis of all Twitch data on how German Deadlock streams win new viewers, turn
 lurkers into chatters and newcomers into followers, subs and regulars; also when Twitch shows a
@@ -97,6 +97,10 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
    chatter counts inline with the `chat-counts.sql` rule; `queries-P05.sql` returns NULL for every
    label count of a session ending after 2026-10-05 00:00 UTC; `p08-aligned.py` stops on a follow
    that lies in two exposure intervals instead of picking one (1,252 follows, 2.81 per 100 vh).
-6. Re-run `gate_hook.py --review` (skill rolle-merge-schleuse) until ALLOW, merge to main, clean
-   up branch and worktree, cancel wakeup `reichweite`. Update the blog with the round 5 numbers.
-   Report to the user in English.
+6. Gate run 7 after the round 6 fixes did not review: `BLOCK: Gate-Deckel. 4 Runden
+   hintereinander ohne ALLOW. Das gehoert jetzt dem User vorgelegt, nicht dem naechsten Merge.`
+   The merge to main waits for the user's decision (see
+   `/home/nathanael/Documents/.claude/gpt-workers/docs/merge-gate-zweiphasig.md`); the gate state
+   stays untouched. Branch and worktree stay until then. No wakeup `reichweite` is scheduled.
+7. Done: the blog carries the round 5 and 6 numbers and the raid follow null (Website db8647d,
+   gate ALLOW in one run, live on https://deutsche-deadlock-community.de/blog/twitch-reichweite-2026/).
