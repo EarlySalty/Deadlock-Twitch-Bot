@@ -1,4 +1,4 @@
-# TODO: Twitch reach analysis (state 2026-10-26, after gate round 5 fixes)
+# TODO: Twitch reach analysis (state 2026-10-26, after gate round 6 fixes)
 
 User goal: deep analysis of all Twitch data on how German Deadlock streams win new viewers, turn
 lurkers into chatters and newcomers into followers, subs and regulars; also when Twitch shows a
@@ -92,6 +92,11 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
    column that includes lurkers; the Saturday penalty and the 19-20h hint are withdrawn. P05
    question labels count only for sessions ending before 2026-10-05 00:00 UTC, where labels are
    complete; P06 needed no rerun (its labelled first messages end 2026-09-25).
-5. Re-run `gate_hook.py --review` (skill rolle-merge-schleuse) until ALLOW, merge to main, clean
+5. Gate round 6 (BLOCK, 3 findings) is fixed in the shipped files, numbers unchanged.
+   `queries-P03.sql`, `queries-P04.sql` (Q3) and `queries-P11.sql` compute the message-based
+   chatter counts inline with the `chat-counts.sql` rule; `queries-P05.sql` returns NULL for every
+   label count of a session ending after 2026-10-05 00:00 UTC; `p08-aligned.py` stops on a follow
+   that lies in two exposure intervals instead of picking one (1,252 follows, 2.81 per 100 vh).
+6. Re-run `gate_hook.py --review` (skill rolle-merge-schleuse) until ALLOW, merge to main, clean
    up branch and worktree, cancel wakeup `reichweite`. Update the blog with the round 5 numbers.
    Report to the user in English.

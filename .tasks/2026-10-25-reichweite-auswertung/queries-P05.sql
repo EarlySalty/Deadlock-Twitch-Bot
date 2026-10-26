@@ -3,8 +3,9 @@
 -- Superseded: q_slots.sql (fixed session list) and q_conv_window.sql (fixed login list); replaced by q_base_sessions.sql and q_firstwrite_window.sql.
 -- q_conversion.sql window columns use first_message_at and are superseded by q_firstwrite_window.sql; its sighting and pair columns are used.
 -- Label coverage: twitch_chat_message_labels covers every message before 2026-10-05 00:00 UTC and 64 to 78% per day after (63.5 to 78.0%, 2026-10-05 to 2026-10-25, q_label_coverage.sql).
--- Every Question count below (q_sessions, q_conversion, q_firstwrite_window, q_velocity and the bot-filtered twins) is used only for sessions with
--- started_at + duration_seconds <= 2026-10-05 00:00 UTC; for later sessions the exported label counts are set to missing in python (lbl_build.py, labelcov.py).
+-- Every label count below (Question, Command, Greeting and Hype in q_sessions; Question in q_conversion, q_firstwrite_window, q_velocity, q_bot_q_session,
+-- q_velocity_nobot and q_firstwrite_window_nobot) is NULL unless the session ends by 2026-10-05 00:00 UTC (started_at + duration_seconds), so a missing
+-- label never counts as a non-question; the python steps skip NULL counts and a derived count stays NULL when either input is NULL.
 
 -- ===== q_sessions.sql
 -- Q-S1: session-level dataset, chat-tracked window (sessions from 2026-07-01)
@@ -45,8 +46,10 @@ select s.id session_id, s.streamer_login, s.started_at, s.duration_seconds, s.av
        s.stream_title, s.game_name, s.language, s.had_deadlock_in_session, s.tags,
        coalesce(sc.seen,0) seen, coalesce(sc.chatters,0) chatters, coalesce(sc.msgs_sc,0) msgs_sc,
        coalesce(cm.msgs,0) msgs, coalesce(cm.self_msgs,0) self_msgs, coalesce(cm.cmd_msgs,0) cmd_msgs,
-       coalesce(cm.question_msgs,0) question_msgs, coalesce(cm.command_label_msgs,0) command_label_msgs,
-       coalesce(cm.greeting_msgs,0) greeting_msgs, coalesce(cm.hype_msgs,0) hype_msgs,
+       case when s.started_at + make_interval(secs => coalesce(s.duration_seconds, 0)) <= timestamptz '2026-10-05 00:00:00+00' then coalesce(cm.question_msgs,0) end question_msgs,
+       case when s.started_at + make_interval(secs => coalesce(s.duration_seconds, 0)) <= timestamptz '2026-10-05 00:00:00+00' then coalesce(cm.command_label_msgs,0) end command_label_msgs,
+       case when s.started_at + make_interval(secs => coalesce(s.duration_seconds, 0)) <= timestamptz '2026-10-05 00:00:00+00' then coalesce(cm.greeting_msgs,0) end greeting_msgs,
+       case when s.started_at + make_interval(secs => coalesce(s.duration_seconds, 0)) <= timestamptz '2026-10-05 00:00:00+00' then coalesce(cm.hype_msgs,0) end hype_msgs,
        coalesce(cm.chat_distinct,0) chat_distinct, coalesce(cm.msgs_first5min,0) msgs_first5min,
        (sc.session_id is not null) has_sc, (cm.session_id is not null) has_msgs,
        coalesce(sc.seen,0) - coalesce((select count(*) from twitch_session_chatters c where c.session_id = s.id and c.chatter_login = s.streamer_login),0) seen_ex,
@@ -161,8 +164,9 @@ select sg.streamer_login, sg.chatter_login, sg.session_id, sg.started_at, sg.avg
        sg.messages, sg.rn, sg.seen_via_chatters_api,
        (sg.streamer_login, sg.chatter_login) in (select streamer_login, chatter_login from lurk_first) lurk_first,
        coalesce(sess.viewer_msgs,0) sess_viewer_msgs, coalesce(sess.self_msgs,0) sess_self_msgs,
-       coalesce(sess.cmd_msgs,0) sess_cmd_msgs, coalesce(sess.q_msgs,0) sess_q_msgs,
-       fw.first_message_at, win.msgs_10m_before, win.self_10m_before, win.q_10m_before, win.chatters_10m_before,
+       coalesce(sess.cmd_msgs,0) sess_cmd_msgs, case when sg.started_at + make_interval(secs => coalesce(sg.duration_seconds, 0)) <= timestamptz '2026-10-05 00:00:00+00' then coalesce(sess.q_msgs,0) end sess_q_msgs,
+       fw.first_message_at, win.msgs_10m_before, win.self_10m_before,
+       case when sg.started_at + make_interval(secs => coalesce(sg.duration_seconds, 0)) <= timestamptz '2026-10-05 00:00:00+00' then win.q_10m_before end q_10m_before, win.chatters_10m_before,
        (fw.fwr = 1) is_first_write
 from sg
 left join sess on sess.session_id = sg.session_id
@@ -206,7 +210,7 @@ fm as (
   group by 1, 2, 3, 4, 5, 6
 )
 select fm.session_id, fm.chatter_login, fm.first_ts, fm.duration_seconds, fm.avg_viewers, w.msgs_10m_before,
-       w.self_10m_before, w.q_10m_before
+       w.self_10m_before, case when fm.started_at + make_interval(secs => coalesce(fm.duration_seconds, 0)) <= timestamptz '2026-10-05 00:00:00+00' then w.q_10m_before end q_10m_before
 from fm
 join lateral (
   select count(*) msgs_10m_before,
@@ -279,7 +283,7 @@ f as (
 )
 select s.id session_id, s.avg_viewers, sl.slot,
        coalesce(m.viewer_msgs,0) viewer_msgs, coalesce(m.self_msgs,0) self_msgs,
-       coalesce(m.q_msgs,0) q_msgs, coalesce(m.cmd_msgs,0) cmd_msgs, coalesce(f.new_starts,0) new_starts
+       case when s.started_at + make_interval(secs => coalesce(s.duration_seconds, 0)) <= timestamptz '2026-10-05 00:00:00+00' then coalesce(m.q_msgs,0) end q_msgs, coalesce(m.cmd_msgs,0) cmd_msgs, coalesce(f.new_starts,0) new_starts
 from slots sl
 join s on s.id = sl.session_id
 left join m on m.session_id = sl.session_id and m.slot = sl.slot
@@ -547,7 +551,7 @@ group by 1 order by 1;
 
 -- ===== q_bot_q_session.sql
 with s as (
-  select id from twitch_stream_sessions
+  select id, started_at, duration_seconds from twitch_stream_sessions
   where started_at >= '2026-07-01' and started_at < '2026-10-26' and duration_seconds >= 600 and avg_viewers > 0
 ),
 bots as (
@@ -556,12 +560,12 @@ bots as (
   group by 1 having count(distinct c.streamer_login) >= 30
 )
 select m.session_id,
-       count(*) filter (where l.label = 'Question' and m.chatter_login in (select chatter_login from bots) and m.streamer_login <> m.chatter_login) bot_question_msgs
+       case when s.started_at + make_interval(secs => coalesce(s.duration_seconds, 0)) <= timestamptz '2026-10-05 00:00:00+00' then count(*) filter (where l.label = 'Question' and m.chatter_login in (select chatter_login from bots) and m.streamer_login <> m.chatter_login) end bot_question_msgs
 from twitch_chat_messages m
 join s on s.id = m.session_id
 left join twitch_chat_message_labels l on l.message_id = m.id
 where m.message_ts >= '2026-07-01' and m.message_ts < '2026-10-26'
-group by 1 order by 1;
+group by m.session_id, s.started_at, s.duration_seconds order by 1;
 
 -- ===== q_velocity_nobot.sql
 with s as (
@@ -605,7 +609,7 @@ f as (
 )
 select s.id session_id, s.avg_viewers, sl.slot,
        coalesce(m.viewer_msgs,0) viewer_msgs, coalesce(m.self_msgs,0) self_msgs,
-       coalesce(m.q_msgs,0) q_msgs, coalesce(m.cmd_msgs,0) cmd_msgs, coalesce(f.new_starts,0) new_starts
+       case when s.started_at + make_interval(secs => coalesce(s.duration_seconds, 0)) <= timestamptz '2026-10-05 00:00:00+00' then coalesce(m.q_msgs,0) end q_msgs, coalesce(m.cmd_msgs,0) cmd_msgs, coalesce(f.new_starts,0) new_starts
 from slots sl
 join s on s.id = sl.session_id
 left join m on m.session_id = sl.session_id and m.slot = sl.slot
@@ -676,7 +680,7 @@ fm as (
   group by 1, 2, 3, 4, 5, 6
 )
 select fm.session_id, fm.chatter_login, fm.first_ts, fm.duration_seconds, fm.avg_viewers, w.msgs_10m_before,
-       w.self_10m_before, w.q_10m_before
+       w.self_10m_before, case when fm.started_at + make_interval(secs => coalesce(fm.duration_seconds, 0)) <= timestamptz '2026-10-05 00:00:00+00' then w.q_10m_before end q_10m_before
 from fm
 join lateral (
   select count(*) filter (where b.chatter_login is null) msgs_10m_before,

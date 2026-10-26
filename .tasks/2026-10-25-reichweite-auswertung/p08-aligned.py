@@ -21,9 +21,9 @@ def load():
                 exp.append((month, r['min5'], r['band'], r['peak5'], r['in_raid'] == 't', float(r['seconds']), float(r['viewer_seconds'])))
             else:
                 key = (r['follow_id'], r['followed_at'])
-                cand = (ts(r['session_start']), month, r)
-                if key not in fol or cand[0] > fol[key][0]:
-                    fol[key] = cand
+                if key in fol:
+                    raise SystemExit('follow %s at %s lies in two exposure intervals; the intervals must be disjoint' % key)
+                fol[key] = (ts(r['session_start']), month, r)
     return exp, fol
 
 
@@ -39,7 +39,7 @@ def in_bin(v, lo, hi):
 def main():
     exp, fol = load()
     follows = [(m, r) for _, m, r in fol.values()]
-    print('aligned follows (deduped by id and time):', len(follows))
+    print('aligned follows (one exposure interval each):', len(follows))
     mapped = list(csv.DictReader(open(D + 'follows_mapped.csv')))
     aligned_keys = {(k[0], ts(k[1])) for k in fol}
     mapped_keys = {(r['follow_id'], ts(r['followed_at'])) for r in mapped}

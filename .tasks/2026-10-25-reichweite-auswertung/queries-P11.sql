@@ -1,13 +1,31 @@
-\echo Session base; prev_ftc from first_time_chatters is replaced by the previous session's chat_ftc from chat-counts.sql, joined by session id, because the session column also counts lurkers
-WITH s AS (
+\echo Session base; unique_chatters, first_time_chatters and returning_chatters, and so prev_ftc, are message-based (rows with messages >= 1, logins seen in 30 or more channels excluded, the chat-counts.sql rule), not the session columns, which also count lurkers
+WITH bots AS (
+  SELECT lower(chatter_login) AS login
+  FROM twitch_session_chatters
+  GROUP BY 1
+  HAVING count(DISTINCT lower(streamer_login)) >= 30
+),
+cc AS (
+  SELECT c.session_id,
+         count(*) FILTER (WHERE c.messages >= 1) AS chat_uc,
+         count(*) FILTER (WHERE c.messages >= 1 AND c.is_first_time_streamer) AS chat_ftc,
+         count(*) FILTER (WHERE c.messages >= 1 AND c.is_first_time_streamer IS NOT TRUE) AS chat_ret
+  FROM twitch_session_chatters c
+  JOIN twitch_stream_sessions t ON t.id = c.session_id
+  WHERE t.started_at >= '2026-01-09' AND t.started_at < '2026-10-25 17:28:00+00'
+    AND lower(c.chatter_login) NOT IN (SELECT login FROM bots)
+  GROUP BY c.session_id
+),
+s AS (
   SELECT t.id, t.streamer_login, t.started_at, t.ended_at, t.duration_seconds,
          t.start_viewers, t.peak_viewers, t.end_viewers, t.avg_viewers, t.samples,
          t.retention_5m, t.retention_10m, t.retention_20m, t.dropoff_pct,
-         t.unique_chatters, t.first_time_chatters, t.returning_chatters,
+         coalesce(cc.chat_uc, 0) AS unique_chatters, coalesce(cc.chat_ftc, 0) AS first_time_chatters, coalesce(cc.chat_ret, 0) AS returning_chatters,
          t.followers_start, t.followers_end, t.follower_delta,
          t.stream_title, t.notification_text, t.game_name, t.had_deadlock_in_session,
          t.language, t.tags, t.twitch_user_id
   FROM twitch_stream_sessions t
+  LEFT JOIN cc ON cc.session_id = t.id
   WHERE t.started_at >= '2026-01-09' AND t.started_at < '2026-10-25 17:28:00+00'
 ),
 cv AS (

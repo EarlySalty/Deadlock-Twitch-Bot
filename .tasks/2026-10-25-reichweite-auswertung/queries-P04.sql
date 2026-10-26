@@ -231,15 +231,33 @@ select uid, min(ts) stream_start, max(ts) stream_end, count(*) snaps,
   mode() within group (order by l) lang_mode
 from g2 group by uid, sid;
 
-\echo Q3 note: first_time_chatters, unique_chatters and returning_chatters are replaced by chat_ftc, chat_uc and chat_ret from chat-counts.sql, joined by session id, because the session columns also count lurkers
-\echo Q3 session export for duration, breaks, consistency and habits (title as hash)
-select id session_id, streamer_login, twitch_user_id, started_at, ended_at, duration_seconds, start_viewers, peak_viewers, end_viewers,
-  round(avg_viewers::numeric, 3) avg_viewers, samples, dropoff_pct, unique_chatters, first_time_chatters, returning_chatters,
-  followers_start, followers_end, follower_delta, game_name, had_deadlock_in_session, language,
-  md5(coalesce(stream_title, '')) title_hash, coalesce(stream_title, '') = '' title_empty
-from twitch_stream_sessions
-where started_at >= '2026-01-09' and started_at < '2026-10-26'
-order by streamer_login, started_at;
+\echo Q3 session export for duration, breaks, consistency and habits (title as hash); unique_chatters, first_time_chatters and returning_chatters are message-based (rows with messages >= 1, logins seen in 30 or more channels excluded, the chat-counts.sql rule), not the session columns, which also count lurkers
+with bots as (
+  select lower(chatter_login) as login
+  from twitch_session_chatters
+  group by 1
+  having count(distinct lower(streamer_login)) >= 30
+),
+cc as (
+  select c.session_id,
+         count(*) filter (where c.messages >= 1) as chat_uc,
+         count(*) filter (where c.messages >= 1 and c.is_first_time_streamer) as chat_ftc,
+         count(*) filter (where c.messages >= 1 and c.is_first_time_streamer is not true) as chat_ret
+  from twitch_session_chatters c
+  join twitch_stream_sessions s on s.id = c.session_id
+  where s.started_at >= '2026-01-09' and s.started_at < '2026-10-26'
+    and lower(c.chatter_login) not in (select login from bots)
+  group by c.session_id
+)
+select s.id session_id, s.streamer_login, s.twitch_user_id, s.started_at, s.ended_at, s.duration_seconds, s.start_viewers, s.peak_viewers, s.end_viewers,
+  round(s.avg_viewers::numeric, 3) avg_viewers, s.samples, s.dropoff_pct,
+  coalesce(cc.chat_uc, 0) unique_chatters, coalesce(cc.chat_ftc, 0) first_time_chatters, coalesce(cc.chat_ret, 0) returning_chatters,
+  s.followers_start, s.followers_end, s.follower_delta, s.game_name, s.had_deadlock_in_session, s.language,
+  md5(coalesce(s.stream_title, '')) title_hash, coalesce(s.stream_title, '') = '' title_empty
+from twitch_stream_sessions s
+left join cc on cc.session_id = s.id
+where s.started_at >= '2026-01-09' and s.started_at < '2026-10-26'
+order by s.streamer_login, s.started_at;
 
 \echo Q4 returning audience per session from chatter table (present and chatters split)
 with s as (
