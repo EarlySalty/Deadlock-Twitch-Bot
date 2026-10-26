@@ -1,0 +1,746 @@
+{
+ "clip": {
+  "key": "holybag",
+  "owner": "1376724506",
+  "clip_db_id": 140448,
+  "why": "59.9 s, long clip"
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "start_later",
+    "text": "Fang bitte 3 Sekunden später an.",
+    "from": "root"
+   },
+   "parent_version_id": 104,
+   "http": 200,
+   "job_id": 144,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 897,
+   "proposal": {
+    "summary": "Geändert: Start 3 Sekunden später, jetzt 51 s lang.",
+    "impact": "Das Video beginnt jetzt drei Sekunden später, direkt im Teamkampf, und ist dadurch drei Sekunden kürzer. Dabei fällt die Ansage I see Haze weg, und der Satz We have you now könnte angeschnitten wirken.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Der neue Start bei 12 Sekunden liegt innerhalb des Transkriptsegments We have you now, das von 10 bis knapp 17 Sekunden reicht. Der Satz könnte angeschnitten wirken.",
+    "Durch den späteren Start fällt die Ansage I see Haze weg, die den späteren Haze Kill aufbaut.",
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 26626,
+    "shown_output": 3508,
+    "tokens_in": 4,
+    "tokens_out": 3508,
+    "cache_creation": 14342,
+    "cache_read": 12280,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      9000,
+      60000
+     ]
+    ],
+    "hook": [
+     32500,
+     35500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Riesiger Seelenbeutel geschnappt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "youtube": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "instagram": "Mina schnappt sich einen riesigen Seelenbeutel"
+    },
+    "output_duration_ms": 54000,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "signature": {
+    "kept": [
+     [
+      12000,
+      60000
+     ]
+    ],
+    "hook": [
+     32500,
+     35500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Riesiger Seelenbeutel geschnappt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "youtube": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "instagram": "Mina schnappt sich einen riesigen Seelenbeutel"
+    },
+    "output_duration_ms": 51000,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "kept",
+    "output_duration_ms"
+   ],
+   "version_id": 107,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Mina geht mit der Ultimate gegen Haze in die Luft, schnappt sich den riesigen Seelenbeutel und entkommt mit 6,651 Seelen dem Walker.",
+      "hashtags": [
+       "Deadlock",
+       "Mina",
+       "Gaming"
+      ],
+      "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+     },
+     "tiktok": {
+      "description": "Mina geht mit der Ultimate gegen Haze in die Luft, schnappt sich den riesigen Seelenbeutel und entkommt mit 6,651 Seelen dem Walker.",
+      "hashtags": [
+       "Deadlock",
+       "Mina",
+       "Gaming"
+      ],
+      "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+     },
+     "youtube": {
+      "description": "Mina geht mit der Ultimate gegen Haze in die Luft, schnappt sich den riesigen Seelenbeutel und entkommt mit 6,651 Seelen dem Walker.",
+      "hashtags": [
+       "Deadlock",
+       "Mina",
+       "Shorts"
+      ],
+      "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 107
+   },
+   "frames": {
+    "duration_s": 51.0,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-size-a94d19c8b/holybag/v107_sheet.jpg",
+    "points_s": [
+     0.5,
+     16.83,
+     33.66,
+     50.0
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer.",
+    "from": "root"
+   },
+   "parent_version_id": 104,
+   "http": 200,
+   "job_id": 147,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 449,
+   "proposal": {
+    "summary": "Geändert: Ende 1,5 Sekunden früher, Mittelteil neu geschnitten, Vorschau am Anfang geändert und Plattformtexte geändert, jetzt 35,5 s lang.",
+    "impact": "Das Video ist jetzt etwa 35 statt 54 Sekunden lang. Die Flucht vor dem Walker fällt weg, nach dem Beutel folgt direkt die Zipline mit dem Witz im Voice Chat.",
+    "reanalyze": false,
+    "requires_confirmation": true,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Die Flucht vor dem Walker fehlt jetzt. Der Sprung vom Einsammeln des Beutels direkt zur Zipline könnte abrupt wirken."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 12276,
+    "shown_output": 2197,
+    "tokens_in": 2,
+    "tokens_out": 2197,
+    "cache_creation": 8545,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      9000,
+      60000
+     ]
+    ],
+    "hook": [
+     32500,
+     35500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Riesiger Seelenbeutel geschnappt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "youtube": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "instagram": "Mina schnappt sich einen riesigen Seelenbeutel"
+    },
+    "output_duration_ms": 54000,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "signature": {
+    "kept": [
+     [
+      9000,
+      36000
+     ],
+     [
+      52000,
+      58500
+     ]
+    ],
+    "hook": [
+     33000,
+     35000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Riesiger Seelenbeutel geschnappt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "youtube": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "instagram": "Mina schnappt sich einen riesigen Seelenbeutel"
+    },
+    "output_duration_ms": 35500,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "hook",
+    "kept",
+    "output_duration_ms"
+   ],
+   "version_id": 110,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Mina geht mit der Ultimate gegen Haze in die Luft und schnappt sich danach den riesigen Seelenbeutel.",
+      "hashtags": [
+       "Deadlock",
+       "Mina",
+       "Gaming"
+      ],
+      "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+     },
+     "tiktok": {
+      "description": "Mina geht mit der Ultimate gegen Haze in die Luft und schnappt sich danach den riesigen Seelenbeutel.",
+      "hashtags": [
+       "Deadlock",
+       "Mina",
+       "Gaming"
+      ],
+      "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+     },
+     "youtube": {
+      "description": "Mina geht mit der Ultimate gegen Haze in die Luft und schnappt sich danach den riesigen Seelenbeutel.",
+      "hashtags": [
+       "Deadlock",
+       "Mina",
+       "Shorts"
+      ],
+      "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 110
+   },
+   "frames": {
+    "duration_s": 35.6,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-size-a94d19c8b/holybag/v110_sheet.jpg",
+    "points_s": [
+     0.5,
+     11.75,
+     23.5,
+     34.6
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "de_remove_subtitle",
+    "from": "root",
+    "text": "entferne den Untertitel"
+   },
+   "parent_version_id": 104,
+   "http": 200,
+   "job_id": 150,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 472,
+   "proposal": {
+    "summary": "Geändert: Untertitel ausgeblendet.",
+    "impact": "Die eingeblendeten Untertitel der gesprochenen Sätze sind im ganzen Video ausgeschaltet. Schnitt, Teaser, Titel am Anfang und Ton bleiben unverändert.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 12274,
+    "shown_output": 1756,
+    "tokens_in": 2,
+    "tokens_out": 1756,
+    "cache_creation": 8543,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      9000,
+      60000
+     ]
+    ],
+    "hook": [
+     32500,
+     35500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Riesiger Seelenbeutel geschnappt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "youtube": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "instagram": "Mina schnappt sich einen riesigen Seelenbeutel"
+    },
+    "output_duration_ms": 54000,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "signature": {
+    "kept": [
+     [
+      9000,
+      60000
+     ]
+    ],
+    "hook": [
+     32500,
+     35500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Riesiger Seelenbeutel geschnappt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "youtube": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "instagram": "Mina schnappt sich einen riesigen Seelenbeutel"
+    },
+    "output_duration_ms": 54000,
+    "subtitles_enabled": false,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "subtitles_enabled"
+   ],
+   "version_id": 112,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Mina geht mit der Ultimate gegen Haze in die Luft, schnappt sich den riesigen Seelenbeutel und entkommt mit 6,651 Seelen dem Walker.",
+      "hashtags": [
+       "Deadlock",
+       "Mina",
+       "Gaming"
+      ],
+      "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+     },
+     "tiktok": {
+      "description": "Mina geht mit der Ultimate gegen Haze in die Luft, schnappt sich den riesigen Seelenbeutel und entkommt mit 6,651 Seelen dem Walker.",
+      "hashtags": [
+       "Deadlock",
+       "Mina",
+       "Gaming"
+      ],
+      "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+     },
+     "youtube": {
+      "description": "Mina geht mit der Ultimate gegen Haze in die Luft, schnappt sich den riesigen Seelenbeutel und entkommt mit 6,651 Seelen dem Walker.",
+      "hashtags": [
+       "Deadlock",
+       "Mina",
+       "Shorts"
+      ],
+      "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 112
+   },
+   "frames": {
+    "duration_s": 54.0,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-size-a94d19c8b/holybag/v112_sheet.jpg",
+    "points_s": [
+     0.5,
+     17.82,
+     35.64,
+     53.0
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "de_no_text",
+    "from": "root",
+    "text": "kein Text mehr im Video"
+   },
+   "parent_version_id": 104,
+   "http": 200,
+   "job_id": 152,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 449,
+   "proposal": {
+    "summary": "Geändert: Untertitel ausgeblendet und Titel „Riesiger Seelenbeutel geschnappt“ entfernt. Der Kanalname bleibt als Quellenangabe eingeblendet.",
+    "impact": "Das Video zeigt keine Untertitel und keinen Titel am Anfang mehr. Nur der kleine Kanalname bleibt als Quellenangabe sichtbar und lässt sich nicht entfernen.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 12275,
+    "shown_output": 1735,
+    "tokens_in": 2,
+    "tokens_out": 1735,
+    "cache_creation": 8544,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      9000,
+      60000
+     ]
+    ],
+    "hook": [
+     32500,
+     35500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Riesiger Seelenbeutel geschnappt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "youtube": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "instagram": "Mina schnappt sich einen riesigen Seelenbeutel"
+    },
+    "output_duration_ms": 54000,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "signature": {
+    "kept": [
+     [
+      9000,
+      60000
+     ]
+    ],
+    "hook": [
+     32500,
+     35500
+    ],
+    "overlay": {
+     "mode": "none",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "youtube": "Mina schnappt sich einen riesigen Seelenbeutel",
+     "instagram": "Mina schnappt sich einen riesigen Seelenbeutel"
+    },
+    "output_duration_ms": 54000,
+    "subtitles_enabled": false,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "overlay",
+    "subtitles_enabled"
+   ],
+   "version_id": 115,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Mina geht mit der Ultimate gegen Haze in die Luft, schnappt sich den riesigen Seelenbeutel und entkommt mit 6,651 Seelen dem Walker.",
+      "hashtags": [
+       "Deadlock",
+       "Mina",
+       "Gaming"
+      ],
+      "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+     },
+     "tiktok": {
+      "description": "Mina geht mit der Ultimate gegen Haze in die Luft, schnappt sich den riesigen Seelenbeutel und entkommt mit 6,651 Seelen dem Walker.",
+      "hashtags": [
+       "Deadlock",
+       "Mina",
+       "Gaming"
+      ],
+      "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+     },
+     "youtube": {
+      "description": "Mina geht mit der Ultimate gegen Haze in die Luft, schnappt sich den riesigen Seelenbeutel und entkommt mit 6,651 Seelen dem Walker.",
+      "hashtags": [
+       "Deadlock",
+       "Mina",
+       "Shorts"
+      ],
+      "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 115
+   },
+   "frames": {
+    "duration_s": 54.0,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-size-a94d19c8b/holybag/v115_sheet.jpg",
+    "points_s": [
+     0.5,
+     17.82,
+     35.64,
+     53.0
+    ]
+   }
+  }
+ ],
+ "create_http": 200,
+ "root": {
+  "job_id": 141,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 439,
+  "review_reasons": [],
+  "highlights": [
+   {
+    "start_ms": 9000,
+    "end_ms": 22500,
+    "description": "Haze wird angesagt, danach beginnt der Teamkampf am Torbogen. Ein verbündeter Mo und Krill hält einen Gegner fest. Mina verliert viel HP und holt bei 22 Sekunden mit 383 HP einen Kill Assist."
+   },
+   {
+    "start_ms": 22500,
+    "end_ms": 36000,
+    "description": "Haze springt direkt vor Mina rein und drückt sie stark runter. Mina zündet ihre Ultimate, steigt mit dem Schirm in die Luft und zerlegt Haze mit Fledermäusen. Danach holt sie mit einem schweren Nahkampfschlag den riesigen Seelenbeutel. Das ist der Kern des Clips."
+   },
+   {
+    "start_ms": 36000,
+    "end_ms": 52000,
+    "description": "Mit dem Beutel auf dem Rücken flieht Mina vor dem Walker. Das HUD zeigt jetzt 6,651 Seelen und Stufe 17. Mit einem Fledermaus Dash rettet sie sich in einen Seitenraum und heilt sich dort wieder hoch."
+   },
+   {
+    "start_ms": 52000,
+    "end_ms": 60000,
+    "description": "Mina fährt an der Zipline in Sicherheit. Ein Mitspieler macht im Voice Chat einen Witz über den riesigen Beutel und der Streamer antwortet lachend. Diese Reaktion ist die Pointe des Clips."
+   }
+  ],
+  "original_duration_ms": 60000,
+  "version_id": 104,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Mina geht mit der Ultimate gegen Haze in die Luft, schnappt sich den riesigen Seelenbeutel und entkommt mit 6,651 Seelen dem Walker.",
+     "hashtags": [
+      "Deadlock",
+      "Mina",
+      "Gaming"
+     ],
+     "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+    },
+    "tiktok": {
+     "description": "Mina geht mit der Ultimate gegen Haze in die Luft, schnappt sich den riesigen Seelenbeutel und entkommt mit 6,651 Seelen dem Walker.",
+     "hashtags": [
+      "Deadlock",
+      "Mina",
+      "Gaming"
+     ],
+     "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+    },
+    "youtube": {
+     "description": "Mina geht mit der Ultimate gegen Haze in die Luft, schnappt sich den riesigen Seelenbeutel und entkommt mit 6,651 Seelen dem Walker.",
+     "hashtags": [
+      "Deadlock",
+      "Mina",
+      "Shorts"
+     ],
+     "title": "Mina schnappt sich einen riesigen Seelenbeutel"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 104
+  },
+  "frames": {
+   "duration_s": 54.0,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/revision-size-a94d19c8b/holybag/v104_sheet.jpg",
+   "points_s": [
+    0.5,
+    17.82,
+    35.64,
+    53.0
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     9000,
+     60000
+    ]
+   ],
+   "hook": [
+    32500,
+    35500
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "Riesiger Seelenbeutel geschnappt"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Mina schnappt sich einen riesigen Seelenbeutel",
+    "youtube": "Mina schnappt sich einen riesigen Seelenbeutel",
+    "instagram": "Mina schnappt sich einen riesigen Seelenbeutel"
+   },
+   "output_duration_ms": 54000,
+   "subtitles_enabled": true,
+   "plan_keys": [
+    "overlay_title",
+    "plan",
+    "platforms",
+    "revision_proposal",
+    "subtitle_scale_percent",
+    "subtitles_enabled",
+    "variants"
+   ]
+  },
+  "tokens": {
+   "shown_input": 50524,
+   "shown_output": 5703,
+   "tokens_in": 6,
+   "tokens_out": 5703,
+   "cache_creation": 31612,
+   "cache_read": 18906,
+   "calls": 2
+  }
+ }
+}

@@ -1,0 +1,743 @@
+{
+ "clip": {
+  "key": "doorman",
+  "owner": "1376724506",
+  "clip_db_id": 140452,
+  "why": "39.3 s, one-shot kill moment"
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "start_later",
+    "text": "Fang bitte 3 Sekunden später an.",
+    "from": "root"
+   },
+   "parent_version_id": 106,
+   "http": 200,
+   "job_id": 146,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 459,
+   "proposal": {
+    "summary": "Geändert: Start 3 Sekunden später, jetzt 26 s lang.",
+    "impact": "Das Video beginnt jetzt bei 12,5 statt 9,5 Sekunden, also mitten im Kampf am Guardian kurz vor dem Kill. Der Teaser am Anfang, der Titel und die Untertitel bleiben unverändert.",
+    "reanalyze": false,
+    "requires_confirmation": true,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Durch den späteren Start fehlt ein Teil des Kampfbeginns am Guardian. Bitte prüfen, ob der Kill ohne diesen Aufbau noch verständlich ist.",
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 12200,
+    "shown_output": 1644,
+    "tokens_in": 2,
+    "tokens_out": 1644,
+    "cache_creation": 12198,
+    "cache_read": 0,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      9500,
+      34500
+     ]
+    ],
+    "hook": [
+     17700,
+     21700
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Doorman löscht sie in einem Augenblick"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Doorman löscht sie in einem Augenblick",
+     "youtube": "Doorman löscht sie in einem Augenblick",
+     "instagram": "Doorman löscht sie in einem Augenblick"
+    },
+    "output_duration_ms": 29000,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "signature": {
+    "kept": [
+     [
+      12500,
+      34500
+     ]
+    ],
+    "hook": [
+     17700,
+     21700
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Doorman löscht sie in einem Augenblick"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Doorman löscht sie in einem Augenblick",
+     "youtube": "Doorman löscht sie in einem Augenblick",
+     "instagram": "Doorman löscht sie in einem Augenblick"
+    },
+    "output_duration_ms": 26000,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "kept",
+    "output_duration_ms"
+   ],
+   "version_id": 109,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+      "hashtags": [
+       "deadlock",
+       "doorman",
+       "gaming"
+      ],
+      "title": "Doorman löscht sie in einem Augenblick"
+     },
+     "tiktok": {
+      "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+      "hashtags": [
+       "deadlock",
+       "doorman",
+       "gaming"
+      ],
+      "title": "Doorman löscht sie in einem Augenblick"
+     },
+     "youtube": {
+      "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+      "hashtags": [
+       "deadlock",
+       "doorman",
+       "shorts"
+      ],
+      "title": "Doorman löscht sie in einem Augenblick"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 109
+   },
+   "frames": {
+    "duration_s": 26.0,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-size-a94d19c8b/doorman/v109_sheet.jpg",
+    "points_s": [
+     0.5,
+     8.58,
+     17.16,
+     25.0
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer.",
+    "from": "root"
+   },
+   "parent_version_id": 106,
+   "http": 200,
+   "job_id": 149,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 747,
+   "proposal": {
+    "summary": "Geändert: Start 1,5 Sekunden später, Ende 2 Sekunden früher und Vorschau am Anfang geändert, jetzt 23,5 s lang.",
+    "impact": "Das Video beginnt jetzt etwas später im Kampf und endet direkt nach dem letzten Satz in der Death Cam. Der Teaser am Anfang ist nur noch zwei Sekunden lang, dadurch wird das Video insgesamt etwa 23 statt 29 Sekunden lang.",
+    "reanalyze": false,
+    "requires_confirmation": true,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Der neue Start bei 11 Sekunden ist geschätzt und könnte den Anfang des Kampfes am Guardian etwas zu knapp anschneiden.",
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 12194,
+    "shown_output": 1842,
+    "tokens_in": 2,
+    "tokens_out": 1842,
+    "cache_creation": 8463,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      9500,
+      34500
+     ]
+    ],
+    "hook": [
+     17700,
+     21700
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Doorman löscht sie in einem Augenblick"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Doorman löscht sie in einem Augenblick",
+     "youtube": "Doorman löscht sie in einem Augenblick",
+     "instagram": "Doorman löscht sie in einem Augenblick"
+    },
+    "output_duration_ms": 29000,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "signature": {
+    "kept": [
+     [
+      11000,
+      32500
+     ]
+    ],
+    "hook": [
+     17700,
+     19700
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Doorman löscht sie in einem Augenblick"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Doorman löscht sie in einem Augenblick",
+     "youtube": "Doorman löscht sie in einem Augenblick",
+     "instagram": "Doorman löscht sie in einem Augenblick"
+    },
+    "output_duration_ms": 23500,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "hook",
+    "kept",
+    "output_duration_ms"
+   ],
+   "version_id": 113,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+      "hashtags": [
+       "deadlock",
+       "doorman",
+       "gaming"
+      ],
+      "title": "Doorman löscht sie in einem Augenblick"
+     },
+     "tiktok": {
+      "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+      "hashtags": [
+       "deadlock",
+       "doorman",
+       "gaming"
+      ],
+      "title": "Doorman löscht sie in einem Augenblick"
+     },
+     "youtube": {
+      "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+      "hashtags": [
+       "deadlock",
+       "doorman",
+       "shorts"
+      ],
+      "title": "Doorman löscht sie in einem Augenblick"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 113
+   },
+   "frames": {
+    "duration_s": 23.6,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-size-a94d19c8b/doorman/v113_sheet.jpg",
+    "points_s": [
+     0.5,
+     7.79,
+     15.58,
+     22.6
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "de_remove_subtitle",
+    "from": "root",
+    "text": "entferne den Untertitel"
+   },
+   "parent_version_id": 106,
+   "http": 200,
+   "job_id": 153,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 459,
+   "proposal": {
+    "summary": "Geändert: Untertitel ausgeblendet.",
+    "impact": "Die eingeblendeten Untertitel der gesprochenen Worte werden entfernt. Schnitt, Teaser, Titel am Anfang und Originalton bleiben unverändert.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 12192,
+    "shown_output": 1281,
+    "tokens_in": 2,
+    "tokens_out": 1281,
+    "cache_creation": 8461,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      9500,
+      34500
+     ]
+    ],
+    "hook": [
+     17700,
+     21700
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Doorman löscht sie in einem Augenblick"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Doorman löscht sie in einem Augenblick",
+     "youtube": "Doorman löscht sie in einem Augenblick",
+     "instagram": "Doorman löscht sie in einem Augenblick"
+    },
+    "output_duration_ms": 29000,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "signature": {
+    "kept": [
+     [
+      9500,
+      34500
+     ]
+    ],
+    "hook": [
+     17700,
+     21700
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Doorman löscht sie in einem Augenblick"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Doorman löscht sie in einem Augenblick",
+     "youtube": "Doorman löscht sie in einem Augenblick",
+     "instagram": "Doorman löscht sie in einem Augenblick"
+    },
+    "output_duration_ms": 29000,
+    "subtitles_enabled": false,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "subtitles_enabled"
+   ],
+   "version_id": 116,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+      "hashtags": [
+       "deadlock",
+       "doorman",
+       "gaming"
+      ],
+      "title": "Doorman löscht sie in einem Augenblick"
+     },
+     "tiktok": {
+      "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+      "hashtags": [
+       "deadlock",
+       "doorman",
+       "gaming"
+      ],
+      "title": "Doorman löscht sie in einem Augenblick"
+     },
+     "youtube": {
+      "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+      "hashtags": [
+       "deadlock",
+       "doorman",
+       "shorts"
+      ],
+      "title": "Doorman löscht sie in einem Augenblick"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 116
+   },
+   "frames": {
+    "duration_s": 29.0,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-size-a94d19c8b/doorman/v116_sheet.jpg",
+    "points_s": [
+     0.5,
+     9.57,
+     19.14,
+     28.0
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "de_no_text",
+    "from": "root",
+    "text": "kein Text mehr im Video"
+   },
+   "parent_version_id": 106,
+   "http": 200,
+   "job_id": 155,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 265,
+   "proposal": {
+    "summary": "Geändert: Untertitel ausgeblendet und Titel „Doorman löscht sie in einem Augenblick“ entfernt. Der Kanalname bleibt als Quellenangabe eingeblendet.",
+    "impact": "Das Video zeigt jetzt weder die Untertitel der Sprache noch den großen Titel am Anfang. Nur der kleine Kanalname bleibt als Quellenangabe sichtbar und lässt sich nicht entfernen.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 12193,
+    "shown_output": 1412,
+    "tokens_in": 2,
+    "tokens_out": 1412,
+    "cache_creation": 8462,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      9500,
+      34500
+     ]
+    ],
+    "hook": [
+     17700,
+     21700
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Doorman löscht sie in einem Augenblick"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Doorman löscht sie in einem Augenblick",
+     "youtube": "Doorman löscht sie in einem Augenblick",
+     "instagram": "Doorman löscht sie in einem Augenblick"
+    },
+    "output_duration_ms": 29000,
+    "subtitles_enabled": true,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "signature": {
+    "kept": [
+     [
+      9500,
+      34500
+     ]
+    ],
+    "hook": [
+     17700,
+     21700
+    ],
+    "overlay": {
+     "mode": "none",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Doorman löscht sie in einem Augenblick",
+     "youtube": "Doorman löscht sie in einem Augenblick",
+     "instagram": "Doorman löscht sie in einem Augenblick"
+    },
+    "output_duration_ms": 29000,
+    "subtitles_enabled": false,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "overlay",
+    "subtitles_enabled"
+   ],
+   "version_id": 118,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+      "hashtags": [
+       "deadlock",
+       "doorman",
+       "gaming"
+      ],
+      "title": "Doorman löscht sie in einem Augenblick"
+     },
+     "tiktok": {
+      "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+      "hashtags": [
+       "deadlock",
+       "doorman",
+       "gaming"
+      ],
+      "title": "Doorman löscht sie in einem Augenblick"
+     },
+     "youtube": {
+      "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+      "hashtags": [
+       "deadlock",
+       "doorman",
+       "shorts"
+      ],
+      "title": "Doorman löscht sie in einem Augenblick"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 118
+   },
+   "frames": {
+    "duration_s": 29.0,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/revision-size-a94d19c8b/doorman/v118_sheet.jpg",
+    "points_s": [
+     0.5,
+     9.57,
+     19.14,
+     28.0
+    ]
+   }
+  }
+ ],
+ "create_http": 200,
+ "root": {
+  "job_id": 143,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 1142,
+  "review_reasons": [
+   "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+  ],
+  "highlights": [
+   {
+    "start_ms": 9500,
+    "end_ms": 16800,
+    "description": "Eine gegnerische Heldin drängt Mina am eigenen Guardian zurück, und Mina weicht mit Sanguine Retreat aus. Dann löscht The Doorman die Gegnerin in einem Augenblick aus deutlich über halber HP. Das ist der Kern des Clips."
+   },
+   {
+    "start_ms": 16800,
+    "end_ms": 25500,
+    "description": "Der Streamer schaltet das Mikrofon ein und reagiert fassungslos mit einer Kette von Was-Rufen und dem Vorwurf, es sei Cheating. Abgelenkt lässt er sich von einem Gegner herunterschießen, bis Mina stirbt. Die Reaktion und der Tod gehören zusammen zur Pointe."
+   },
+   {
+    "start_ms": 25500,
+    "end_ms": 34500,
+    "description": "In der Death Cam gibt der Streamer zu, nicht fokussiert gewesen zu sein, und rätselt weiter über den Kill. Der Doorman-Spieler fragt ebenfalls ungläubig, wie der Gegner gestorben ist. Danach öffnet der Streamer das Schadensprotokoll."
+   }
+  ],
+  "original_duration_ms": 39309,
+  "version_id": 106,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+     "hashtags": [
+      "deadlock",
+      "doorman",
+      "gaming"
+     ],
+     "title": "Doorman löscht sie in einem Augenblick"
+    },
+    "tiktok": {
+     "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+     "hashtags": [
+      "deadlock",
+      "doorman",
+      "gaming"
+     ],
+     "title": "Doorman löscht sie in einem Augenblick"
+    },
+    "youtube": {
+     "description": "The Doorman löscht eine gegnerische Heldin in einem Augenblick. Der Streamer ist so fassungslos, dass er dabei selbst als Mina stirbt.",
+     "hashtags": [
+      "deadlock",
+      "doorman",
+      "shorts"
+     ],
+     "title": "Doorman löscht sie in einem Augenblick"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 106
+  },
+  "frames": {
+   "duration_s": 29.0,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/revision-size-a94d19c8b/doorman/v106_sheet.jpg",
+   "points_s": [
+    0.5,
+    9.57,
+    19.14,
+    28.0
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     9500,
+     34500
+    ]
+   ],
+   "hook": [
+    17700,
+    21700
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "Doorman löscht sie in einem Augenblick"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Doorman löscht sie in einem Augenblick",
+    "youtube": "Doorman löscht sie in einem Augenblick",
+    "instagram": "Doorman löscht sie in einem Augenblick"
+   },
+   "output_duration_ms": 29000,
+   "subtitles_enabled": true,
+   "plan_keys": [
+    "overlay_title",
+    "plan",
+    "platforms",
+    "revision_proposal",
+    "subtitle_scale_percent",
+    "subtitles_enabled",
+    "variants"
+   ]
+  },
+  "tokens": {
+   "shown_input": 28948,
+   "shown_output": 3730,
+   "tokens_in": 4,
+   "tokens_out": 3730,
+   "cache_creation": 28944,
+   "cache_read": 0,
+   "calls": 2
+  }
+ }
+}
