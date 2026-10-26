@@ -3832,9 +3832,13 @@ fn oversized_request_fails_as_request_too_large_instead_of_provider_unavailable(
     let root = tempfile::tempdir().expect("root");
     let runtime = runtime(root.path());
     let mut analysis = sixty_second_analysis();
+    let limits = &runtime.limits.plan;
+    analysis.analysis_notes = (0..limits.max_review_reasons)
+        .map(|_| sentence(limits.max_text_bytes))
+        .collect();
     analysis
-        .analysis_notes
-        .extend((0..20).map(|_| sentence(250)));
+        .validate(60_010, limits)
+        .expect("oversized analysis stays within the plan limits");
     let error = sixty_second_revision(&runtime, &analysis).err();
     assert!(matches!(error, Some(AiEditorError::RequestTooLarge)));
     let error = AiEditorError::RequestTooLarge;
