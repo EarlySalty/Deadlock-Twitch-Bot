@@ -76,6 +76,11 @@ async fn cumulative_usage_is_owner_scoped_and_unknown_attempts_never_form_partia
         .expect("recovered totals");
     assert_eq!(recovered.input_tokens, Some(300));
     assert_eq!(recovered.estimated_provider_cost_usd, Some(0.0024));
+    sqlx::query("UPDATE public.llm_usage SET cache_creation_input_tokens=7800,cache_read_input_tokens=3700 WHERE id=$1").bind(pending).execute(pool).await.expect("cached usage");
+    let cached = job_usage(pool, "101", "manual:1")
+        .await
+        .expect("cached totals");
+    assert_eq!(cached.input_tokens, Some(11_800));
     sqlx::query("UPDATE public.llm_usage SET latency_ms=9007199254740991 WHERE id=$1")
         .bind(pending)
         .execute(pool)

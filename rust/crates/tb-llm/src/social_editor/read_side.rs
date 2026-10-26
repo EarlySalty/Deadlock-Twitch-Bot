@@ -56,13 +56,13 @@ pub async fn job_usage(
 ) -> Result<JobUsage, EditorError> {
     let row = sqlx::query("SELECT COUNT(*)::bigint AS attempts,
         COUNT(*) FILTER (WHERE attempt_state NOT IN ('succeeded','failed') OR attempt_state IS NULL)::bigint AS unfinished,
-        COUNT(*) FILTER (WHERE tokens_in IS NULL OR tokens_in < 0 OR tokens_out IS NULL OR tokens_out < 0)::bigint AS unknown_tokens,
+        COUNT(*) FILTER (WHERE tokens_in IS NULL OR tokens_in < 0 OR tokens_out IS NULL OR tokens_out < 0 OR cache_creation_input_tokens < 0 OR cache_read_input_tokens < 0)::bigint AS unknown_tokens,
         COUNT(*) FILTER (WHERE estimated_micro_usd IS NULL OR estimated_micro_usd < 0 OR cost_basis IS NULL OR cost_basis NOT IN ('usage_priced_estimate','provider_rejected_unbilled','subscription_included'))::bigint AS unknown_cost,
         COUNT(*) FILTER (WHERE latency_ms IS NULL OR latency_ms < 0)::bigint AS unknown_latency,
         COUNT(*) FILTER (WHERE cost_basis = 'subscription_included')::bigint AS subscription,
         CASE WHEN COUNT(DISTINCT provider) = 1 AND COUNT(provider) = COUNT(*) THEN MIN(provider) END AS provider,
         CASE WHEN COUNT(DISTINCT model) = 1 AND COUNT(model) = COUNT(*) THEN MIN(model) END AS model,
-        SUM(tokens_in::numeric)::text AS input_tokens,
+        SUM(tokens_in::numeric + COALESCE(cache_creation_input_tokens,0)::numeric + COALESCE(cache_read_input_tokens,0)::numeric)::text AS input_tokens,
         SUM(tokens_out::numeric)::text AS output_tokens,
         SUM(estimated_micro_usd::numeric)::text AS estimated,
         SUM(latency_ms::numeric)::text AS latency

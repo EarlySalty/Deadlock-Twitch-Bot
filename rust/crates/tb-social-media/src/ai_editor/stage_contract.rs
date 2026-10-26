@@ -28,6 +28,8 @@ pub(super) struct Planning {
     pub variants: Vec<VariantPlan>,
     #[serde(default)]
     pub overlay_title: OverlayTitle,
+    #[serde(default = "default_subtitles_enabled")]
+    pub subtitles_enabled: bool,
 }
 
 pub(super) const OVERLAY_TITLE_MAX_CHARS: usize = 54;
@@ -76,6 +78,10 @@ fn default_subtitle_scale() -> u16 {
     100
 }
 
+fn default_subtitles_enabled() -> bool {
+    true
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct VariantPlan {
@@ -84,6 +90,8 @@ pub(super) struct VariantPlan {
     pub subtitle_scale_percent: u16,
     #[serde(default)]
     pub overlay_title: OverlayTitle,
+    #[serde(default = "default_subtitles_enabled")]
+    pub subtitles_enabled: bool,
 }
 
 impl VariantPlan {
@@ -95,6 +103,7 @@ impl VariantPlan {
             revision_proposal: None,
             variants: Vec::new(),
             overlay_title: self.overlay_title.clone(),
+            subtitles_enabled: self.subtitles_enabled,
         }
     }
 }
@@ -164,10 +173,10 @@ pub(super) fn planning_schema(
         "text": { "type": ["string", "null"], "maxLength": OVERLAY_TITLE_MAX_CHARS },
     }));
     let variant = object(
-        json!({"plan":plan.clone(),"platforms":object(json!({"youtube":copy.clone(),"tiktok":copy.clone(),"instagram":copy.clone()})),"subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140},"overlay_title":overlay.clone()}),
+        json!({"plan":plan.clone(),"platforms":object(json!({"youtube":copy.clone(),"tiktok":copy.clone(),"instagram":copy.clone()})),"subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140},"subtitles_enabled":{"type":"boolean"},"overlay_title":overlay.clone()}),
     );
     object(
-        json!({ "plan": plan, "platforms": object(json!({ "youtube": copy.clone(), "tiktok": copy.clone(), "instagram": copy })), "subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140}, "overlay_title": overlay, "variants":array(variant,2) }),
+        json!({ "plan": plan, "platforms": object(json!({ "youtube": copy.clone(), "tiktok": copy.clone(), "instagram": copy })), "subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140}, "subtitles_enabled":{"type":"boolean"}, "overlay_title": overlay, "variants":array(variant,2) }),
     )
 }
 

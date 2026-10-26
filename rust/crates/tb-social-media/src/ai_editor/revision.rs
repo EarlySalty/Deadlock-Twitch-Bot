@@ -492,23 +492,97 @@ fn output_identity(planning: &Planning, clip_title: &str) -> Value {
     json!({
         "cut": cut(&planning.plan),
         "hook": hook(&planning.plan),
-        "subtitle_scale_percent": planning.subtitle_scale_percent,
+        "subtitles": planning.subtitles_enabled.then_some(planning.subtitle_scale_percent),
         "overlay": planning.overlay_title.resolve(clip_title),
         "platforms": planning.platforms,
         "variants": planning.variants.iter().map(|variant| json!({
             "cut": cut(&variant.plan),
             "hook": hook(&variant.plan),
-            "subtitle_scale_percent": variant.subtitle_scale_percent,
+            "subtitles": variant.subtitles_enabled.then_some(variant.subtitle_scale_percent),
             "overlay": variant.overlay_title.resolve(clip_title),
             "platforms": variant.platforms,
         })).collect::<Vec<_>>(),
     })
 }
 
+pub(super) const REVISION_INSTRUCTION: &str = "Interpret feedback as a bounded edit of saved analysis. Set reanalyze=true only if new visual understanding is necessary and not yet authorized. Mark substantial changes for confirmation. The video shows exactly two kinds of text and each has its own control. Speech captions are the burned-in lines of the real speech in the lower part of the picture during the whole video: subtitles_enabled switches them on or off and subtitle_scale_percent only changes their size. The hook title is the large text at the very start of the video, previous_overlay_text shows what the previous version displayed: overlay_title controls it (mode clip_title shows clip_title, custom shows text, none shows no title). Map the feedback like this. Untertitel, Untertitel entfernen, subtitle, subtitles, caption, captions or the spoken words mean the speech captions: set subtitles_enabled=false to remove them or change subtitle_scale_percent to resize them. Titel, title, hook title, Überschrift or the big text at the start mean overlay_title. Kein Text, ohne Text, alle Texte entfernen, no text, remove every text or remove all text mean both: set subtitles_enabled=false and overlay_title.mode=none. Ambiguous wording about subtitles or captions always targets the speech captions and never the title; change the title only when the feedback names the title or all text. Keep every element the feedback does not mention exactly as in previous. kept_intervals and hook control the cut and the teaser. Caption wording cannot change because it is the real speech; preserve real speech and its language, stable layout and original audio. The server derives the list of changes from the real difference between previous and your plan and shows it to the user, so summary only needs a short note. Use impact to explain in German in one or two plain sentences what the change means for the video, or what could not be done and why, and never claim an edit that your returned plan does not contain. If nothing of the requested change can be done, return the previous plan unchanged and explain in impact what could not be done and why; no new version is produced then. Explain unsupported layout, creative or speech-rewriting requests honestly; never fabricate commands or cost estimates. Return a complete main plan and no extra variants for ordinary revisions.";
+
 pub(super) fn request_context(
     request: &RevisionRequest,
     base: &Planning,
     clip_title: &str,
 ) -> Value {
-    json!({"feedback":request.feedback,"previous":base,"previous_overlay_text":base.overlay_title.resolve(clip_title),"clip_title":clip_title,"reanalysis_confirmed":request.reanalysis_confirmed,"instruction":"Interpret feedback as a bounded edit of saved analysis. Set reanalyze=true only if new visual understanding is necessary and not yet authorized. Mark substantial changes for confirmation. You control what the video shows: kept_intervals and hook control the cut and the teaser, subtitle_scale_percent controls subtitle size, and overlay_title controls the large title burned in at the start (mode clip_title shows clip_title, custom shows text, none shows no title). previous_overlay_text is what the previous version showed. When the feedback asks to remove or change that overlay text, change overlay_title accordingly. Subtitle wording cannot change because it is the real speech; preserve real speech and its language, stable layout and original audio. If nothing of the requested change can be done, return the previous plan unchanged and explain in German in the summary what could not be done and why; no new version is produced then. Explain unsupported layout, creative or speech-rewriting requests honestly in the summary; never fabricate commands or cost estimates. Return a complete main plan and no extra variants for ordinary revisions."})
+    json!({"feedback":request.feedback,"previous":base,"previous_overlay_text":base.overlay_title.resolve(clip_title),"clip_title":clip_title,"reanalysis_confirmed":request.reanalysis_confirmed,"instruction":REVISION_INSTRUCTION})
+}
+
+pub(super) fn plan_changes(base: &Planning, next: &Planning, clip_title: &str) -> Vec<String> {
+    let mut changes = Vec::new();
+    match (base.subtitles_enabled, next.subtitles_enabled) {
+        (true, false) => changes.push("Untertitel ausgeblendet".to_owned()),
+        (false, true) => changes.push("Untertitel wieder eingeblendet".to_owned()),
+        (true, true) if base.subtitle_scale_percent != next.subtitle_scale_percent => {
+            changes.push(format!(
+                "Untertitelgröße von {} % auf {} % geändert",
+                base.subtitle_scale_percent, next.subtitle_scale_percent
+            ))
+        }
+        _ => {}
+    }
+    let before = base.overlay_title.resolve(clip_title);
+    let after = next.overlay_title.resolve(clip_title);
+    if before != after {
+        changes.push(match (before.is_empty(), after.is_empty()) {
+            (false, true) => format!("Titel „{before}“ entfernt"),
+            (true, false) => format!("Titel „{after}“ eingeblendet"),
+            _ => format!("Titel von „{before}“ auf „{after}“ geändert"),
+        });
+    }
+    let old = output_identity(base, clip_title);
+    let new = output_identity(next, clip_title);
+    if old["cut"] != new["cut"] {
+        changes.push("Schnitt geändert".to_owned());
+    }
+    if old["hook"] != new["hook"] {
+        let hook = match (old["hook"].is_null(), new["hook"].is_null()) {
+            (true, false) => "Vorschau am Anfang hinzugefügt",
+            (false, true) => "Vorschau am Anfang entfernt",
+            _ => "Vorschau am Anfang geändert",
+        };
+        changes.push(hook.to_owned());
+    }
+    if old["platforms"] != new["platforms"] {
+        changes.push("Plattformtexte geändert".to_owned());
+    }
+    if old["variants"] != new["variants"] {
+        changes.push("Zusätzliche Fassungen geändert".to_owned());
+    }
+    changes
+}
+
+pub(super) fn change_summary(changes: &[String], max_bytes: usize) -> String {
+    let sentence = |items: &[String]| match items {
+        [] => "Am Video wurde nichts geändert.".to_owned(),
+        [only] => format!("Geändert: {only}."),
+        [rest @ .., last] => format!("Geändert: {} und {last}.", rest.join(", ")),
+    };
+    let detailed = sentence(changes);
+    if detailed.len() <= max_bytes {
+        return detailed;
+    }
+    let compact = changes
+        .iter()
+        .map(|change| {
+            if change.starts_with("Titel ") {
+                "Titel geändert".to_owned()
+            } else {
+                change.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    let compact = sentence(&compact);
+    if compact.len() <= max_bytes {
+        compact
+    } else {
+        "Video geändert.".to_owned()
+    }
 }

@@ -191,6 +191,7 @@ async fn prepared(
         revision_proposal: None,
         variants: Vec::new(),
         overlay_title: Default::default(),
+        subtitles_enabled: true,
         plan: super::super::EditPlan {
             schema_version: 1,
             source_duration_ms: frozen.media.duration_ms,
@@ -2151,6 +2152,7 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
             platforms: base.platforms.clone(),
             subtitle_scale_percent: 100,
             overlay_title: Default::default(),
+            subtitles_enabled: true,
         });
     assert!(validate_variants(&plan, &json!({"multi_output_enabled":false}), &runtime).is_err());
     validate_variants(&plan, &frozen.publication, &runtime).expect("opt-in");
@@ -2307,6 +2309,7 @@ async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or
             platforms: plan.platforms.clone(),
             subtitle_scale_percent: 100,
             overlay_title: Default::default(),
+            subtitles_enabled: true,
         });
     if let Some(StageCheckpoint::Planning { edit_plan, .. }) =
         checkpoints.get_mut(&AiStage::Planning)
@@ -3335,6 +3338,155 @@ fn revision_without_output_change_is_detected() {
     let removed = planning_fixture("Kampf", json!({ "mode": "none", "text": null }));
     assert!(changes_output(&base, &removed, "EZ OUTPLAYED"));
     assert_eq!(removed.overlay_title.resolve("EZ OUTPLAYED"), "");
+}
+
+#[test]
+fn stored_plans_without_caption_switch_keep_their_captions() {
+    let stored = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
+    assert!(stored.subtitles_enabled);
+    let variant: super::super::stage_contract::VariantPlan = serde_json::from_value(json!({
+        "plan": serde_json::to_value(&stored.plan).expect("plan"),
+        "platforms": {},
+        "subtitle_scale_percent": 100
+    }))
+    .expect("stored variant");
+    assert!(variant.subtitles_enabled && variant.planning().subtitles_enabled);
+}
+
+#[test]
+fn caption_switch_is_a_required_boolean_in_every_plan_schema() {
+    let root = tempfile::tempdir().expect("package root");
+    let runtime = runtime(root.path());
+    let limits = &runtime.limits;
+    for schema in [
+        planning_schema(&limits.plan, &limits.copy, 11_833),
+        super::super::stage_contract::revision_schema(&limits.plan, &limits.copy, 11_833),
+    ] {
+        for scope in [&schema, &schema["properties"]["variants"]["items"]] {
+            assert_eq!(scope["properties"]["subtitles_enabled"]["type"], "boolean");
+            assert!(scope["required"]
+                .as_array()
+                .is_some_and(|names| names.iter().any(|name| name == "subtitles_enabled")));
+        }
+    }
+}
+
+#[test]
+fn revision_instruction_maps_caption_and_text_wording_to_the_right_fields() {
+    let instruction = super::super::revision::REVISION_INSTRUCTION;
+    for wording in [
+        "Untertitel, Untertitel entfernen, subtitle, subtitles, caption, captions or the spoken words mean the speech captions: set subtitles_enabled=false",
+        "Titel, title, hook title, Überschrift or the big text at the start mean overlay_title",
+        "Kein Text, ohne Text, alle Texte entfernen, no text, remove every text or remove all text mean both: set subtitles_enabled=false and overlay_title.mode=none",
+        "Ambiguous wording about subtitles or captions always targets the speech captions and never the title",
+    ] {
+        assert!(instruction.contains(wording), "{wording}");
+    }
+    assert!(!instruction.contains("explain in German in the summary"));
+}
+
+fn revised(base: &Planning, subtitles_enabled: bool, overlay: serde_json::Value) -> Planning {
+    let mut next = base.clone();
+    next.subtitles_enabled = subtitles_enabled;
+    next.overlay_title = serde_json::from_value(overlay).expect("overlay");
+    next
+}
+
+#[test]
+fn revision_summary_lists_only_the_real_plan_difference() {
+    use super::super::revision::{change_summary, changes_output, plan_changes};
+    let title = "Dunked on her ahh";
+    let base = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
+    let summary = |next: &Planning| change_summary(&plan_changes(&base, next, title), 512);
+    let keep_title = json!({ "mode": "clip_title", "text": null });
+    let no_title = json!({ "mode": "none", "text": null });
+    for feedback in ["entferne den Untertitel", "remove the subtitle"] {
+        let next = revised(&base, false, keep_title.clone());
+        assert!(changes_output(&base, &next, title), "{feedback}");
+        assert_eq!(summary(&next), "Geändert: Untertitel ausgeblendet.");
+        assert_eq!(next.overlay_title.resolve(title), title);
+    }
+    for feedback in [
+        "kein Text mehr im Video",
+        "no remove every text in this video no text",
+    ] {
+        let next = revised(&base, false, no_title.clone());
+        assert!(changes_output(&base, &next, title), "{feedback}");
+        assert_eq!(
+            summary(&next),
+            "Geändert: Untertitel ausgeblendet und Titel „Dunked on her ahh“ entfernt."
+        );
+    }
+    let title_only = revised(&base, true, no_title.clone());
+    assert_eq!(
+        summary(&title_only),
+        "Geändert: Titel „Dunked on her ahh“ entfernt."
+    );
+    let captions_gone = revised(&base, false, no_title.clone());
+    let mut resized_hidden = captions_gone.clone();
+    resized_hidden.subtitle_scale_percent = 140;
+    assert!(!changes_output(&captions_gone, &resized_hidden, title));
+    assert_eq!(
+        change_summary(&plan_changes(&captions_gone, &resized_hidden, title), 512),
+        "Am Video wurde nichts geändert."
+    );
+    let long = plan_changes(&base, &captions_gone, title);
+    assert_eq!(change_summary(&long, 50), "Video geändert.");
+    assert_eq!(
+        change_summary(&long, 60),
+        "Geändert: Untertitel ausgeblendet und Titel geändert."
+    );
+}
+
+#[test]
+fn disabled_captions_render_without_speech_burn_in() {
+    let root = tempfile::tempdir().expect("package root");
+    let runtime = runtime(root.path());
+    let title = "Dunked on her ahh";
+    let base = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
+    let validated = super::super::validate_plan(base.plan.clone(), 11_833, &runtime.limits.plan)
+        .expect("valid plan");
+    let source = [SourceSubtitle {
+        segment: SubtitleSegment {
+            start: 2.0,
+            end: 3.0,
+            text: "Yeah".into(),
+        },
+        language: Some("en".into()),
+    }];
+    let mapped = super::super::rebase_subtitles(&validated, &source, &runtime.limits.plan)
+        .expect("speech cues");
+    let ass = |planning: &Planning| {
+        super::super::validation::build_scaled_subtitle_ass(
+            &validated,
+            burned_subtitles(planning, &mapped),
+            &planning.overlay_title.resolve(title),
+            "",
+            0,
+            planning.subtitle_scale_percent,
+        )
+        .expect("ASS")
+    };
+    let speech = |ass: &str| {
+        ass.lines()
+            .filter(|line| line.starts_with("Dialogue:") && line.contains(",Default,"))
+            .count()
+    };
+    let with_captions = ass(&base);
+    assert!(speech(&with_captions) > 0 && with_captions.contains("Yeah"));
+    let captions_off = ass(&revised(
+        &base,
+        false,
+        json!({ "mode": "clip_title", "text": null }),
+    ));
+    assert_eq!(speech(&captions_off), 0);
+    assert!(!captions_off.contains("Yeah") && captions_off.contains(",Hook,"));
+    let no_text = ass(&revised(
+        &base,
+        false,
+        json!({ "mode": "none", "text": null }),
+    ));
+    assert!(!no_text.lines().any(|line| line.starts_with("Dialogue:")));
 }
 
 #[path = "acceptance_tests.rs"]
