@@ -1882,7 +1882,7 @@ async fn main() {
                 if let Some(observer) = runtime.limits.video_observer.clone() {
                     supervisor.spawn(
                         "gemini_session_keeper",
-                        tb_llm::video_observer::keep_alive(observer),
+                        tb_social_media::ai_editor::keep_gemini_session(pool.clone(), observer),
                     );
                 }
                 let worker = tb_social_media::ai_editor::ManualWorker::new(

@@ -13,6 +13,7 @@ const MENU_ITEM: &str = "gem-menu-item, [role=menuitem]";
 const UPLOAD_MENU: &str = "button[aria-label='Upload & tools']";
 const UPLOAD_ITEM: &str = "[role=menuitem], button";
 const FIND: &str = r#"((selector,text)=>{const el=[...document.querySelectorAll(selector)].find(e=>e.getClientRects().length&&(text===null||e.innerText.split('\n').map(s=>s.trim()).includes(text)));if(!el)return null;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})"#;
+pub(super) const ACCOUNT: &str = r#"(()=>{for(const e of document.querySelectorAll('[aria-label]')){const m=/^(?:Google Account|Google-Konto):.*\(([^()\s]+@[^()\s]+)\)/.exec((e.getAttribute('aria-label')||'').replace(/\s+/g,' '));if(m)return m[1].toLowerCase();}return null;})()"#;
 pub(super) const READY: &str = r#"(()=>{const prompt=document.querySelector("rich-textarea div[contenteditable='true'],div[contenteditable='true'][role='textbox'],textarea");const login=!!document.querySelector("[data-test-id='sign-in-button']")||[...document.querySelectorAll('a,button')].some(a=>a.getClientRects().length&&/^(sign in|anmelden)$/i.test(a.innerText.trim()));return login?'login':(prompt?'ready':'loading');})()"#;
 const UPLOAD_STATE: &str = r#"(()=>{if(!document.querySelector('uploader-file-preview'))return 'missing';return document.querySelector('.gem-attachment-loading-container,.gem-attachment-content.loading')?'loading':'ready';})()"#;
 const FOCUS: &str = r#"(()=>{const e=document.querySelector("rich-textarea div[contenteditable='true'],div[contenteditable='true'][role='textbox'],textarea");if(!e)return false;e.focus();return true;})()"#;
@@ -27,12 +28,14 @@ pub(super) async fn ask(
     config: &VideoObserverConfig,
     path: &str,
     prompt: &str,
+    account: &str,
     deadline: Instant,
 ) -> Result<String, ObserverError> {
     let target = cdp.open_page(&config.chat_url).await?;
-    let result = tokio::time::timeout_at(deadline, conversation(cdp, config, path, prompt))
-        .await
-        .unwrap_or(Err(ObserverError::Timeout));
+    let result =
+        tokio::time::timeout_at(deadline, conversation(cdp, config, path, prompt, account))
+            .await
+            .unwrap_or(Err(ObserverError::Timeout));
     cdp.close_page(&target).await;
     result
 }
@@ -42,8 +45,12 @@ async fn conversation(
     config: &VideoObserverConfig,
     path: &str,
     prompt: &str,
+    account: &str,
 ) -> Result<String, ObserverError> {
     wait_ready(cdp, config).await?;
+    if cdp.eval(ACCOUNT).await?.as_str() != Some(account) {
+        return Err(ObserverError::NotLoggedIn);
+    }
     select_model(cdp, config).await?;
     attach(cdp, config, path).await?;
     let before = submit(cdp, config, prompt).await?;

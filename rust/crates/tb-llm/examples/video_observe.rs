@@ -1,4 +1,4 @@
-use tb_llm::video_observer::{observe, VideoObserverConfig};
+use tb_llm::video_observer::{observe, BrowserPasskey, VideoObserverConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -7,6 +7,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::from_slice(&std::fs::read(args.next().ok_or("config")?)?)?;
     let video = std::path::PathBuf::from(args.next().ok_or("video")?);
     let prompt = args.next().ok_or("prompt")?;
-    println!("{}", observe(&config, &video, &prompt).await?);
+    let passkey = BrowserPasskey::parse(&std::env::var("GOOGLE_STEEL_PASSKEY")?)?;
+    println!("{}", observe(&config, &video, &prompt, &passkey).await?);
     Ok(())
 }

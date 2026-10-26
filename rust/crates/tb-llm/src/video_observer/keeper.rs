@@ -3,18 +3,15 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tokio::time::{sleep, Instant};
-use zeroize::Zeroizing;
 
 use super::{
     cdp::Cdp,
-    gemini::{self, READY},
+    gemini::{self, ACCOUNT, READY},
     ObserverError, VideoObserverConfig, BROWSER,
 };
 
-const PASSKEY_ENV: &str = "GOOGLE_STEEL_PASSKEY";
 const GEMINI: &str = "https://gemini.google.com/";
 const SIGN_IN: &str = "https://accounts.google.com/ServiceLogin?hl=en&continue=";
-const INTERVAL: Duration = Duration::from_secs(300);
 const LOAD: Duration = Duration::from_secs(4);
 const STEP_PAUSE: Duration = Duration::from_secs(5);
 const KEY_DELAY: Duration = Duration::from_millis(90);
@@ -36,7 +33,6 @@ const CREDENTIAL_FIELDS: [&str; 6] = [
     "signCount",
 ];
 const SPOOF: &str = "PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable=()=>Promise.resolve(true);if(PublicKeyCredential.getClientCapabilities){const o=PublicKeyCredential.getClientCapabilities.bind(PublicKeyCredential);PublicKeyCredential.getClientCapabilities=async()=>Object.assign({},await o(),{passkeyPlatformAuthenticator:true,userVerifyingPlatformAuthenticator:true});}";
-const ACCOUNT: &str = r#"(()=>{for(const e of document.querySelectorAll('[aria-label]')){const m=/^(?:Google Account|Google-Konto):.*\(([^()\s]+@[^()\s]+)\)/.exec((e.getAttribute('aria-label')||'').replace(/\s+/g,' '));if(m)return m[1].toLowerCase();}return null;})()"#;
 const EMPTY_IDENTIFIER: &str = "(()=>{const e=document.querySelector('#identifierId');return !!(e&&e.getClientRects().length&&!e.value);})()";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,10 +41,42 @@ pub enum Session {
     Relogged,
 }
 
-#[derive(Deserialize)]
-struct Passkey {
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserPasskey {
     account: String,
     credentials: Vec<Map<String, Value>>,
+}
+
+impl BrowserPasskey {
+    pub fn parse(raw: &str) -> Result<Self, ObserverError> {
+        let passkey: Self = serde_json::from_str(raw).map_err(|_| ObserverError::Configuration)?;
+        let account = passkey.account.trim();
+        let valid = account.len() <= 254
+            && account.split_once('@').is_some_and(|(user, host)| {
+                !user.is_empty() && host.contains('.') && !host.contains('@')
+            })
+            && !passkey.credentials.is_empty()
+            && passkey.credentials.iter().all(|credential| {
+                ["credentialId", "rpId", "privateKey"].iter().all(|field| {
+                    credential
+                        .get(*field)
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| !value.is_empty())
+                })
+            });
+        if !valid {
+            return Err(ObserverError::Configuration);
+        }
+        Ok(Self {
+            account: account.to_lowercase(),
+            credentials: passkey.credentials,
+        })
+    }
+
+    pub fn account(&self) -> &str {
+        &self.account
+    }
 }
 
 enum Status {
@@ -56,38 +84,34 @@ enum Status {
     SignedOut,
 }
 
-pub async fn check_session(config: &VideoObserverConfig) -> Result<Session, ObserverError> {
-    let _browser = BROWSER.lock().await;
-    ensure(config).await
-}
-
-pub async fn keep_alive(config: VideoObserverConfig) {
+pub async fn check_session(
+    config: &VideoObserverConfig,
+    passkey: &BrowserPasskey,
+) -> Result<Session, ObserverError> {
     if !config.valid() {
-        tracing::warn!("gemini session keeper disabled: invalid observer configuration");
-        return;
+        return Err(ObserverError::Configuration);
     }
-    loop {
-        match check_session(&config).await {
-            Ok(Session::Ready) => tracing::debug!("gemini session ready"),
-            Ok(Session::Relogged) => tracing::info!("gemini session signed in again via passkey"),
-            Err(error) => tracing::warn!(%error, "gemini session keeper failed"),
-        }
-        sleep(INTERVAL).await;
-    }
+    let _browser = BROWSER.lock().await;
+    tokio::time::timeout(
+        Duration::from_millis(config.total_deadline_ms),
+        ensure(config, passkey),
+    )
+    .await
+    .unwrap_or(Err(ObserverError::Timeout))
 }
 
-pub(super) async fn ensure(config: &VideoObserverConfig) -> Result<Session, ObserverError> {
-    let passkey = load_passkey();
+pub(super) async fn ensure(
+    config: &VideoObserverConfig,
+    passkey: &BrowserPasskey,
+) -> Result<Session, ObserverError> {
     let url = browser_socket(&config.devtools_endpoint, config.step()).await?;
     let mut cdp = Cdp::connect(&url, config.step()).await?;
     let target = single_tab(&mut cdp, &config.chat_url).await?;
     cdp.attach_page(&target).await?;
-    let account = passkey.as_ref().map(|key| key.account.to_lowercase());
-    if open_chat(&mut cdp, config, account.as_deref()).await? {
+    if open_chat(&mut cdp, config, passkey.account()).await? {
         return Ok(Session::Ready);
     }
-    let passkey = passkey.ok_or(ObserverError::NotLoggedIn)?;
-    let signed_in = sign_in(&mut cdp, config, &passkey).await;
+    let signed_in = sign_in(&mut cdp, config, passkey).await;
     let _ = cdp
         .page("Page.navigate", json!({ "url": config.chat_url }))
         .await;
@@ -96,12 +120,6 @@ pub(super) async fn ensure(config: &VideoObserverConfig) -> Result<Session, Obse
     } else {
         Err(ObserverError::NotLoggedIn)
     }
-}
-
-fn load_passkey() -> Option<Passkey> {
-    let raw = Zeroizing::new(std::env::var(PASSKEY_ENV).ok()?);
-    let passkey: Passkey = serde_json::from_str(&raw).ok()?;
-    (passkey.account.contains('@') && !passkey.credentials.is_empty()).then_some(passkey)
 }
 
 async fn browser_socket(endpoint: &str, step: Duration) -> Result<String, ObserverError> {
@@ -173,13 +191,13 @@ fn pages(listed: &Value) -> Vec<(String, String)> {
 async fn open_chat(
     cdp: &mut Cdp,
     config: &VideoObserverConfig,
-    account: Option<&str>,
+    account: &str,
 ) -> Result<bool, ObserverError> {
     cdp.page("Page.navigate", json!({ "url": config.chat_url }))
         .await?;
     sleep(LOAD).await;
     Ok(match status(cdp, config.step()).await? {
-        Status::SignedIn(active) => account.is_none_or(|wanted| active.as_deref() == Some(wanted)),
+        Status::SignedIn(active) => active.as_deref() == Some(account),
         Status::SignedOut => false,
     })
 }
@@ -212,7 +230,7 @@ async fn status(cdp: &mut Cdp, step: Duration) -> Result<Status, ObserverError> 
 async fn sign_in(
     cdp: &mut Cdp,
     config: &VideoObserverConfig,
-    passkey: &Passkey,
+    passkey: &BrowserPasskey,
 ) -> Result<bool, ObserverError> {
     let script = cdp
         .page(
@@ -250,7 +268,7 @@ async fn sign_in(
     result
 }
 
-async fn arm(cdp: &mut Cdp, passkey: &Passkey) -> Result<String, ObserverError> {
+async fn arm(cdp: &mut Cdp, passkey: &BrowserPasskey) -> Result<String, ObserverError> {
     cdp.page("WebAuthn.enable", json!({ "enableUI": false }))
         .await?;
     let authenticator = cdp
@@ -288,15 +306,14 @@ async fn arm(cdp: &mut Cdp, passkey: &Passkey) -> Result<String, ObserverError> 
 async fn walk(
     cdp: &mut Cdp,
     config: &VideoObserverConfig,
-    passkey: &Passkey,
+    passkey: &BrowserPasskey,
 ) -> Result<bool, ObserverError> {
-    let account = passkey.account.to_lowercase();
     for _ in 0..LOGIN_STEPS {
         let href = cdp.eval("location.href").await?;
         if href.as_str().is_some_and(|url| url.starts_with(GEMINI)) {
             return Ok(matches!(
                 status(cdp, config.step()).await?,
-                Status::SignedIn(Some(active)) if active == account
+                Status::SignedIn(Some(active)) if active == passkey.account
             ));
         }
         advance(cdp, &passkey.account).await?;
@@ -341,6 +358,35 @@ fn encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zeroize::Zeroizing;
+
+    fn live_passkey() -> BrowserPasskey {
+        let raw = Zeroizing::new(std::env::var("GOOGLE_STEEL_PASSKEY").expect("passkey env"));
+        BrowserPasskey::parse(&raw).expect("passkey")
+    }
+
+    #[test]
+    fn rejects_passkeys_without_usable_credentials() {
+        for raw in [
+            "",
+            "{}",
+            r#"{"account":"a@example.com","credentials":[]}"#,
+            r#"{"account":"nobody","credentials":[{"credentialId":"x","rpId":"google.com","privateKey":"k"}]}"#,
+            r#"{"account":"a@example.com","credentials":[{"credentialId":"x","rpId":"google.com"}]}"#,
+            r#"{"account":"a@example.com","credentials":[],"extra":1}"#,
+        ] {
+            assert_eq!(
+                BrowserPasskey::parse(raw).err(),
+                Some(ObserverError::Configuration),
+                "{raw}"
+            );
+        }
+        let parsed = BrowserPasskey::parse(
+            r#"{"account":" A@Example.com ","credentials":[{"credentialId":"x","rpId":"google.com","privateKey":"k"}]}"#,
+        )
+        .expect("valid");
+        assert_eq!(parsed.account(), "a@example.com");
+    }
 
     fn live_config() -> VideoObserverConfig {
         VideoObserverConfig {
@@ -364,7 +410,7 @@ mod tests {
     #[ignore = "needs the live Steel browser and GOOGLE_STEEL_PASSKEY"]
     async fn signs_in_a_fresh_browser_context_with_the_passkey() {
         let config = live_config();
-        let passkey = load_passkey().expect("passkey");
+        let passkey = live_passkey();
         let url = browser_socket(&config.devtools_endpoint, config.step())
             .await
             .expect("devtools");
@@ -399,7 +445,7 @@ mod tests {
     #[ignore = "needs the live Steel browser"]
     async fn keeps_the_live_session_on_one_signed_in_tab() {
         let config = live_config();
-        let session = check_session(&config).await;
+        let session = check_session(&config, &live_passkey()).await;
         assert!(session.is_ok(), "{session:?}");
         let url = browser_socket(&config.devtools_endpoint, config.step())
             .await

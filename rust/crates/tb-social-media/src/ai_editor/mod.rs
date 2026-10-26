@@ -1,4 +1,5 @@
 pub mod autopilot_revision;
+mod browser_passkey;
 pub mod learning;
 mod media;
 pub mod metadata;
@@ -37,6 +38,7 @@ pub use service::{
     create_manual_job, get_manual_job, list_manual_jobs, manual_original_file,
     manual_version_original_file, retry_manual_job, ManualWorker,
 };
+pub use browser_passkey::keep_gemini_session;
 pub use source::authorized_path;
 
 #[derive(Debug, thiserror::Error)]

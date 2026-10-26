@@ -3,7 +3,7 @@ mod gemini;
 mod keeper;
 mod steel;
 
-pub use keeper::{check_session, keep_alive, Session};
+pub use keeper::{check_session, BrowserPasskey, Session};
 
 use std::{fmt, path::Path, time::Duration};
 
@@ -114,6 +114,7 @@ pub async fn observe(
     config: &VideoObserverConfig,
     video: &Path,
     prompt: &str,
+    passkey: &BrowserPasskey,
 ) -> Result<String, ObserverError> {
     if !config.valid() {
         return Err(ObserverError::Configuration);
@@ -121,18 +122,42 @@ pub async fn observe(
     let bytes = read_video(video, config.max_video_bytes).await?;
     let config = config.clone();
     let prompt = prompt.to_owned();
+    let passkey = passkey.clone();
     tokio::spawn(async move {
         let _browser = BROWSER.lock().await;
-        match run(&config, &bytes, &prompt).await {
-            Err(ObserverError::NotLoggedIn) => {
-                keeper::ensure(&config).await?;
-                run(&config, &bytes, &prompt).await
-            }
-            result => result,
-        }
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_millis(config.total_deadline_ms);
+        attempt(&config, &bytes, &prompt, &passkey, deadline).await
     })
     .await
     .map_err(|_| ObserverError::Unavailable)?
+}
+
+async fn attempt(
+    config: &VideoObserverConfig,
+    bytes: &[u8],
+    prompt: &str,
+    passkey: &BrowserPasskey,
+    deadline: tokio::time::Instant,
+) -> Result<String, ObserverError> {
+    ensure_until(config, passkey, deadline).await?;
+    match run(config, bytes, prompt, passkey.account(), deadline).await {
+        Err(ObserverError::NotLoggedIn) => {
+            ensure_until(config, passkey, deadline).await?;
+            run(config, bytes, prompt, passkey.account(), deadline).await
+        }
+        result => result,
+    }
+}
+
+async fn ensure_until(
+    config: &VideoObserverConfig,
+    passkey: &BrowserPasskey,
+    deadline: tokio::time::Instant,
+) -> Result<Session, ObserverError> {
+    tokio::time::timeout_at(deadline, keeper::ensure(config, passkey))
+        .await
+        .unwrap_or(Err(ObserverError::Timeout))
 }
 
 async fn read_video(path: &Path, max_bytes: u64) -> Result<Vec<u8>, ObserverError> {
@@ -151,8 +176,9 @@ async fn run(
     config: &VideoObserverConfig,
     bytes: &[u8],
     prompt: &str,
+    account: &str,
+    deadline: tokio::time::Instant,
 ) -> Result<String, ObserverError> {
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(config.total_deadline_ms);
     let session = steel::SteelSession::attach(&config.steel_endpoint, config.step()).await?;
     let result = async {
         let path = session
@@ -163,7 +189,7 @@ async fn run(
             )
             .await?;
         let mut browser = cdp::Cdp::connect(&session.websocket_url(), config.step()).await?;
-        gemini::ask(&mut browser, config, &path, prompt, deadline).await
+        gemini::ask(&mut browser, config, &path, prompt, account, deadline).await
     }
     .await;
     session.clear_files().await;

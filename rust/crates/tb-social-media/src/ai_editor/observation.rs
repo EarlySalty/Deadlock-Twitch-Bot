@@ -29,7 +29,7 @@ pub(super) async fn watch(
         }
     }
     let started = Instant::now();
-    let result = observe(config, source, runtime).await;
+    let result = observe(owner.pool, config, source, runtime).await;
     let elapsed_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
     if let Err(error) = record(&owner, source, config, &result, elapsed_ms).await {
         tracing::warn!(job = %owner.job_namespace, %error, "video observation not stored");
@@ -44,6 +44,7 @@ pub(super) async fn watch(
 }
 
 async fn observe(
+    pool: &PgPool,
     config: &VideoObserverConfig,
     source: &SourceIdentity,
     runtime: &EditorRuntime,
@@ -55,7 +56,8 @@ async fn observe(
     )
     .map_err(|_| ObserverError::Source)?;
     let prompt = format!("{PROMPT}\n\nClip title: {}", source.title);
-    video_observer::observe(config, &path, &prompt).await
+    let passkey = super::browser_passkey::load(pool).await?;
+    video_observer::observe(config, &path, &prompt, &passkey).await
 }
 
 async fn stored_answer(
