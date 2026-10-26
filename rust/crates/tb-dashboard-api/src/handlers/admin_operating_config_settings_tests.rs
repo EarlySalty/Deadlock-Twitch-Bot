@@ -55,6 +55,7 @@ max_variants = 3
     .expect("revisions fixture");
     runtime.insert("brain".into(), toml::Value::Table(brain));
     runtime.insert("revisions".into(), toml::Value::Table(revisions));
+    runtime.insert("analysis_fps".into(), toml::Value::Integer(4));
     section
 }
 

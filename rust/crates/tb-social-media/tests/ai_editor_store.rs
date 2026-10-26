@@ -23,7 +23,7 @@ async fn fixture() -> postgres::TestPostgres {
     .execute(&db.pool)
     .await
     .expect("Produzierte Videos");
-    sqlx::raw_sql("CREATE TABLE public.twitch_streamers (twitch_user_id TEXT PRIMARY KEY); INSERT INTO public.twitch_streamers (twitch_user_id) VALUES ('101'), ('202')")
+    sqlx::raw_sql("CREATE TABLE public.twitch_streamers (twitch_user_id TEXT PRIMARY KEY); INSERT INTO public.twitch_streamers (twitch_user_id) VALUES ('101'), ('202'); CREATE TABLE public.social_media_streamer_layout (twitch_user_id TEXT PRIMARY KEY)")
         .execute(&db.pool)
         .await
         .expect("Test-Streamer");
@@ -66,6 +66,10 @@ async fn real_schema_fixture() -> postgres::TestPostgres {
     .execute(&db.pool)
     .await
     .expect("echte Typmigration");
+    sqlx::query("ALTER TABLE social_media_streamer_layout ADD COLUMN twitch_user_id TEXT")
+        .execute(&db.pool)
+        .await
+        .expect("Layout-Kanal-ID wie in 20261001090000");
     sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('fixture-one', '101'), ('fixture-two', '202'), ('earlysalty', '303')")
         .execute(&db.pool)
         .await
