@@ -44,6 +44,55 @@ test('A refused chunk stops the uploader and nothing else is sent', async () => 
   assert.equal(uploader.stopped, true);
 });
 
+test('A failed upload is retried with the same chunk before the next one', async () => {
+  const outcomes: Array<number | 'throw'> = [503, 'throw', 200, 200];
+  const seqs: number[] = [];
+  const waits: number[] = [];
+  let stopped = 0;
+  const uploader = new RecordingUploader('s', async (body) => {
+    seqs.push((JSON.parse(body) as { seq: number }).seq);
+    const outcome = outcomes.shift();
+    if (outcome === 'throw') throw new Error('offline');
+    return { status: outcome ?? 200 };
+  }, META, () => { stopped += 1; }, async (ms) => { waits.push(ms); });
+  uploader.push({ type: 2, timestamp: 1 });
+  await uploader.flush(false);
+  uploader.push({ type: 3, timestamp: 2 });
+  await uploader.flush(false);
+  assert.deepEqual(seqs, [0, 0, 0, 1]);
+  assert.deepEqual(waits, [1_000, 4_000]);
+  assert.equal(stopped, 0);
+});
+
+test('A chunk that keeps failing ends the recording instead of leaving a gap', async () => {
+  const seqs: number[] = [];
+  let stopped = 0;
+  const uploader = new RecordingUploader('s', async (body) => {
+    seqs.push((JSON.parse(body) as { seq: number }).seq);
+    return { status: 500 };
+  }, META, () => { stopped += 1; }, async () => {});
+  uploader.push({ type: 2, timestamp: 1 });
+  await uploader.flush(false);
+  uploader.push({ type: 3, timestamp: 2 });
+  await uploader.flush(false);
+  assert.deepEqual(seqs, [0, 0, 0, 0]);
+  assert.equal(stopped, 1);
+  assert.equal(uploader.stopped, true);
+});
+
+test('An already stored chunk counts as delivered', async () => {
+  let calls = 0;
+  let stopped = 0;
+  const uploader = new RecordingUploader('s', async () => {
+    calls += 1;
+    return { status: 409 };
+  }, META, () => { stopped += 1; }, async () => {});
+  uploader.push({ type: 2, timestamp: 1 });
+  await uploader.flush(false);
+  assert.equal(calls, 1);
+  assert.equal(stopped, 0);
+});
+
 test('Chunks are sequential and stay under the chunk cap', async () => {
   const bodies: string[] = [];
   const uploader = new RecordingUploader('s', async (body) => {

@@ -290,7 +290,7 @@ async fn consent_granted(
     twitch_user_id: &str,
 ) -> Result<bool, sqlx::Error> {
     let decision = sqlx::query_scalar::<_, String>(
-        "SELECT decision FROM social_media_recording_consent WHERE twitch_user_id = $1 FOR SHARE",
+        "SELECT decision FROM social_media_recording_consent WHERE twitch_user_id = $1 FOR UPDATE",
     )
     .bind(twitch_user_id)
     .fetch_optional(&mut **tx)
@@ -332,8 +332,10 @@ async fn daily_bytes(
     twitch_user_id: &str,
 ) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(SUM(total_bytes), 0)::bigint FROM social_media_recording_sessions
-         WHERE twitch_user_id = $1 AND started_at > now() - interval '1 day'",
+        "SELECT COALESCE(SUM(c.byte_size), 0)::bigint
+         FROM social_media_recording_chunks c
+         JOIN social_media_recording_sessions s ON s.id = c.session_id
+         WHERE s.twitch_user_id = $1 AND c.created_at > now() - interval '1 day'",
     )
     .bind(twitch_user_id)
     .fetch_one(&mut **tx)
@@ -618,22 +620,48 @@ mod tests {
         }
     }
 
-    fn chunk_body(seq: i32) -> Bytes {
+    fn chunk_body(session: &str, seq: i32) -> Bytes {
         Bytes::from(
-            json!({ "session_id": SESSION, "seq": seq, "events": [{ "type": 4, "timestamp": 1 }] })
+            json!({ "session_id": session, "seq": seq, "events": [{ "type": 4, "timestamp": 1 }] })
                 .to_string(),
         )
     }
 
     async fn send_chunk(pool: &PgPool, id: &str, seq: i32) -> StatusCode {
+        send_session_chunk(pool, id, SESSION, seq).await
+    }
+
+    async fn send_session_chunk(pool: &PgPool, id: &str, session: &str, seq: i32) -> StatusCode {
         chunk_post_handler(
             partner(id),
             State(pool.clone()),
             HeaderMap::new(),
-            chunk_body(seq),
+            chunk_body(session, seq),
         )
         .await
         .status()
+    }
+
+    async fn seed_bytes(pool: &PgPool, session: &str, started_days_ago: i32, bytes: i64) {
+        sqlx::query(
+            "INSERT INTO social_media_recording_sessions (id, twitch_user_id, twitch_login, started_at, total_bytes, chunk_count)
+             VALUES ($1::uuid, '111', 'user111', now() - make_interval(days => $2), $3, 1)",
+        )
+        .bind(session)
+        .bind(started_days_ago)
+        .bind(bytes)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_recording_chunks (session_id, seq, payload, byte_size)
+             VALUES ($1::uuid, 0, '[]'::jsonb, $2)",
+        )
+        .bind(session)
+        .bind(i32::try_from(bytes).unwrap())
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     async fn decide(pool: &PgPool, id: &str, decision: &str) -> StatusCode {
@@ -666,6 +694,51 @@ mod tests {
         assert_eq!(decide(&pool, "111", "declined").await, StatusCode::OK);
         assert_eq!(chunk_rows(&pool).await, 0);
         assert_eq!(send_chunk(&pool, "111", 3).await, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn daily_cap_counts_recent_chunks_of_old_sessions() {
+        let Some(pool) = pool_or_skip("social_media_recording_daily_old").await else {
+            return;
+        };
+        assert_eq!(decide(&pool, "111", "granted").await, StatusCode::OK);
+        seed_bytes(&pool, SESSION, 2, DAILY_MAX_BYTES - 10).await;
+        assert_eq!(
+            send_chunk(&pool, "111", 1).await,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(chunk_rows(&pool).await, 1);
+    }
+
+    #[tokio::test]
+    async fn daily_cap_holds_for_concurrent_sessions() {
+        let Some(pool) = pool_or_skip("social_media_recording_daily_race").await else {
+            return;
+        };
+        assert_eq!(decide(&pool, "111", "granted").await, StatusCode::OK);
+        let size = i64::try_from(r#"[{"type":4,"timestamp":1}]"#.len()).unwrap();
+        seed_bytes(
+            &pool,
+            "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+            0,
+            DAILY_MAX_BYTES - size - 1,
+        )
+        .await;
+        let sessions = [
+            "1a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+            "2a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+            "3a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+            "4a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+        ];
+        let sends = sessions
+            .iter()
+            .map(|session| send_session_chunk(&pool, "111", session, 0));
+        let statuses = futures_util::future::join_all(sends).await;
+        let stored = statuses.iter().filter(|s| **s == StatusCode::OK).count();
+        assert_eq!(stored, 1, "{statuses:?}");
+        assert!(statuses
+            .iter()
+            .all(|s| *s == StatusCode::OK || *s == StatusCode::TOO_MANY_REQUESTS));
     }
 
     #[tokio::test]

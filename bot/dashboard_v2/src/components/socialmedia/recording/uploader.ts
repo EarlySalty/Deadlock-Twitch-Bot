@@ -2,7 +2,10 @@ export const CHUNK_MAX_BYTES = 2 * 1024 * 1024;
 export const SESSION_MAX_BYTES = 20 * 1024 * 1024;
 export const KEEPALIVE_MAX_BYTES = 60 * 1024;
 
+export const RETRY_DELAYS_MS = [1_000, 4_000, 15_000];
+
 export type ChunkSender = (body: string, keepalive: boolean) => Promise<{ status: number }>;
+export type Sleep = (ms: number) => Promise<void>;
 
 export interface ChunkMeta {
   viewport_width: number;
@@ -15,8 +18,14 @@ function byteLength(text: string): number {
   return encoder.encode(text).length;
 }
 
+const defaultSleep: Sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
 function stopsRecording(status: number): boolean {
   return status >= 400 && status < 500 && status !== 409;
+}
+
+function isRetryable(status: number | null): boolean {
+  return status === null || status >= 500;
 }
 
 export class RecordingUploader {
@@ -29,13 +38,15 @@ export class RecordingUploader {
   private readonly send: ChunkSender;
   private readonly meta: ChunkMeta;
   private readonly onStop: () => void;
+  private readonly sleep: Sleep;
   stopped = false;
 
-  constructor(sessionId: string, send: ChunkSender, meta: ChunkMeta, onStop: () => void) {
+  constructor(sessionId: string, send: ChunkSender, meta: ChunkMeta, onStop: () => void, sleep: Sleep = defaultSleep) {
     this.sessionId = sessionId;
     this.send = send;
     this.meta = meta;
     this.onStop = onStop;
+    this.sleep = sleep;
   }
 
   push(event: unknown): void {
@@ -81,11 +92,26 @@ export class RecordingUploader {
       this.stop();
       return;
     }
+    for (let attempt = 0; ; attempt += 1) {
+      if (this.stopped) return;
+      const status = await this.attempt(body, keepalive && attempt === 0);
+      if (!isRetryable(status)) {
+        if (status !== null && stopsRecording(status)) this.stop();
+        return;
+      }
+      if (attempt >= RETRY_DELAYS_MS.length) {
+        this.stop();
+        return;
+      }
+      await this.sleep(RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
+  private async attempt(body: string, keepalive: boolean): Promise<number | null> {
     try {
-      const response = await this.send(body, keepalive);
-      if (stopsRecording(response.status)) this.stop();
+      return (await this.send(body, keepalive)).status;
     } catch {
-      return;
+      return null;
     }
   }
 
