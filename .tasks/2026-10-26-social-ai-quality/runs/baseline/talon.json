@@ -1,0 +1,380 @@
+{
+ "clip": {
+  "key": "talon",
+  "owner": "1376724506",
+  "clip_db_id": 140451,
+  "why": "8.1 s, very short"
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "start_later",
+    "text": "Fang bitte 3 Sekunden später an."
+   },
+   "parent_version_id": 73,
+   "http": 200,
+   "job_id": 99,
+   "status": "failed",
+   "failure_code": "planning_failed",
+   "failure_message": "Der Schnitt konnte nicht geplant werden.",
+   "waited_s": 31,
+   "proposal": null,
+   "review_reasons": [],
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1928,
+    "tokens_in": 2,
+    "tokens_out": 1928,
+    "cache_creation": 11217,
+    "cache_read": 0,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "new_title",
+    "text": "Bitte einen anderen Titel."
+   },
+   "parent_version_id": 73,
+   "http": 200,
+   "job_id": 100,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 41,
+   "proposal": {
+    "summary": "Der eingeblendete Titel lautet jetzt Zwei Treffer und fast alle HP sind weg statt Von 1690 auf 348 HP. Die Plattformtitel wurden passend angeglichen.",
+    "impact": "Nur der Titel ändert sich. Schnitt, Untertitel, Layout und Originalton bleiben gleich.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "signature": {
+    "kept": [
+     [
+      0,
+      8128
+     ]
+    ],
+    "hook": null,
+    "overlay": {
+     "mode": "custom",
+     "text": "Zwei Treffer und fast alle HP sind weg"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Zwei Treffer und fast alle HP sind weg",
+     "youtube": "Zwei Treffer und fast alle HP sind weg",
+     "instagram": "Zwei Treffer und fast alle HP sind weg"
+    },
+    "output_duration_ms": 8128
+   },
+   "changed": [
+    "overlay",
+    "titles"
+   ],
+   "version_id": 74,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Zwei Treffer kurz hintereinander und die HP fallen von 1690 über 906 auf 348. Kurz danach ist der Streamer tot und sucht nach der Ursache.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Zwei Treffer und fast alle HP sind weg"
+     },
+     "tiktok": {
+      "description": "Zwei Treffer, und die HP fallen von 1690 über 906 auf 348. Danach geht es direkt in die Death Cam.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Zwei Treffer und fast alle HP sind weg"
+     },
+     "youtube": {
+      "description": "Zwei Treffer kurz hintereinander und die HP fallen von 1690 über 906 auf 348. Kurz danach ist der Streamer tot und sucht im Scoreboard nach der Ursache.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Zwei Treffer und fast alle HP sind weg"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 74
+   },
+   "frames": {
+    "duration_s": 8.2,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/talon/v74_sheet.jpg",
+    "points_s": [
+     0.5,
+     2.71,
+     5.41,
+     7.2
+    ]
+   },
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1405,
+    "tokens_in": 2,
+    "tokens_out": 1405,
+    "cache_creation": 7515,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "caption_end",
+    "text": "Nimm die Untertitel am Ende raus."
+   },
+   "parent_version_id": 74,
+   "http": 200,
+   "job_id": 101,
+   "status": "failed",
+   "failure_code": "revision_unchanged",
+   "failure_message": "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.",
+   "waited_s": 31,
+   "proposal": {
+    "summary": "Einzelne Untertitel lassen sich nicht ausblenden, nur ihre Größe ist einstellbar. Der einzige Untertitel ist die echte Sprache von etwa 2,9 bis 5 Sekunden, danach erscheint kein Untertitel mehr. Falls die im Originalvideo eingeblendeten Untertitel gemeint sind, gehören sie zum Bild und verschwinden nur durch einen Schnitt. Das würde den Tod und die Ursachensuche ab etwa 5 Sekunden entfernen. Auf Wunsch kann der Clip so gekürzt werden.",
+    "impact": "Keine Änderung. Schnitt, Titel, Untertitel, Layout und Originalton bleiben wie in der vorherigen Version.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "signature": {
+    "kept": [
+     [
+      0,
+      8128
+     ]
+    ],
+    "hook": null,
+    "overlay": {
+     "mode": "custom",
+     "text": "Zwei Treffer und fast alle HP sind weg"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Zwei Treffer und fast alle HP sind weg",
+     "youtube": "Zwei Treffer und fast alle HP sind weg",
+     "instagram": "Zwei Treffer und fast alle HP sind weg"
+    },
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 2393,
+    "tokens_in": 2,
+    "tokens_out": 2393,
+    "cache_creation": 7693,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer."
+   },
+   "parent_version_id": 74,
+   "http": 200,
+   "job_id": 102,
+   "status": "failed",
+   "failure_code": "planning_failed",
+   "failure_message": "Der Schnitt konnte nicht geplant werden.",
+   "waited_s": 21,
+   "proposal": null,
+   "review_reasons": [],
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1914,
+    "tokens_in": 2,
+    "tokens_out": 1914,
+    "cache_creation": 7687,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "remove_subtitle_en",
+    "text": "remove subtitle"
+   },
+   "parent_version_id": 74,
+   "http": 200,
+   "job_id": 103,
+   "status": "failed",
+   "failure_code": "revision_unchanged",
+   "failure_message": "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.",
+   "waited_s": 21,
+   "proposal": {
+    "summary": "Die Untertitel lassen sich in dieser Bearbeitung nicht abschalten. Sie zeigen die echte Sprache und es gibt nur eine Einstellung für die Größe, die mindestens 60 Prozent beträgt. Der Plan bleibt deshalb unverändert. Falls der große eingeblendete Titel am Anfang gemeint war, kann er entfernt werden, wenn du das so angibst.",
+    "impact": "Keine Änderung. Es entsteht keine neue Version.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "signature": {
+    "kept": [
+     [
+      0,
+      8128
+     ]
+    ],
+    "hook": null,
+    "overlay": {
+     "mode": "custom",
+     "text": "Zwei Treffer und fast alle HP sind weg"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Zwei Treffer und fast alle HP sind weg",
+     "youtube": "Zwei Treffer und fast alle HP sind weg",
+     "instagram": "Zwei Treffer und fast alle HP sind weg"
+    },
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 2043,
+    "tokens_in": 2,
+    "tokens_out": 2043,
+    "cache_creation": 7682,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  }
+ ],
+ "create_http": 200,
+ "root": {
+  "job_id": 98,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 153,
+  "review_reasons": [],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 8128,
+    "description": "Der Streamer kämpft bei voller HP an einem großen Gegner und verliert durch zwei starke Treffer in kurzer Zeit den Großteil seiner HP. Er reagiert auf den hohen Schaden, stirbt kurz danach und schaut sich in der Death Cam einen Gegenstand mit Zusatzschaden an."
+   },
+   {
+    "start_ms": 1000,
+    "end_ms": 4960,
+    "description": "Kernmoment mit den zwei großen Schadensspitzen von 1690 über 906 auf 348 HP und dem direkten Kommentar des Streamers zu den 800 Schaden."
+   }
+  ],
+  "original_duration_ms": 8128,
+  "version_id": 73,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Zwei Treffer kurz hintereinander und die HP fallen von 1690 über 906 auf 348. Kurz danach ist der Streamer tot und sucht nach der Ursache.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Reels"
+     ],
+     "title": "Von 1690 auf 348 HP in Sekunden"
+    },
+    "tiktok": {
+     "description": "Zwei Treffer, und die HP fallen von 1690 über 906 auf 348. Danach geht es direkt in die Death Cam.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "fyp"
+     ],
+     "title": "Von 1690 auf 348 HP in Sekunden"
+    },
+    "youtube": {
+     "description": "Zwei Treffer kurz hintereinander und die HP fallen von 1690 über 906 auf 348. Kurz danach ist der Streamer tot und sucht im Scoreboard nach der Ursache.",
+     "hashtags": [
+      "Deadlock",
+      "Shorts",
+      "Gaming"
+     ],
+     "title": "Von 1690 auf 348 HP in Sekunden"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 73
+  },
+  "frames": {
+   "duration_s": 8.2,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/talon/v73_sheet.jpg",
+   "points_s": [
+    0.5,
+    2.71,
+    5.41,
+    7.2
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     8128
+    ]
+   ],
+   "hook": null,
+   "overlay": {
+    "mode": "custom",
+    "text": "Von 1690 auf 348 HP"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Von 1690 auf 348 HP in Sekunden",
+    "youtube": "Von 1690 auf 348 HP in Sekunden",
+    "instagram": "Von 1690 auf 348 HP in Sekunden"
+   },
+   "output_duration_ms": 8128
+  },
+  "tokens": {
+   "shown_input": 4,
+   "shown_output": 2911,
+   "tokens_in": 4,
+   "tokens_out": 2911,
+   "cache_creation": 26339,
+   "cache_read": 0,
+   "calls": 2
+  }
+ }
+}

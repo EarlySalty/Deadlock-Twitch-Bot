@@ -7,7 +7,7 @@ const DASH = `http://127.0.0.1:${PROXY_PORT}`;
 const token = process.env.SAI_TOKEN || '';
 delete process.env.SAI_TOKEN;
 const [stepsFile, outDir] = process.argv.slice(2);
-const cdpBase = process.env.MOLI_CDP || 'http://127.0.0.1:9557';
+const cdpBase = process.env.MOLI_CDP || 'http://127.0.0.1:9558';
 const steps = JSON.parse(readFileSync(stepsFile, 'utf8'));
 const t0 = Date.now();
 const log = (m) => console.log(((Date.now() - t0) / 1000).toFixed(1), String(m).replaceAll(token || '\u0000', '***'));

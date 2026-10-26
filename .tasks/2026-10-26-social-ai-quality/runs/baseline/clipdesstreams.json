@@ -1,0 +1,400 @@
+{
+ "clip": {
+  "key": "clipdesstreams",
+  "owner": "1376724506",
+  "clip_db_id": 130466,
+  "why": "60 s long clip; jobs 11 (render failed), 53, 57"
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "start_later",
+    "text": "Fang bitte 3 Sekunden später an."
+   },
+   "parent_version_id": 64,
+   "http": 200,
+   "job_id": 75,
+   "status": "failed",
+   "failure_code": "planning_failed",
+   "failure_message": "Der Schnitt konnte nicht geplant werden.",
+   "waited_s": 21,
+   "proposal": null,
+   "review_reasons": [],
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1450,
+    "tokens_in": 2,
+    "tokens_out": 1450,
+    "cache_creation": 12148,
+    "cache_read": 0,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "new_title",
+    "text": "Bitte einen anderen Titel."
+   },
+   "parent_version_id": 64,
+   "http": 200,
+   "job_id": 76,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 340,
+   "proposal": {
+    "summary": "Der eingeblendete Titel lautet jetzt Gegner in der Luft betäubt statt Teamkampf und Luftkampf. Schnitt, Teaser, Untertitel und Plattformtexte bleiben unverändert.",
+    "impact": "Nur der große Titel am Anfang des Videos ändert sich. Er stellt jetzt den Luftkampf als stärksten Moment in den Vordergrund.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "signature": {
+    "kept": [
+     [
+      0,
+      60009
+     ]
+    ],
+    "hook": [
+     50500,
+     53000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Gegner in der Luft betäubt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Teamkampf mit Assist und Luftkampf",
+     "youtube": "Teamkampf mit Assist und ein betäubter Gegner in der Luft",
+     "instagram": "Teamkampf mit Assist und Luftkampf"
+    },
+    "output_duration_ms": 62509
+   },
+   "changed": [
+    "overlay"
+   ],
+   "version_id": 65,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Push, großer Teamkampf mit Assist für 210 Seelen und am Ende ein betäubter Gegner in der Luft.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Twitch"
+      ],
+      "title": "Teamkampf mit Assist und Luftkampf"
+     },
+     "tiktok": {
+      "description": "Großer Teamkampf mit Assist für 210 Seelen, danach ein betäubter Gegner in der Luft. What?!",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Twitch"
+      ],
+      "title": "Teamkampf mit Assist und Luftkampf"
+     },
+     "youtube": {
+      "description": "Erst Push, dann ein großer Teamkampf mit Assist für 210 Seelen. Danach wird ein Gegner in der Luft betäubt und die Reaktion kommt sofort.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Shorts"
+      ],
+      "title": "Teamkampf mit Assist und ein betäubter Gegner in der Luft"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 65
+   },
+   "frames": {
+    "duration_s": 62.6,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/clipdesstreams/v65_sheet.jpg",
+    "points_s": [
+     0.5,
+     20.66,
+     41.32,
+     61.6
+    ]
+   },
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1527,
+    "tokens_in": 2,
+    "tokens_out": 1527,
+    "cache_creation": 8446,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "caption_end",
+    "text": "Nimm die Untertitel am Ende raus."
+   },
+   "parent_version_id": 65,
+   "http": 200,
+   "job_id": 77,
+   "status": "failed",
+   "failure_code": "revision_unchanged",
+   "failure_message": "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.",
+   "waited_s": 31,
+   "proposal": {
+    "summary": "Die Untertitel am Ende lassen sich nicht einzeln entfernen. Sie zeigen die echte Sprache, und der Schnittplan steuert nur Schnitt und Größe der Untertitel, nicht ob einzelne Untertitel erscheinen. Der letzte Untertitel ist das What bei etwa 52 Sekunden, also die eigentliche Reaktion auf den betäubten Gegner. Ihn wegzuschneiden würde den Höhepunkt und den Teaser zerstören. Deshalb bleibt der Plan unverändert.",
+    "impact": "Es entsteht keine neue Version. Schnitt, Teaser, Titel, Untertitel und Plattformtexte bleiben wie in der vorherigen Version.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "signature": {
+    "kept": [
+     [
+      0,
+      60009
+     ]
+    ],
+    "hook": [
+     50500,
+     53000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Gegner in der Luft betäubt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Teamkampf mit Assist und Luftkampf",
+     "youtube": "Teamkampf mit Assist und ein betäubter Gegner in der Luft",
+     "instagram": "Teamkampf mit Assist und Luftkampf"
+    },
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 2283,
+    "tokens_in": 2,
+    "tokens_out": 2283,
+    "cache_creation": 8634,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer."
+   },
+   "parent_version_id": 65,
+   "http": 200,
+   "job_id": 78,
+   "status": "failed",
+   "failure_code": "planning_failed",
+   "failure_message": "Der Schnitt konnte nicht geplant werden.",
+   "waited_s": 21,
+   "proposal": null,
+   "review_reasons": [],
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 2018,
+    "tokens_in": 2,
+    "tokens_out": 2018,
+    "cache_creation": 8628,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "remove_subtitle_en",
+    "text": "remove subtitle"
+   },
+   "parent_version_id": 65,
+   "http": 200,
+   "job_id": 79,
+   "status": "failed",
+   "failure_code": "revision_unchanged",
+   "failure_message": "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.",
+   "waited_s": 21,
+   "proposal": {
+    "summary": "Die Untertitel lassen sich hier nicht abschalten. Sie geben die echte Sprache wieder und ihre Größe kann nur zwischen 60 und 140 Prozent eingestellt werden. Falls der große Titel am Anfang gemeint ist, bitte kurz Bescheid geben, dann wird er entfernt.",
+    "impact": "Es entsteht keine neue Version. Schnitt, Teaser, Titel, Untertitel und Plattformtexte bleiben wie bisher.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "signature": {
+    "kept": [
+     [
+      0,
+      60009
+     ]
+    ],
+    "hook": [
+     50500,
+     53000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Gegner in der Luft betäubt"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Teamkampf mit Assist und Luftkampf",
+     "youtube": "Teamkampf mit Assist und ein betäubter Gegner in der Luft",
+     "instagram": "Teamkampf mit Assist und Luftkampf"
+    },
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1951,
+    "tokens_in": 2,
+    "tokens_out": 1951,
+    "cache_creation": 8623,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  }
+ ],
+ "create_http": 200,
+ "root": {
+  "job_id": 74,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 492,
+  "review_reasons": [
+   "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+  ],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 60009,
+    "description": "Der ganze Clip ist ein zusammenhängender Ablauf. Er beginnt mit dem Push Aufruf und dem ersten Kampf und führt über den großen Teamkampf zum Luftkampf mit dem Ausruf des Streamers."
+   },
+   {
+    "start_ms": 32000,
+    "end_ms": 40000,
+    "description": "Großer Teamkampf mit vielen Fähigkeiten und hohen Schadenszahlen. Der Streamer erhält eine Assist Einblendung mit 210 Seelen."
+   },
+   {
+    "start_ms": 50000,
+    "end_ms": 56000,
+    "description": "Im Luftkampf wird ein Gegner betäubt und erhält hohen Schaden. Der Streamer reagiert mit einem überraschten What."
+   }
+  ],
+  "original_duration_ms": 60009,
+  "version_id": 64,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Push, großer Teamkampf mit Assist für 210 Seelen und am Ende ein betäubter Gegner in der Luft.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Twitch"
+     ],
+     "title": "Teamkampf mit Assist und Luftkampf"
+    },
+    "tiktok": {
+     "description": "Großer Teamkampf mit Assist für 210 Seelen, danach ein betäubter Gegner in der Luft. What?!",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Twitch"
+     ],
+     "title": "Teamkampf mit Assist und Luftkampf"
+    },
+    "youtube": {
+     "description": "Erst Push, dann ein großer Teamkampf mit Assist für 210 Seelen. Danach wird ein Gegner in der Luft betäubt und die Reaktion kommt sofort.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Shorts"
+     ],
+     "title": "Teamkampf mit Assist und ein betäubter Gegner in der Luft"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 64
+  },
+  "frames": {
+   "duration_s": 62.6,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/clipdesstreams/v64_sheet.jpg",
+   "points_s": [
+    0.5,
+    20.66,
+    41.32,
+    61.6
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     60009
+    ]
+   ],
+   "hook": [
+    50500,
+    53000
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "Teamkampf und Luftkampf"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Teamkampf mit Assist und Luftkampf",
+    "youtube": "Teamkampf mit Assist und ein betäubter Gegner in der Luft",
+    "instagram": "Teamkampf mit Assist und Luftkampf"
+   },
+   "output_duration_ms": 62509
+  },
+  "tokens": {
+   "shown_input": 4,
+   "shown_output": 3169,
+   "tokens_in": 4,
+   "tokens_out": 3169,
+   "cache_creation": 27478,
+   "cache_read": 0,
+   "calls": 2
+  }
+ }
+}

@@ -1,0 +1,1014 @@
+{
+ "clip": {
+  "key": "dunked",
+  "owner": "1376724506",
+  "clip_db_id": 140450,
+  "why": "29.9 s, kill on Vindicta; jobs 54, 58, 59, 60 (shorten, remove subtitle)"
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "start_later",
+    "text": "Fang bitte 3 Sekunden später an."
+   },
+   "parent_version_id": 59,
+   "http": 200,
+   "job_id": 63,
+   "status": "failed",
+   "failure_code": "planning_failed",
+   "failure_message": "Der Schnitt konnte nicht geplant werden.",
+   "waited_s": 21,
+   "proposal": null,
+   "review_reasons": [],
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1747,
+    "tokens_in": 2,
+    "tokens_out": 1747,
+    "cache_creation": 9348,
+    "cache_read": 2310,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "new_title",
+    "text": "Bitte einen anderen Titel."
+   },
+   "parent_version_id": 59,
+   "http": 200,
+   "job_id": 64,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 123,
+   "proposal": {
+    "summary": "Der eingeblendete Titel lautet jetzt Kill und sofort Stufe 6 statt Kill an der Treppe bei Downtown. Die Plattformtitel wurden passend dazu angepasst. Schnitt, Teaser, Untertitel und Ton bleiben unverändert.",
+    "impact": "Nur der Titel ändert sich. Er nennt den Kill und den belegten Levelaufstieg auf Stufe 6 und behauptet keinen Slam, den die Bilder nicht eindeutig zeigen.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "signature": {
+    "kept": [
+     [
+      0,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Kill und sofort Stufe 6"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Kill und sofort Stufe 6",
+     "youtube": "Kill und sofort Stufe 6 in Deadlock",
+     "instagram": "Kill und sofort Stufe 6"
+    },
+    "output_duration_ms": 26800
+   },
+   "changed": [
+    "overlay",
+    "titles"
+   ],
+   "version_id": 60,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Kill und sofort Stufe 6"
+     },
+     "tiktok": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Kill und sofort Stufe 6"
+     },
+     "youtube": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und direkt der Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Kill und sofort Stufe 6 in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 60
+   },
+   "frames": {
+    "duration_s": 26.9,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/dunked/v60_sheet.jpg",
+    "points_s": [
+     0.5,
+     8.88,
+     17.75,
+     25.9
+    ]
+   },
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1572,
+    "tokens_in": 2,
+    "tokens_out": 1572,
+    "cache_creation": 7956,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "caption_end",
+    "text": "Nimm die Untertitel am Ende raus."
+   },
+   "parent_version_id": 60,
+   "http": 200,
+   "job_id": 65,
+   "status": "failed",
+   "failure_code": "revision_unchanged",
+   "failure_message": "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.",
+   "waited_s": 21,
+   "proposal": {
+    "summary": "Einzelne Untertitel lassen sich nicht ausblenden, solange die zugehörige Sprache im Video bleibt. Die Untertitel zeigen immer genau das, was wirklich gesagt wird. Der Plan bleibt deshalb unverändert. Möglich wäre nur, das Video schon bei 19,5 Sekunden enden zu lassen. Dann fällt der letzte Ausruf Holy fuck samt Untertitel weg, aber auch ein Teil der echten Reaktion.",
+    "impact": "Es entsteht keine neue Version. Schnitt, Teaser, Titel, Untertitel und Ton bleiben wie bisher. Wenn das Video früher enden soll, bitte ausdrücklich das frühere Ende anfordern.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "signature": {
+    "kept": [
+     [
+      0,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Kill und sofort Stufe 6"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Kill und sofort Stufe 6",
+     "youtube": "Kill und sofort Stufe 6 in Deadlock",
+     "instagram": "Kill und sofort Stufe 6"
+    },
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1803,
+    "tokens_in": 2,
+    "tokens_out": 1803,
+    "cache_creation": 8175,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer."
+   },
+   "parent_version_id": 60,
+   "http": 200,
+   "job_id": 66,
+   "status": "failed",
+   "failure_code": "planning_failed",
+   "failure_message": "Der Schnitt konnte nicht geplant werden.",
+   "waited_s": 21,
+   "proposal": null,
+   "review_reasons": [],
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 2088,
+    "tokens_in": 2,
+    "tokens_out": 2088,
+    "cache_creation": 8169,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "remove_subtitle_en",
+    "text": "remove subtitle"
+   },
+   "parent_version_id": 60,
+   "http": 200,
+   "job_id": 67,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 123,
+   "proposal": {
+    "summary": "Der eingeblendete Titel Kill und sofort Stufe 6 wurde entfernt. Die Sprachuntertitel selbst lassen sich nicht abschalten, weil sie die echte Sprache wiedergeben. Möglich wäre nur, sie auf minimal 60 Prozent zu verkleinern. Schnitt, Teaser, Ton und Plattformtexte bleiben unverändert.",
+    "impact": "Am Anfang erscheint kein großer Titel mehr. Alles andere bleibt gleich.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Das Feedback nennt Untertitel. Entfernt wurde der eingeblendete Titel, weil die Sprachuntertitel nicht abschaltbar sind. Bitte prüfen, ob das gemeint war.",
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "signature": {
+    "kept": [
+     [
+      0,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "none",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Kill und sofort Stufe 6",
+     "youtube": "Kill und sofort Stufe 6 in Deadlock",
+     "instagram": "Kill und sofort Stufe 6"
+    },
+    "output_duration_ms": 26800
+   },
+   "changed": [
+    "overlay"
+   ],
+   "version_id": 61,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Kill und sofort Stufe 6"
+     },
+     "tiktok": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Kill und sofort Stufe 6"
+     },
+     "youtube": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und direkt der Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Kill und sofort Stufe 6 in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 61
+   },
+   "frames": {
+    "duration_s": 26.9,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/dunked/v61_sheet.jpg",
+    "points_s": [
+     0.5,
+     8.88,
+     17.75,
+     25.9
+    ]
+   },
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1740,
+    "tokens_in": 2,
+    "tokens_out": 1740,
+    "cache_creation": 8164,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "de_remove_subtitle",
+    "from": "root",
+    "text": "entferne den Untertitel"
+   },
+   "parent_version_id": 59,
+   "http": 200,
+   "job_id": 104,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 123,
+   "proposal": {
+    "summary": "Die Untertitel lassen sich in dieser Bearbeitung nicht komplett abschalten, weil sie die echte Sprache wiedergeben und nur ihre Größe steuerbar ist. Sie wurden deshalb auf die kleinste mögliche Größe von 60 Prozent verkleinert. Schnitt, Hook, Titel und Texte bleiben unverändert. Falls statt der Untertitel der große Titel am Anfang gemeint war, kann dieser in einer weiteren Version entfernt werden.",
+    "impact": "Die Untertitel erscheinen deutlich kleiner. Bild, Ton, Schnitt und der eingeblendete Titel bleiben gleich.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 4,
+    "shown_output": 3139,
+    "tokens_in": 4,
+    "tokens_out": 3139,
+    "cache_creation": 13651,
+    "cache_read": 11650,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Kill an der Treppe bei Downtown"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Kill an der Treppe bei Downtown",
+     "youtube": "Kill an der Treppe bei Downtown in Deadlock",
+     "instagram": "Kill an der Treppe bei Downtown"
+    },
+    "output_duration_ms": 26800
+   },
+   "signature": {
+    "kept": [
+     [
+      0,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Kill an der Treppe bei Downtown"
+    },
+    "subtitle_scale": 60,
+    "titles": {
+     "tiktok": "Kill an der Treppe bei Downtown",
+     "youtube": "Kill an der Treppe bei Downtown in Deadlock",
+     "instagram": "Kill an der Treppe bei Downtown"
+    },
+    "output_duration_ms": 26800,
+    "subtitles_enabled": null,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "variants"
+    ]
+   },
+   "changed": [
+    "plan_keys",
+    "subtitle_scale"
+   ],
+   "version_id": 75,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Kill an der Treppe bei Downtown"
+     },
+     "tiktok": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Kill an der Treppe bei Downtown"
+     },
+     "youtube": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und direkt der Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Kill an der Treppe bei Downtown in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 75
+   },
+   "frames": {
+    "duration_s": 26.9,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/dunked/v75_sheet.jpg",
+    "points_s": [
+     0.5,
+     8.88,
+     17.75,
+     25.9
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "de_no_text",
+    "from": "root",
+    "text": "kein Text mehr im Video"
+   },
+   "parent_version_id": 59,
+   "http": 200,
+   "job_id": 105,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 113,
+   "proposal": {
+    "summary": "Der eingeblendete Titel am Anfang wird entfernt. Schnitt, Teaser, Layout und Originalton bleiben gleich. Die Untertitel bleiben im Video, weil sie die echte Sprache wiedergeben und sich in dieser Bearbeitung nicht abschalten lassen. Nur ihre Größe lässt sich ändern.",
+    "impact": "Am Anfang des Videos erscheint kein Titeltext mehr. Sonst ändert sich am Video nichts.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1378,
+    "tokens_in": 2,
+    "tokens_out": 1378,
+    "cache_creation": 7953,
+    "cache_read": 3698,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Kill an der Treppe bei Downtown"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Kill an der Treppe bei Downtown",
+     "youtube": "Kill an der Treppe bei Downtown in Deadlock",
+     "instagram": "Kill an der Treppe bei Downtown"
+    },
+    "output_duration_ms": 26800
+   },
+   "signature": {
+    "kept": [
+     [
+      0,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "none",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Kill an der Treppe bei Downtown",
+     "youtube": "Kill an der Treppe bei Downtown in Deadlock",
+     "instagram": "Kill an der Treppe bei Downtown"
+    },
+    "output_duration_ms": 26800,
+    "subtitles_enabled": null,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "variants"
+    ]
+   },
+   "changed": [
+    "overlay",
+    "plan_keys"
+   ],
+   "version_id": 76,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Kill an der Treppe bei Downtown"
+     },
+     "tiktok": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Kill an der Treppe bei Downtown"
+     },
+     "youtube": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und direkt der Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Kill an der Treppe bei Downtown in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 76
+   },
+   "frames": {
+    "duration_s": 26.9,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/dunked/v76_sheet.jpg",
+    "points_s": [
+     0.5,
+     8.88,
+     17.75,
+     25.9
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "remove_subtitle_clip_en",
+    "from": "root",
+    "text": "remove the subtitle in that clip"
+   },
+   "parent_version_id": 59,
+   "http": 200,
+   "job_id": 106,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 123,
+   "proposal": {
+    "summary": "Der eingeblendete Titel Kill an der Treppe bei Downtown am Anfang wurde entfernt. Die Untertitel der gesprochenen Sprache bleiben, weil sie die echte Sprache zeigen und sich in diesem Plan nicht abschalten lassen. Sie lassen sich nur verkleinern.",
+    "impact": "Nur der Titel am Anfang fällt weg. Schnitt, Teaser, Layout, Ton und Sprachuntertitel bleiben unverändert.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Das Feedback spricht von einem Untertitel. Entfernt wurde der eingeblendete Titel am Anfang. Die Untertitel der echten Sprache lassen sich hier nicht abschalten und sollten bei Bedarf manuell geprüft werden.",
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1706,
+    "tokens_in": 2,
+    "tokens_out": 1706,
+    "cache_creation": 7954,
+    "cache_read": 3698,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Kill an der Treppe bei Downtown"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Kill an der Treppe bei Downtown",
+     "youtube": "Kill an der Treppe bei Downtown in Deadlock",
+     "instagram": "Kill an der Treppe bei Downtown"
+    },
+    "output_duration_ms": 26800
+   },
+   "signature": {
+    "kept": [
+     [
+      0,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "none",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Kill an der Treppe bei Downtown",
+     "youtube": "Kill an der Treppe bei Downtown in Deadlock",
+     "instagram": "Kill an der Treppe bei Downtown"
+    },
+    "output_duration_ms": 26800,
+    "subtitles_enabled": null,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "variants"
+    ]
+   },
+   "changed": [
+    "overlay",
+    "plan_keys"
+   ],
+   "version_id": 77,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Kill an der Treppe bei Downtown"
+     },
+     "tiktok": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Kill an der Treppe bei Downtown"
+     },
+     "youtube": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und direkt der Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Kill an der Treppe bei Downtown in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 77
+   },
+   "frames": {
+    "duration_s": 26.9,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/dunked/v77_sheet.jpg",
+    "points_s": [
+     0.5,
+     8.88,
+     17.75,
+     25.9
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "no_text_en",
+    "from": "root",
+    "text": "no remove every text in this video no text"
+   },
+   "parent_version_id": 59,
+   "http": 200,
+   "job_id": 107,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 113,
+   "proposal": {
+    "summary": "Der eingeblendete Titel am Anfang wird entfernt. Schnitt, Teaser und Ton bleiben unverändert. Die Untertitel lassen sich mit dieser Überarbeitung nicht abschalten, weil sie die echte Sprache wiedergeben und nur in der Größe einstellbar sind.",
+    "impact": "Im Video erscheint kein Titeltext mehr. Die Untertitel der gesprochenen Sätze bleiben in normaler Größe sichtbar.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1696,
+    "tokens_in": 2,
+    "tokens_out": 1696,
+    "cache_creation": 7953,
+    "cache_read": 3698,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Kill an der Treppe bei Downtown"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Kill an der Treppe bei Downtown",
+     "youtube": "Kill an der Treppe bei Downtown in Deadlock",
+     "instagram": "Kill an der Treppe bei Downtown"
+    },
+    "output_duration_ms": 26800
+   },
+   "signature": {
+    "kept": [
+     [
+      0,
+      22300
+     ]
+    ],
+    "hook": [
+     11000,
+     15500
+    ],
+    "overlay": {
+     "mode": "none",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Kill an der Treppe bei Downtown",
+     "youtube": "Kill an der Treppe bei Downtown in Deadlock",
+     "instagram": "Kill an der Treppe bei Downtown"
+    },
+    "output_duration_ms": 26800,
+    "subtitles_enabled": null,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "variants"
+    ]
+   },
+   "changed": [
+    "overlay",
+    "plan_keys"
+   ],
+   "version_id": 78,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Kill an der Treppe bei Downtown"
+     },
+     "tiktok": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Kill an der Treppe bei Downtown"
+     },
+     "youtube": {
+      "description": "Kampf an der Treppe bei Downtown, Kill und direkt der Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Kill an der Treppe bei Downtown in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 78
+   },
+   "frames": {
+    "duration_s": 26.9,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/dunked/v78_sheet.jpg",
+    "points_s": [
+     0.5,
+     8.88,
+     17.75,
+     25.9
+    ]
+   }
+  }
+ ],
+ "create_http": 200,
+ "root": {
+  "job_id": 62,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 214,
+  "review_reasons": [
+   "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+  ],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 22020,
+    "description": "Der Streamer kämpft an der Treppe bei Downtown und erzielt um 11,5 Sekunden einen Kill. Er steigt auf Stufe 6 auf und kommentiert danach begeistert, wie er die Gegnerin aus der Höhe zu Boden geschlagen hat."
+   }
+  ],
+  "original_duration_ms": 29917,
+  "version_id": 59,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Kampf an der Treppe bei Downtown, Kill und Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Reels"
+     ],
+     "title": "Kill an der Treppe bei Downtown"
+    },
+    "tiktok": {
+     "description": "Kampf an der Treppe bei Downtown, Kill und Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "fyp"
+     ],
+     "title": "Kill an der Treppe bei Downtown"
+    },
+    "youtube": {
+     "description": "Kampf an der Treppe bei Downtown, Kill und direkt der Aufstieg auf Stufe 6. Laut Streamer hat er die Gegnerin von oben heruntergeschlagen.",
+     "hashtags": [
+      "Deadlock",
+      "Shorts",
+      "Gaming"
+     ],
+     "title": "Kill an der Treppe bei Downtown in Deadlock"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 59
+  },
+  "frames": {
+   "duration_s": 26.9,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/dunked/v59_sheet.jpg",
+   "points_s": [
+    0.5,
+    8.88,
+    17.75,
+    25.9
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     22300
+    ]
+   ],
+   "hook": [
+    11000,
+    15500
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "Kill an der Treppe bei Downtown"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Kill an der Treppe bei Downtown",
+    "youtube": "Kill an der Treppe bei Downtown in Deadlock",
+    "instagram": "Kill an der Treppe bei Downtown"
+   },
+   "output_duration_ms": 26800
+  },
+  "tokens": {
+   "shown_input": 6,
+   "shown_output": 3934,
+   "tokens_in": 6,
+   "tokens_out": 3934,
+   "cache_creation": 28316,
+   "cache_read": 9716,
+   "calls": 2
+  }
+ }
+}

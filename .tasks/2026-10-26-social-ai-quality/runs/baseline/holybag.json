@@ -1,0 +1,402 @@
+{
+ "clip": {
+  "key": "holybag",
+  "owner": "1376724506",
+  "clip_db_id": 140448,
+  "why": "59.9 s, long clip"
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "start_later",
+    "text": "Fang bitte 3 Sekunden später an."
+   },
+   "parent_version_id": 69,
+   "http": 200,
+   "job_id": 87,
+   "status": "failed",
+   "failure_code": "planning_failed",
+   "failure_message": "Der Schnitt konnte nicht geplant werden.",
+   "waited_s": 21,
+   "proposal": null,
+   "review_reasons": [],
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1599,
+    "tokens_in": 2,
+    "tokens_out": 1599,
+    "cache_creation": 12123,
+    "cache_read": 0,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "new_title",
+    "text": "Bitte einen anderen Titel."
+   },
+   "parent_version_id": 69,
+   "http": 200,
+   "job_id": 88,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 287,
+   "proposal": {
+    "summary": "Der eingeblendete Titel lautet jetzt Von 3.978 auf 7.001 Seelen statt 7 Kill Streak und über 3.000 Seelen. Die Plattformtitel wurden passend angepasst.",
+    "impact": "Nur der Titel ändert sich. Schnitt, Teaser, Untertitel, Layout und Originalton bleiben gleich.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "signature": {
+    "kept": [
+     [
+      0,
+      60000
+     ]
+    ],
+    "hook": [
+     33000,
+     38000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Von 3.978 auf 7.001 Seelen"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Von 3.978 auf 7.001 Seelen",
+     "youtube": "Von 3.978 auf 7.001 Seelen in Deadlock",
+     "instagram": "Von 3.978 auf 7.001 Seelen"
+    },
+    "output_duration_ms": 65000
+   },
+   "changed": [
+    "overlay",
+    "titles"
+   ],
+   "version_id": 70,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Von 3.978 auf 7.001 Seelen mit einer Serie von 7 Kills. Was für ein Lauf in Deadlock.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Von 3.978 auf 7.001 Seelen"
+     },
+     "tiktok": {
+      "description": "Deadlock Lauf mit 7 Kill Streak, die Seelen steigen von 3.978 auf 7.001.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Von 3.978 auf 7.001 Seelen"
+     },
+     "youtube": {
+      "description": "Ein durchgehender Lauf in Deadlock: Die Seelen steigen von 3.978 auf 7.001, dazu kommt eine Serie von 7 Kills.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Von 3.978 auf 7.001 Seelen in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 70
+   },
+   "frames": {
+    "duration_s": 65.0,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/holybag/v70_sheet.jpg",
+    "points_s": [
+     0.5,
+     21.45,
+     42.9,
+     64.0
+    ]
+   },
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1590,
+    "tokens_in": 2,
+    "tokens_out": 1590,
+    "cache_creation": 8421,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "caption_end",
+    "text": "Nimm die Untertitel am Ende raus."
+   },
+   "parent_version_id": 70,
+   "http": 200,
+   "job_id": 89,
+   "status": "failed",
+   "failure_code": "revision_unchanged",
+   "failure_message": "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.",
+   "waited_s": 21,
+   "proposal": {
+    "summary": "Die Untertitel am Ende lassen sich nicht einzeln ausblenden, weil sie die echte Sprache zeigen und nur ihre Größe einstellbar ist. Verschwinden würden sie nur, wenn das Ende ab 55 Sekunden herausgeschnitten wird. Dann fehlt aber auch die Reaktion des Streamers im Ton. Falls das gewünscht ist, bitte ausdrücklich bestätigen, dass das Ende samt Reaktion wegfallen soll.",
+    "impact": "Keine Änderung. Schnitt, Teaser, Titel, Untertitel, Layout und Originalton bleiben wie in der vorherigen Version.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "signature": {
+    "kept": [
+     [
+      0,
+      60000
+     ]
+    ],
+    "hook": [
+     33000,
+     38000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Von 3.978 auf 7.001 Seelen"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Von 3.978 auf 7.001 Seelen",
+     "youtube": "Von 3.978 auf 7.001 Seelen in Deadlock",
+     "instagram": "Von 3.978 auf 7.001 Seelen"
+    },
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 2158,
+    "tokens_in": 2,
+    "tokens_out": 2158,
+    "cache_creation": 8592,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer."
+   },
+   "parent_version_id": 70,
+   "http": 200,
+   "job_id": 90,
+   "status": "failed",
+   "failure_code": "planning_failed",
+   "failure_message": "Der Schnitt konnte nicht geplant werden.",
+   "waited_s": 31,
+   "proposal": null,
+   "review_reasons": [],
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 2255,
+    "tokens_in": 2,
+    "tokens_out": 2255,
+    "cache_creation": 8586,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "remove_subtitle_en",
+    "text": "remove subtitle"
+   },
+   "parent_version_id": 70,
+   "http": 200,
+   "job_id": 91,
+   "status": "failed",
+   "failure_code": "revision_unchanged",
+   "failure_message": "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.",
+   "waited_s": 21,
+   "proposal": {
+    "summary": "Die Untertitel lassen sich nicht entfernen. Sie zeigen die echte Sprache des Streamers, und es gibt nur eine Steuerung für ihre Größe mit mindestens 60 Prozent, aber keine zum Ausschalten. Darum bleibt der bisherige Plan unverändert. Falls der große Titel am Anfang gemeint war, kann dieser auf Wunsch entfernt werden.",
+    "impact": "Es entsteht keine neue Version. Schnitt, Teaser, Titel, Untertitel, Layout und Originalton bleiben unverändert.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "signature": {
+    "kept": [
+     [
+      0,
+      60000
+     ]
+    ],
+    "hook": [
+     33000,
+     38000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Von 3.978 auf 7.001 Seelen"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Von 3.978 auf 7.001 Seelen",
+     "youtube": "Von 3.978 auf 7.001 Seelen in Deadlock",
+     "instagram": "Von 3.978 auf 7.001 Seelen"
+    },
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 2080,
+    "tokens_in": 2,
+    "tokens_out": 2080,
+    "cache_creation": 8581,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  }
+ ],
+ "create_http": 200,
+ "root": {
+  "job_id": 86,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 471,
+  "review_reasons": [],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 60000,
+    "description": "Der ganze Clip zeigt einen durchgehenden Lauf mit mehreren Kills oder Assists und stark steigenden Seelen bis zur abschließenden Reaktion des Streamers. Darum sollte er komplett erhalten bleiben."
+   },
+   {
+    "start_ms": 22000,
+    "end_ms": 23000,
+    "description": "Ein Kill Assist mit plus 198 Seelen auf einer Treppe bei Downtown, während der Streamer mit niedrigen HP weiterkämpft."
+   },
+   {
+    "start_ms": 37000,
+    "end_ms": 38000,
+    "description": "Boon Received mit Ability Point und Power Increase, dazu eine sichtbare Serie von 7 Kills."
+   },
+   {
+    "start_ms": 52000,
+    "end_ms": 58000,
+    "description": "Der Streamer bekommt plus 233 Seelen und kommentiert danach, dass er es sich holen musste, und entschuldigt sich beim Mitspieler."
+   }
+  ],
+  "original_duration_ms": 60000,
+  "version_id": 69,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Von 3.978 auf 7.001 Seelen mit einer Serie von 7 Kills. Was für ein Lauf in Deadlock.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Reels"
+     ],
+     "title": "7 Kill Streak und über 3.000 Seelen"
+    },
+    "tiktok": {
+     "description": "Deadlock Lauf mit 7 Kill Streak, die Seelen steigen von 3.978 auf 7.001.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "fyp"
+     ],
+     "title": "7 Kill Streak und über 3.000 Seelen"
+    },
+    "youtube": {
+     "description": "Ein durchgehender Lauf in Deadlock: Die Seelen steigen von 3.978 auf 7.001, dazu kommt eine Serie von 7 Kills.",
+     "hashtags": [
+      "Deadlock",
+      "Shorts",
+      "Gaming"
+     ],
+     "title": "7 Kill Streak und über 3.000 Seelen in Deadlock"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 69
+  },
+  "frames": {
+   "duration_s": 65.0,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/holybag/v69_sheet.jpg",
+   "points_s": [
+    0.5,
+    21.45,
+    42.9,
+    64.0
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     60000
+    ]
+   ],
+   "hook": [
+    33000,
+    38000
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "7 Kill Streak und über 3.000 Seelen"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "7 Kill Streak und über 3.000 Seelen",
+    "youtube": "7 Kill Streak und über 3.000 Seelen in Deadlock",
+    "instagram": "7 Kill Streak und über 3.000 Seelen"
+   },
+   "output_duration_ms": 65000
+  },
+  "tokens": {
+   "shown_input": 4,
+   "shown_output": 3148,
+   "tokens_in": 4,
+   "tokens_out": 3148,
+   "cache_creation": 27215,
+   "cache_read": 0,
+   "calls": 2
+  }
+ }
+}

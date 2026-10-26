@@ -89,7 +89,7 @@ def score_clip(result, manual):
     rows, answers = [], []
     for entry in result.get("revisions", []):
         request = entry["request"]
-        took = effect(request["key"], parent, entry)
+        took = effect(request["key"], entry.get("parent_signature") or parent, entry)
         rows.append((request["key"], took))
         answers.append(answer_score(request, entry, took))
         if entry.get("status") == "review":
@@ -116,7 +116,7 @@ def main():
     totals = {k: 0.0 for k in keys}
     count = 0
     for path in sorted(run_dir.glob("*.json")):
-        if path.name == "manual-scores.json":
+        if path.name in ("manual-scores.json", "EXCLUDED.json"):
             continue
         result = json.loads(path.read_text())
         scores, rows = score_clip(result, manual.get(path.stem, {}))

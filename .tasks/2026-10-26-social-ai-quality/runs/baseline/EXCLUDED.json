@@ -1,0 +1,23 @@
+{
+ "cutoff_utc": "2026-10-26T18:48:21Z",
+ "job_112": "clipdesstreams de_remove_subtitle, started 18:47:30 on baseline, killed by the deploy restart (failure_code interrupted)",
+ "moved_to_subtitles-fix-b04328b26": {
+  "clipdesstreams": [
+   112,
+   113,
+   114,
+   116
+  ],
+  "midair": [
+   117,
+   119,
+   120,
+   121
+  ]
+ },
+ "not_from_loop": {
+  "115": "dunked entferne den Untertitel, post-fix, started by another agent",
+  "118": "dunked kein Text mehr im Video, post-fix, started by another agent"
+ },
+ "122": "holybag de_remove_subtitle, post-fix provider_unavailable, loop stopped"
+}

@@ -11,7 +11,7 @@ Source of truth: `testset.json`. Only clips from luckymakkydead (twitch_user_id 
 | holybag | luckymakkydead | 140448 | 59.9 s | long clip with a lot of filler |
 | doorman | luckymakkydead | 140452 | 39.3 s | one-shot kill moment in the middle |
 | talon | luckymakkydead | 140451 | 8.1 s | very short clip |
-| owner_nachladen | earlysalty | 124199 | 60 s | owner channel, German speech |
+| owner_billy | earlysalty | 136881 | 60 s | owner channel, stacked layout with facecam (clip 124199 was dropped: its Twitch source is gone, create returns 404) |
 
 ## Case 0: the reported before/after pair
 

@@ -1,0 +1,9 @@
+{
+ "dunked": {"moment": 2, "cut": 1, "framing": 1, "text_de": 1, "note": "kill teaser up front; tail trimmed to 22.3 s but start untouched, output 26.8 s; blur pad band about a third of the height; title 'Kill an der Treppe bei Downtown' is correct but flat"},
+ "ez": {"moment": 2, "cut": 0, "framing": 1, "text_de": 2, "note": "hook 3.7-7.6 s; source 11.8 s, output 15.7 s, nothing trimmed; 'Zwei Kills mit nur 5 HP' is specific and backed by the HUD"},
+ "clipdesstreams": {"moment": 1, "cut": 0, "framing": 1, "text_de": 1, "note": "the 'What' reaction at 50 s is only a 2.5 s teaser, the full 60 s run follows uncut, output 62.5 s; 'Teamkampf und Luftkampf' is generic"},
+ "midair": {"moment": 2, "cut": 0, "framing": 1, "text_de": 1, "note": "hook 9.4-13.8 s up front; 14.4 s source becomes 18.9 s; captions collide with the stream's own chat overlay; 'Gegner hoch in der Luft' is vague"},
+ "holybag": {"moment": 1, "cut": 0, "framing": 1, "text_de": 2, "note": "5 s teaser, then the full 60 s, output 65 s; '7 Kill Streak und über 3.000 Seelen' is specific"},
+ "doorman": {"moment": 2, "cut": 0, "framing": 1, "text_de": 2, "note": "reaction teaser 18.4-23.4 s; 39.3 s source becomes 44.3 s; 'Sofort gestorben?!' fits the clip"},
+ "talon": {"moment": 2, "cut": 1, "framing": 1, "text_de": 2, "note": "8 s clip, no hook, nothing trimmed; 'Von 1690 auf 348 HP' is concrete"}
+}

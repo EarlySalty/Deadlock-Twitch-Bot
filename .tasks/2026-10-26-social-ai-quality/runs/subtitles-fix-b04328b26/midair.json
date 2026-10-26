@@ -1,0 +1,674 @@
+{
+ "clip": {
+  "key": "midair",
+  "owner": "1376724506",
+  "clip_db_id": 140447,
+  "why": "14.4 s, kill moment (mid air kidnap)"
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "de_remove_subtitle",
+    "from": "root",
+    "text": "entferne den Untertitel"
+   },
+   "parent_version_id": 66,
+   "http": 200,
+   "job_id": 117,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 82,
+   "proposal": {
+    "summary": "Geändert: Untertitel ausgeblendet.",
+    "impact": "Die eingeblendeten Untertitel der gesprochenen Worte werden im ganzen Video entfernt. Schnitt, Teaser, Titel am Anfang und Originalton bleiben unverändert.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 11440,
+    "shown_output": 1320,
+    "tokens_in": 2,
+    "tokens_out": 1320,
+    "cache_creation": 11438,
+    "cache_read": 0,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      14416
+     ]
+    ],
+    "hook": [
+     9380,
+     13820
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Gegner hoch in der Luft"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Gegner hoch in der Luft erwischt",
+     "youtube": "Schuss auf einen Gegner hoch in der Luft",
+     "instagram": "Schuss auf einen Gegner hoch in der Luft"
+    },
+    "output_duration_ms": 18856
+   },
+   "signature": {
+    "kept": [
+     [
+      0,
+      14416
+     ]
+    ],
+    "hook": [
+     9380,
+     13820
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Gegner hoch in der Luft"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Gegner hoch in der Luft erwischt",
+     "youtube": "Schuss auf einen Gegner hoch in der Luft",
+     "instagram": "Schuss auf einen Gegner hoch in der Luft"
+    },
+    "output_duration_ms": 18856,
+    "subtitles_enabled": false,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "plan_keys",
+    "subtitles_enabled"
+   ],
+   "version_id": 85,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Schuss auf einen Gegner hoch in der Luft"
+     },
+     "tiktok": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Gegner hoch in der Luft erwischt"
+     },
+     "youtube": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Schuss auf einen Gegner hoch in der Luft"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 85
+   },
+   "frames": {
+    "duration_s": 18.9,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/midair/v85_sheet.jpg",
+    "points_s": [
+     0.5,
+     6.24,
+     12.47,
+     17.9
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "de_no_text",
+    "from": "root",
+    "text": "kein Text mehr im Video"
+   },
+   "parent_version_id": 66,
+   "http": 200,
+   "job_id": 119,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 205,
+   "proposal": {
+    "summary": "Geändert: Untertitel ausgeblendet und Titel „Gegner hoch in der Luft“ entfernt. Der Kanalname bleibt als Quellenangabe eingeblendet.",
+    "impact": "Die Untertitel und der große Titel am Anfang werden entfernt. Nur der kleine Kanalname bleibt als Quellenangabe sichtbar, weil er sich nicht entfernen lässt.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 11441,
+    "shown_output": 1236,
+    "tokens_in": 2,
+    "tokens_out": 1236,
+    "cache_creation": 7710,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      14416
+     ]
+    ],
+    "hook": [
+     9380,
+     13820
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Gegner hoch in der Luft"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Gegner hoch in der Luft erwischt",
+     "youtube": "Schuss auf einen Gegner hoch in der Luft",
+     "instagram": "Schuss auf einen Gegner hoch in der Luft"
+    },
+    "output_duration_ms": 18856
+   },
+   "signature": {
+    "kept": [
+     [
+      0,
+      14416
+     ]
+    ],
+    "hook": [
+     9380,
+     13820
+    ],
+    "overlay": {
+     "mode": "none",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Gegner hoch in der Luft erwischt",
+     "youtube": "Schuss auf einen Gegner hoch in der Luft",
+     "instagram": "Schuss auf einen Gegner hoch in der Luft"
+    },
+    "output_duration_ms": 18856,
+    "subtitles_enabled": false,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "overlay",
+    "plan_keys",
+    "subtitles_enabled"
+   ],
+   "version_id": 87,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Schuss auf einen Gegner hoch in der Luft"
+     },
+     "tiktok": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Gegner hoch in der Luft erwischt"
+     },
+     "youtube": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Schuss auf einen Gegner hoch in der Luft"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 87
+   },
+   "frames": {
+    "duration_s": 18.9,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/midair/v87_sheet.jpg",
+    "points_s": [
+     0.5,
+     6.24,
+     12.47,
+     17.9
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "remove_subtitle_clip_en",
+    "from": "root",
+    "text": "remove the subtitle in that clip"
+   },
+   "parent_version_id": 66,
+   "http": 200,
+   "job_id": 120,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 82,
+   "proposal": {
+    "summary": "Geändert: Untertitel ausgeblendet.",
+    "impact": "Die eingeblendeten Untertitel der gesprochenen Worte werden im ganzen Video entfernt. Der Titel am Anfang, der Schnitt, der Teaser und der Originalton bleiben unverändert.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 11442,
+    "shown_output": 1298,
+    "tokens_in": 2,
+    "tokens_out": 1298,
+    "cache_creation": 7711,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      14416
+     ]
+    ],
+    "hook": [
+     9380,
+     13820
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Gegner hoch in der Luft"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Gegner hoch in der Luft erwischt",
+     "youtube": "Schuss auf einen Gegner hoch in der Luft",
+     "instagram": "Schuss auf einen Gegner hoch in der Luft"
+    },
+    "output_duration_ms": 18856
+   },
+   "signature": {
+    "kept": [
+     [
+      0,
+      14416
+     ]
+    ],
+    "hook": [
+     9380,
+     13820
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Gegner hoch in der Luft"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Gegner hoch in der Luft erwischt",
+     "youtube": "Schuss auf einen Gegner hoch in der Luft",
+     "instagram": "Schuss auf einen Gegner hoch in der Luft"
+    },
+    "output_duration_ms": 18856,
+    "subtitles_enabled": false,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "plan_keys",
+    "subtitles_enabled"
+   ],
+   "version_id": 88,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Schuss auf einen Gegner hoch in der Luft"
+     },
+     "tiktok": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Gegner hoch in der Luft erwischt"
+     },
+     "youtube": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Schuss auf einen Gegner hoch in der Luft"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 88
+   },
+   "frames": {
+    "duration_s": 18.9,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/midair/v88_sheet.jpg",
+    "points_s": [
+     0.5,
+     6.24,
+     12.47,
+     17.9
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "no_text_en",
+    "from": "root",
+    "text": "no remove every text in this video no text"
+   },
+   "parent_version_id": 66,
+   "http": 200,
+   "job_id": 121,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 72,
+   "proposal": {
+    "summary": "Geändert: Untertitel ausgeblendet und Titel „Gegner hoch in der Luft“ entfernt. Der Kanalname bleibt als Quellenangabe eingeblendet.",
+    "impact": "Die Untertitel und der große Titel am Anfang werden entfernt, der Schnitt und der Teaser bleiben gleich. Der kleine Kanalname bleibt als Quellenangabe sichtbar und lässt sich nicht entfernen.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 11441,
+    "shown_output": 1208,
+    "tokens_in": 2,
+    "tokens_out": 1208,
+    "cache_creation": 7710,
+    "cache_read": 3729,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      14416
+     ]
+    ],
+    "hook": [
+     9380,
+     13820
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Gegner hoch in der Luft"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Gegner hoch in der Luft erwischt",
+     "youtube": "Schuss auf einen Gegner hoch in der Luft",
+     "instagram": "Schuss auf einen Gegner hoch in der Luft"
+    },
+    "output_duration_ms": 18856
+   },
+   "signature": {
+    "kept": [
+     [
+      0,
+      14416
+     ]
+    ],
+    "hook": [
+     9380,
+     13820
+    ],
+    "overlay": {
+     "mode": "none",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Gegner hoch in der Luft erwischt",
+     "youtube": "Schuss auf einen Gegner hoch in der Luft",
+     "instagram": "Schuss auf einen Gegner hoch in der Luft"
+    },
+    "output_duration_ms": 18856,
+    "subtitles_enabled": false,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "subtitles_enabled",
+     "variants"
+    ]
+   },
+   "changed": [
+    "overlay",
+    "plan_keys",
+    "subtitles_enabled"
+   ],
+   "version_id": 89,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Reels"
+      ],
+      "title": "Schuss auf einen Gegner hoch in der Luft"
+     },
+     "tiktok": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "fyp"
+      ],
+      "title": "Gegner hoch in der Luft erwischt"
+     },
+     "youtube": {
+      "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Schuss auf einen Gegner hoch in der Luft"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 89
+   },
+   "frames": {
+    "duration_s": 18.9,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/midair/v89_sheet.jpg",
+    "points_s": [
+     0.5,
+     6.24,
+     12.47,
+     17.9
+    ]
+   }
+  }
+ ],
+ "create_http": 200,
+ "root": {
+  "job_id": 80,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 205,
+  "review_reasons": [],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 14416,
+    "description": "Der Streamer schießt auf einen Gegner, der hoch in der Luft schwebt. Laut Clip-Titel wird der Gegner mitten in der Luft geschnappt. Danach folgen Bewegung über die Brücke und die Treppen sowie die ungläubige Reaktion des Streamers. Der ganze Ablauf ist der Highlight."
+   }
+  ],
+  "original_duration_ms": 14416,
+  "version_id": 66,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Reels"
+     ],
+     "title": "Schuss auf einen Gegner hoch in der Luft"
+    },
+    "tiktok": {
+     "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "fyp"
+     ],
+     "title": "Gegner hoch in der Luft erwischt"
+    },
+    "youtube": {
+     "description": "Der Gegner schwebt hoch in der Luft und bekommt Feuer ab. Die Reaktion danach sagt alles.",
+     "hashtags": [
+      "Deadlock",
+      "Shorts",
+      "Gaming"
+     ],
+     "title": "Schuss auf einen Gegner hoch in der Luft"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 66
+  },
+  "frames": {
+   "duration_s": 18.9,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/midair/v66_sheet.jpg",
+   "points_s": [
+    0.5,
+    6.24,
+    12.47,
+    17.9
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     14416
+    ]
+   ],
+   "hook": [
+    9380,
+    13820
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "Gegner hoch in der Luft"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Gegner hoch in der Luft erwischt",
+    "youtube": "Schuss auf einen Gegner hoch in der Luft",
+    "instagram": "Schuss auf einen Gegner hoch in der Luft"
+   },
+   "output_duration_ms": 18856
+  },
+  "tokens": {
+   "shown_input": 4,
+   "shown_output": 2366,
+   "tokens_in": 4,
+   "tokens_out": 2366,
+   "cache_creation": 26219,
+   "cache_read": 0,
+   "calls": 2
+  }
+ },
+ "note": "root and parent versions were built on baseline 69d47eb02; these revisions ran on b04328b26 after the 2026-10-26 18:48:21 UTC restart"
+}

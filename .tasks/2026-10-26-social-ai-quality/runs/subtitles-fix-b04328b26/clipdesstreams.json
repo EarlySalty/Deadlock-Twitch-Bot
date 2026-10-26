@@ -1,0 +1,300 @@
+{
+ "clip": {
+  "key": "clipdesstreams",
+  "owner": "1376724506",
+  "clip_db_id": 130466,
+  "why": "60 s long clip; jobs 11 (render failed), 53, 57"
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "de_no_text",
+    "from": "root",
+    "text": "kein Text mehr im Video"
+   },
+   "parent_version_id": 64,
+   "http": 200,
+   "job_id": 113,
+   "status": "failed",
+   "failure_code": "provider_unavailable",
+   "failure_message": "Der KI-Dienst ist derzeit nicht verfügbar.",
+   "waited_s": 10,
+   "proposal": null,
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": null,
+    "shown_output": null,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cache_creation": 0,
+    "cache_read": 0,
+    "calls": 0
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      60009
+     ]
+    ],
+    "hook": [
+     50500,
+     53000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Teamkampf und Luftkampf"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Teamkampf mit Assist und Luftkampf",
+     "youtube": "Teamkampf mit Assist und ein betäubter Gegner in der Luft",
+     "instagram": "Teamkampf mit Assist und Luftkampf"
+    },
+    "output_duration_ms": 62509
+   },
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null,
+    "subtitles_enabled": null,
+    "plan_keys": []
+   },
+   "changed": []
+  },
+  {
+   "request": {
+    "key": "remove_subtitle_clip_en",
+    "from": "root",
+    "text": "remove the subtitle in that clip"
+   },
+   "parent_version_id": 64,
+   "http": 200,
+   "job_id": 114,
+   "status": "failed",
+   "failure_code": "provider_unavailable",
+   "failure_message": "Der KI-Dienst ist derzeit nicht verfügbar.",
+   "waited_s": 10,
+   "proposal": null,
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": null,
+    "shown_output": null,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cache_creation": 0,
+    "cache_read": 0,
+    "calls": 0
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      60009
+     ]
+    ],
+    "hook": [
+     50500,
+     53000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Teamkampf und Luftkampf"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Teamkampf mit Assist und Luftkampf",
+     "youtube": "Teamkampf mit Assist und ein betäubter Gegner in der Luft",
+     "instagram": "Teamkampf mit Assist und Luftkampf"
+    },
+    "output_duration_ms": 62509
+   },
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null,
+    "subtitles_enabled": null,
+    "plan_keys": []
+   },
+   "changed": []
+  },
+  {
+   "request": {
+    "key": "no_text_en",
+    "from": "root",
+    "text": "no remove every text in this video no text"
+   },
+   "parent_version_id": 64,
+   "http": 200,
+   "job_id": 116,
+   "status": "failed",
+   "failure_code": "provider_unavailable",
+   "failure_message": "Der KI-Dienst ist derzeit nicht verfügbar.",
+   "waited_s": 133,
+   "proposal": null,
+   "review_reasons": [],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": null,
+    "shown_output": null,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cache_creation": 0,
+    "cache_read": 0,
+    "calls": 0
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      60009
+     ]
+    ],
+    "hook": [
+     50500,
+     53000
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Teamkampf und Luftkampf"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Teamkampf mit Assist und Luftkampf",
+     "youtube": "Teamkampf mit Assist und ein betäubter Gegner in der Luft",
+     "instagram": "Teamkampf mit Assist und Luftkampf"
+    },
+    "output_duration_ms": 62509
+   },
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null,
+    "subtitles_enabled": null,
+    "plan_keys": []
+   },
+   "changed": []
+  }
+ ],
+ "create_http": 200,
+ "root": {
+  "job_id": 74,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 492,
+  "review_reasons": [
+   "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+  ],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 60009,
+    "description": "Der ganze Clip ist ein zusammenhängender Ablauf. Er beginnt mit dem Push Aufruf und dem ersten Kampf und führt über den großen Teamkampf zum Luftkampf mit dem Ausruf des Streamers."
+   },
+   {
+    "start_ms": 32000,
+    "end_ms": 40000,
+    "description": "Großer Teamkampf mit vielen Fähigkeiten und hohen Schadenszahlen. Der Streamer erhält eine Assist Einblendung mit 210 Seelen."
+   },
+   {
+    "start_ms": 50000,
+    "end_ms": 56000,
+    "description": "Im Luftkampf wird ein Gegner betäubt und erhält hohen Schaden. Der Streamer reagiert mit einem überraschten What."
+   }
+  ],
+  "original_duration_ms": 60009,
+  "version_id": 64,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Push, großer Teamkampf mit Assist für 210 Seelen und am Ende ein betäubter Gegner in der Luft.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Twitch"
+     ],
+     "title": "Teamkampf mit Assist und Luftkampf"
+    },
+    "tiktok": {
+     "description": "Großer Teamkampf mit Assist für 210 Seelen, danach ein betäubter Gegner in der Luft. What?!",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Twitch"
+     ],
+     "title": "Teamkampf mit Assist und Luftkampf"
+    },
+    "youtube": {
+     "description": "Erst Push, dann ein großer Teamkampf mit Assist für 210 Seelen. Danach wird ein Gegner in der Luft betäubt und die Reaktion kommt sofort.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Shorts"
+     ],
+     "title": "Teamkampf mit Assist und ein betäubter Gegner in der Luft"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 64
+  },
+  "frames": {
+   "duration_s": 62.6,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/clipdesstreams/v64_sheet.jpg",
+   "points_s": [
+    0.5,
+    20.66,
+    41.32,
+    61.6
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     60009
+    ]
+   ],
+   "hook": [
+    50500,
+    53000
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "Teamkampf und Luftkampf"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Teamkampf mit Assist und Luftkampf",
+    "youtube": "Teamkampf mit Assist und ein betäubter Gegner in der Luft",
+    "instagram": "Teamkampf mit Assist und Luftkampf"
+   },
+   "output_duration_ms": 62509
+  },
+  "tokens": {
+   "shown_input": 4,
+   "shown_output": 3169,
+   "tokens_in": 4,
+   "tokens_out": 3169,
+   "cache_creation": 27478,
+   "cache_read": 0,
+   "calls": 2
+  }
+ },
+ "note": "root and parent versions were built on baseline 69d47eb02; these revisions ran on b04328b26 after the 2026-10-26 18:48:21 UTC restart"
+}

@@ -1,0 +1,94 @@
+{
+ "clips": [
+  {
+   "key": "dunked",
+   "owner": "1376724506",
+   "clip_db_id": 140450,
+   "why": "29.9 s, kill on Vindicta; jobs 54, 58, 59, 60 (shorten, remove subtitle); first e2e case: root job 54 before/after pair from luckymakkydead (title gone, caption 'Yeah' stays after job 60)"
+  },
+  {
+   "key": "ez",
+   "owner": "1376724506",
+   "clip_db_id": 125390,
+   "why": "11.8 s, short kill; jobs 45, 47, 49, 52 (overlay title remove/replace)"
+  },
+  {
+   "key": "clipdesstreams",
+   "owner": "1376724506",
+   "clip_db_id": 130466,
+   "why": "60 s long clip; jobs 11 (render failed), 53, 57"
+  },
+  {
+   "key": "midair",
+   "owner": "1376724506",
+   "clip_db_id": 140447,
+   "why": "14.4 s, kill moment (mid air kidnap)"
+  },
+  {
+   "key": "holybag",
+   "owner": "1376724506",
+   "clip_db_id": 140448,
+   "why": "59.9 s, long clip"
+  },
+  {
+   "key": "doorman",
+   "owner": "1376724506",
+   "clip_db_id": 140452,
+   "why": "39.3 s, one-shot kill moment"
+  },
+  {
+   "key": "talon",
+   "owner": "1376724506",
+   "clip_db_id": 140451,
+   "why": "8.1 s, very short"
+  },
+  {
+   "key": "owner_billy",
+   "owner": "1186925760",
+   "clip_db_id": 136881,
+   "why": "owner channel, 60 s, stacked layout with facecam; replaces clip 124199, whose Twitch source is gone (create returns 404)"
+  }
+ ],
+ "requests": [
+  {
+   "key": "start_later",
+   "text": "Fang bitte 3 Sekunden später an."
+  },
+  {
+   "key": "new_title",
+   "text": "Bitte einen anderen Titel."
+  },
+  {
+   "key": "caption_end",
+   "text": "Nimm die Untertitel am Ende raus."
+  },
+  {
+   "key": "shorter",
+   "text": "Mach das Video kürzer."
+  },
+  {
+   "key": "remove_subtitle_en",
+   "text": "remove subtitle"
+  },
+  {
+   "key": "de_remove_subtitle",
+   "from": "root",
+   "text": "entferne den Untertitel"
+  },
+  {
+   "key": "de_no_text",
+   "from": "root",
+   "text": "kein Text mehr im Video"
+  },
+  {
+   "key": "remove_subtitle_clip_en",
+   "from": "root",
+   "text": "remove the subtitle in that clip"
+  },
+  {
+   "key": "no_text_en",
+   "from": "root",
+   "text": "no remove every text in this video no text"
+  }
+ ]
+}

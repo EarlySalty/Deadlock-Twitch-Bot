@@ -1,0 +1,970 @@
+{
+ "clip": {
+  "key": "ez",
+  "owner": "1376724506",
+  "clip_db_id": 125390,
+  "why": "11.8 s, short kill; jobs 45, 47, 49, 52 (overlay title remove/replace)"
+ },
+ "revisions": [
+  {
+   "request": {
+    "key": "start_later",
+    "text": "Fang bitte 3 Sekunden später an."
+   },
+   "parent_version_id": 62,
+   "http": 200,
+   "job_id": 69,
+   "status": "failed",
+   "failure_code": "planning_failed",
+   "failure_message": "Der Schnitt konnte nicht geplant werden.",
+   "waited_s": 31,
+   "proposal": null,
+   "review_reasons": [],
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 2171,
+    "tokens_in": 2,
+    "tokens_out": 2171,
+    "cache_creation": 11496,
+    "cache_read": 0,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "new_title",
+    "text": "Bitte einen anderen Titel."
+   },
+   "parent_version_id": 62,
+   "http": 200,
+   "job_id": 70,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 82,
+   "proposal": {
+    "summary": "Der eingeblendete Titel heißt jetzt 5 HP und trotzdem zwei Kills statt Zwei Kills mit nur 5 HP. Die Plattformtitel wurden passend dazu angepasst. Schnitt, Hook, Untertitel und Layout bleiben gleich.",
+    "impact": "Es ändern sich nur der Titel im Video und die Plattformtitel. Die Fakten bleiben gleich.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "signature": {
+    "kept": [
+     [
+      0,
+      11833
+     ]
+    ],
+    "hook": [
+     3700,
+     7600
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "5 HP und trotzdem zwei Kills"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "5 HP und trotzdem zwei Kills",
+     "youtube": "5 HP und trotzdem zwei Kills in Deadlock",
+     "instagram": "5 HP und trotzdem zwei Kills"
+    },
+    "output_duration_ms": 15733
+   },
+   "changed": [
+    "overlay",
+    "titles"
+   ],
+   "version_id": 63,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Clutch"
+      ],
+      "title": "5 HP und trotzdem zwei Kills"
+     },
+     "tiktok": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Clutch"
+      ],
+      "title": "5 HP und trotzdem zwei Kills"
+     },
+     "youtube": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "5 HP und trotzdem zwei Kills in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 63
+   },
+   "frames": {
+    "duration_s": 15.8,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/ez/v63_sheet.jpg",
+    "points_s": [
+     0.5,
+     5.21,
+     10.43,
+     14.8
+    ]
+   },
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1530,
+    "tokens_in": 2,
+    "tokens_out": 1530,
+    "cache_creation": 7794,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "caption_end",
+    "text": "Nimm die Untertitel am Ende raus."
+   },
+   "parent_version_id": 63,
+   "http": 200,
+   "job_id": 71,
+   "status": "failed",
+   "failure_code": "revision_unchanged",
+   "failure_message": "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.",
+   "waited_s": 21,
+   "proposal": {
+    "summary": "Die Untertitel lassen sich nicht einzeln entfernen. Sie zeigen die echte Sprache aus dem Clip, und der Plan kann sie weder abschalten noch einzelne davon weglassen. Der letzte Untertitel endet schon bei etwa 7,5 Sekunden. Danach gibt es keine Untertitel mehr. Den Clip früher enden zu lassen würde den zweiten Kill abschneiden. Deshalb bleibt der vorherige Plan unverändert und es entsteht keine neue Version.",
+    "impact": "Keine Änderung. Schnitt, Hook, Titel, Untertitel und Layout bleiben wie in der vorherigen Version.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "signature": {
+    "kept": [
+     [
+      0,
+      11833
+     ]
+    ],
+    "hook": [
+     3700,
+     7600
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "5 HP und trotzdem zwei Kills"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "5 HP und trotzdem zwei Kills",
+     "youtube": "5 HP und trotzdem zwei Kills in Deadlock",
+     "instagram": "5 HP und trotzdem zwei Kills"
+    },
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1903,
+    "tokens_in": 2,
+    "tokens_out": 1903,
+    "cache_creation": 7989,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "shorter",
+    "text": "Mach das Video kürzer."
+   },
+   "parent_version_id": 63,
+   "http": 200,
+   "job_id": 72,
+   "status": "failed",
+   "failure_code": "planning_failed",
+   "failure_message": "Der Schnitt konnte nicht geplant werden.",
+   "waited_s": 31,
+   "proposal": null,
+   "review_reasons": [],
+   "signature": {
+    "kept": [],
+    "hook": null,
+    "overlay": null,
+    "subtitle_scale": null,
+    "titles": {},
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 2277,
+    "tokens_in": 2,
+    "tokens_out": 2277,
+    "cache_creation": 7983,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "remove_subtitle_en",
+    "text": "remove subtitle"
+   },
+   "parent_version_id": 63,
+   "http": 200,
+   "job_id": 73,
+   "status": "failed",
+   "failure_code": "revision_unchanged",
+   "failure_message": "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.",
+   "waited_s": 21,
+   "proposal": {
+    "summary": "Die Untertitel lassen sich nicht entfernen. Sie zeigen die echte Sprache aus dem Clip und können nur in der Größe verändert werden, mindestens auf 60 Prozent. Der Plan bleibt deshalb unverändert. Falls mit Untertitel der große eingeblendete Titel 5 HP und trotzdem zwei Kills gemeint ist, kann dieser in einer neuen Rückmeldung entfernt werden.",
+    "impact": "Es entsteht keine neue Version. Schnitt, Hook, Titel, Untertitel und Layout bleiben wie bisher.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [],
+   "signature": {
+    "kept": [
+     [
+      0,
+      11833
+     ]
+    ],
+    "hook": [
+     3700,
+     7600
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "5 HP und trotzdem zwei Kills"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "5 HP und trotzdem zwei Kills",
+     "youtube": "5 HP und trotzdem zwei Kills in Deadlock",
+     "instagram": "5 HP und trotzdem zwei Kills"
+    },
+    "output_duration_ms": null
+   },
+   "changed": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 2236,
+    "tokens_in": 2,
+    "tokens_out": 2236,
+    "cache_creation": 7978,
+    "cache_read": 3698,
+    "calls": 1
+   }
+  },
+  {
+   "request": {
+    "key": "de_remove_subtitle",
+    "from": "root",
+    "text": "entferne den Untertitel"
+   },
+   "parent_version_id": 62,
+   "http": 200,
+   "job_id": 108,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 72,
+   "proposal": {
+    "summary": "Der eingeblendete Titel Zwei Kills mit nur 5 HP wird entfernt, am Anfang erscheint kein Titel mehr. Schnitt, Hook und Ton bleiben gleich. Die Untertitel der echten Sprache lassen sich in diesem Plan nicht ganz abschalten, sie können nur kleiner gemacht werden.",
+    "impact": "Nur die Titeleinblendung am Anfang fällt weg. Sonst ändert sich am Video nichts.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1534,
+    "tokens_in": 2,
+    "tokens_out": 1534,
+    "cache_creation": 11488,
+    "cache_read": 0,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      11833
+     ]
+    ],
+    "hook": [
+     3700,
+     7600
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Zwei Kills mit nur 5 HP"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Zwei Kills mit nur 5 HP",
+     "youtube": "Zwei Kills mit nur 5 HP in Deadlock",
+     "instagram": "Zwei Kills mit nur 5 HP"
+    },
+    "output_duration_ms": 15733
+   },
+   "signature": {
+    "kept": [
+     [
+      0,
+      11833
+     ]
+    ],
+    "hook": [
+     3700,
+     7600
+    ],
+    "overlay": {
+     "mode": "none",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Zwei Kills mit nur 5 HP",
+     "youtube": "Zwei Kills mit nur 5 HP in Deadlock",
+     "instagram": "Zwei Kills mit nur 5 HP"
+    },
+    "output_duration_ms": 15733,
+    "subtitles_enabled": null,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "variants"
+    ]
+   },
+   "changed": [
+    "overlay",
+    "plan_keys"
+   ],
+   "version_id": 79,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Clutch"
+      ],
+      "title": "Zwei Kills mit nur 5 HP"
+     },
+     "tiktok": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Clutch"
+      ],
+      "title": "Zwei Kills mit nur 5 HP"
+     },
+     "youtube": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Zwei Kills mit nur 5 HP in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 79
+   },
+   "frames": {
+    "duration_s": 15.8,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/ez/v79_sheet.jpg",
+    "points_s": [
+     0.5,
+     5.21,
+     10.43,
+     14.8
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "de_no_text",
+    "from": "root",
+    "text": "kein Text mehr im Video"
+   },
+   "parent_version_id": 62,
+   "http": 200,
+   "job_id": 109,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 82,
+   "proposal": {
+    "summary": "Der große Titel am Anfang wird entfernt. Die Untertitel bleiben, weil sie die echte Sprache aus dem Clip zeigen. Diese Version kann sie weder ausschalten noch umschreiben.",
+    "impact": "Der Titel Zwei Kills mit nur 5 HP wird nicht mehr am Anfang ins Video eingeblendet. Schnitt, Teaser, Layout, Ton und Plattformtexte bleiben gleich.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1844,
+    "tokens_in": 2,
+    "tokens_out": 1844,
+    "cache_creation": 7791,
+    "cache_read": 3698,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      11833
+     ]
+    ],
+    "hook": [
+     3700,
+     7600
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Zwei Kills mit nur 5 HP"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Zwei Kills mit nur 5 HP",
+     "youtube": "Zwei Kills mit nur 5 HP in Deadlock",
+     "instagram": "Zwei Kills mit nur 5 HP"
+    },
+    "output_duration_ms": 15733
+   },
+   "signature": {
+    "kept": [
+     [
+      0,
+      11833
+     ]
+    ],
+    "hook": [
+     3700,
+     7600
+    ],
+    "overlay": {
+     "mode": "none",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Zwei Kills mit nur 5 HP",
+     "youtube": "Zwei Kills mit nur 5 HP in Deadlock",
+     "instagram": "Zwei Kills mit nur 5 HP"
+    },
+    "output_duration_ms": 15733,
+    "subtitles_enabled": null,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "variants"
+    ]
+   },
+   "changed": [
+    "overlay",
+    "plan_keys"
+   ],
+   "version_id": 80,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Clutch"
+      ],
+      "title": "Zwei Kills mit nur 5 HP"
+     },
+     "tiktok": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Clutch"
+      ],
+      "title": "Zwei Kills mit nur 5 HP"
+     },
+     "youtube": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Zwei Kills mit nur 5 HP in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 80
+   },
+   "frames": {
+    "duration_s": 15.8,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/ez/v80_sheet.jpg",
+    "points_s": [
+     0.5,
+     5.21,
+     10.43,
+     14.8
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "remove_subtitle_clip_en",
+    "from": "root",
+    "text": "remove the subtitle in that clip"
+   },
+   "parent_version_id": 62,
+   "http": 200,
+   "job_id": 110,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 82,
+   "proposal": {
+    "summary": "Der eingeblendete Titel Zwei Kills mit nur 5 HP wird entfernt. Die Untertitel der echten Sprache lassen sich in diesem Ablauf nicht komplett abschalten, sie können nur auf mindestens 60 Prozent verkleinert werden. Falls diese Untertitel gemeint waren, bitte Bescheid geben.",
+    "impact": "Am Anfang erscheint kein großer Titel mehr. Schnitt, Hook, Ton, Layout und Sprachuntertitel bleiben unverändert.",
+    "reanalyze": false,
+    "requires_confirmation": true,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1865,
+    "tokens_in": 2,
+    "tokens_out": 1865,
+    "cache_creation": 7792,
+    "cache_read": 3698,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      11833
+     ]
+    ],
+    "hook": [
+     3700,
+     7600
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Zwei Kills mit nur 5 HP"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Zwei Kills mit nur 5 HP",
+     "youtube": "Zwei Kills mit nur 5 HP in Deadlock",
+     "instagram": "Zwei Kills mit nur 5 HP"
+    },
+    "output_duration_ms": 15733
+   },
+   "signature": {
+    "kept": [
+     [
+      0,
+      11833
+     ]
+    ],
+    "hook": [
+     3700,
+     7600
+    ],
+    "overlay": {
+     "mode": "none",
+     "text": null
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Zwei Kills mit nur 5 HP",
+     "youtube": "Zwei Kills mit nur 5 HP in Deadlock",
+     "instagram": "Zwei Kills mit nur 5 HP"
+    },
+    "output_duration_ms": 15733,
+    "subtitles_enabled": null,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "variants"
+    ]
+   },
+   "changed": [
+    "overlay",
+    "plan_keys"
+   ],
+   "version_id": 81,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Clutch"
+      ],
+      "title": "Zwei Kills mit nur 5 HP"
+     },
+     "tiktok": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Clutch"
+      ],
+      "title": "Zwei Kills mit nur 5 HP"
+     },
+     "youtube": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Zwei Kills mit nur 5 HP in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 81
+   },
+   "frames": {
+    "duration_s": 15.8,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/ez/v81_sheet.jpg",
+    "points_s": [
+     0.5,
+     5.21,
+     10.43,
+     14.8
+    ]
+   }
+  },
+  {
+   "request": {
+    "key": "no_text_en",
+    "from": "root",
+    "text": "no remove every text in this video no text"
+   },
+   "parent_version_id": 62,
+   "http": 200,
+   "job_id": 111,
+   "status": "review",
+   "failure_code": null,
+   "failure_message": null,
+   "waited_s": 82,
+   "proposal": {
+    "summary": "Der eingeblendete Titel am Anfang wird komplett entfernt. Die Untertitel lassen sich in dieser Bearbeitung nicht abschalten, weil sie die echte Sprache zeigen. Sie werden deshalb auf die kleinste mögliche Größe von 60 Prozent gesetzt. Texte aus dem Spiel selbst wie HUD und Killfeed gehören zum Originalbild und können nicht entfernt werden.",
+    "impact": "Schnitt, Teaser, Layout und Ton bleiben gleich. Es fehlt nur der Titel am Anfang und die Untertitel werden kleiner.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+   },
+   "review_reasons": [
+    "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+   ],
+   "plan_rejections": [],
+   "tokens": {
+    "shown_input": 2,
+    "shown_output": 1506,
+    "tokens_in": 2,
+    "tokens_out": 1506,
+    "cache_creation": 7791,
+    "cache_read": 3698,
+    "calls": 1
+   },
+   "parent_signature": {
+    "kept": [
+     [
+      0,
+      11833
+     ]
+    ],
+    "hook": [
+     3700,
+     7600
+    ],
+    "overlay": {
+     "mode": "custom",
+     "text": "Zwei Kills mit nur 5 HP"
+    },
+    "subtitle_scale": 100,
+    "titles": {
+     "tiktok": "Zwei Kills mit nur 5 HP",
+     "youtube": "Zwei Kills mit nur 5 HP in Deadlock",
+     "instagram": "Zwei Kills mit nur 5 HP"
+    },
+    "output_duration_ms": 15733
+   },
+   "signature": {
+    "kept": [
+     [
+      0,
+      11833
+     ]
+    ],
+    "hook": [
+     3700,
+     7600
+    ],
+    "overlay": {
+     "mode": "none",
+     "text": null
+    },
+    "subtitle_scale": 60,
+    "titles": {
+     "tiktok": "Zwei Kills mit nur 5 HP",
+     "youtube": "Zwei Kills mit nur 5 HP in Deadlock",
+     "instagram": "Zwei Kills mit nur 5 HP"
+    },
+    "output_duration_ms": 15733,
+    "subtitles_enabled": null,
+    "plan_keys": [
+     "overlay_title",
+     "plan",
+     "platforms",
+     "revision_proposal",
+     "subtitle_scale_percent",
+     "variants"
+    ]
+   },
+   "changed": [
+    "overlay",
+    "plan_keys",
+    "subtitle_scale"
+   ],
+   "version_id": 82,
+   "metadata": {
+    "editable": true,
+    "platforms": {
+     "instagram": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Clutch"
+      ],
+      "title": "Zwei Kills mit nur 5 HP"
+     },
+     "tiktok": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Gaming",
+       "Clutch"
+      ],
+      "title": "Zwei Kills mit nur 5 HP"
+     },
+     "youtube": {
+      "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+      "hashtags": [
+       "Deadlock",
+       "Shorts",
+       "Gaming"
+      ],
+      "title": "Zwei Kills mit nur 5 HP in Deadlock"
+     }
+    },
+    "targets": [
+     "youtube",
+     "tiktok",
+     "instagram"
+    ],
+    "video_id": 82
+   },
+   "frames": {
+    "duration_s": 15.8,
+    "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/ez/v82_sheet.jpg",
+    "points_s": [
+     0.5,
+     5.21,
+     10.43,
+     14.8
+    ]
+   }
+  }
+ ],
+ "create_http": 200,
+ "root": {
+  "job_id": 68,
+  "status": "review",
+  "failure_code": null,
+  "waited_s": 184,
+  "review_reasons": [
+   "Einige Sprachpassagen wurden angeschnitten und nicht als Untertitel eingeblendet."
+  ],
+  "highlights": [
+   {
+    "start_ms": 0,
+    "end_ms": 11833,
+    "description": "Der ganze Clip zeigt einen Kampf mit wenig HP. Der Streamer holt zwei Kills, fällt zwischendurch auf 5 HP und entkommt trotzdem."
+   },
+   {
+    "start_ms": 3700,
+    "end_ms": 5000,
+    "description": "Erster Kill im Killfeed mit 278 Souls. Dabei sinkt die Lebensanzeige auf 5 HP und der Streamer rettet sich mit Sanguine Retreat."
+   },
+   {
+    "start_ms": 9600,
+    "end_ms": 11833,
+    "description": "Zweiter Kill im Killfeed mit 283 Souls, während der Streamer nur noch 16 HP hat."
+   }
+  ],
+  "original_duration_ms": 11833,
+  "version_id": 62,
+  "metadata": {
+   "editable": true,
+   "platforms": {
+    "instagram": {
+     "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Clutch"
+     ],
+     "title": "Zwei Kills mit nur 5 HP"
+    },
+    "tiktok": {
+     "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+     "hashtags": [
+      "Deadlock",
+      "Gaming",
+      "Clutch"
+     ],
+     "title": "Zwei Kills mit nur 5 HP"
+    },
+    "youtube": {
+     "description": "Auf 5 HP gefallen, mit Sanguine Retreat gerettet und trotzdem zwei Kills geholt. Der zweite Kill kommt mit gerade mal 16 HP.",
+     "hashtags": [
+      "Deadlock",
+      "Shorts",
+      "Gaming"
+     ],
+     "title": "Zwei Kills mit nur 5 HP in Deadlock"
+    }
+   },
+   "targets": [
+    "youtube",
+    "tiktok",
+    "instagram"
+   ],
+   "video_id": 62
+  },
+  "frames": {
+   "duration_s": 15.8,
+   "sheet": "/home/nathanael/.cache/social-ai-quality/baseline/ez/v62_sheet.jpg",
+   "points_s": [
+    0.5,
+    5.21,
+    10.43,
+    14.8
+   ]
+  },
+  "signature": {
+   "kept": [
+    [
+     0,
+     11833
+    ]
+   ],
+   "hook": [
+    3700,
+    7600
+   ],
+   "overlay": {
+    "mode": "custom",
+    "text": "Zwei Kills mit nur 5 HP"
+   },
+   "subtitle_scale": 100,
+   "titles": {
+    "tiktok": "Zwei Kills mit nur 5 HP",
+    "youtube": "Zwei Kills mit nur 5 HP in Deadlock",
+    "instagram": "Zwei Kills mit nur 5 HP"
+   },
+   "output_duration_ms": 15733
+  },
+  "tokens": {
+   "shown_input": 4,
+   "shown_output": 3202,
+   "tokens_in": 4,
+   "tokens_out": 3202,
+   "cache_creation": 26519,
+   "cache_read": 0,
+   "calls": 2
+  }
+ }
+}
