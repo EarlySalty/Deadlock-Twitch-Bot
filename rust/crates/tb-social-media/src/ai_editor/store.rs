@@ -951,10 +951,11 @@ pub enum JobFailure {
     BudgetExceeded,
     ConsentMissing,
     RevisionUnchanged,
+    RequestTooLarge,
 }
 
 impl JobFailure {
-    fn code(self) -> &'static str {
+    pub(super) fn code(self) -> &'static str {
         match self {
             Self::SourceUnavailable => "source_unavailable",
             Self::TranscriptionFailed => "transcription_failed",
@@ -967,6 +968,7 @@ impl JobFailure {
             Self::BudgetExceeded => "budget_exceeded",
             Self::ConsentMissing => "consent_missing",
             Self::RevisionUnchanged => "revision_unchanged",
+            Self::RequestTooLarge => "request_too_large",
         }
     }
 
@@ -986,6 +988,9 @@ impl JobFailure {
             Self::ConsentMissing => "Für die externe KI-Verarbeitung fehlt die Einwilligung.",
             Self::RevisionUnchanged => {
                 "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt."
+            }
+            Self::RequestTooLarge => {
+                "Der Clip ist zu lang, um ihn per KI zu bearbeiten. Es wurde keine neue Fassung erstellt."
             }
         }
     }

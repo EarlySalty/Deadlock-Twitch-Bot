@@ -33,7 +33,8 @@ use super::{
         analysis_schema, planning_schema, Analysis, PlanOrigin, PlanRejection, Planning,
     },
     store::{AiStage, StageCheckpoint, TimelineEntry, TranscriptSegment},
-    AiEditorError, EditPlan, EditorRuntime, MediaInfo, SkillId, SourceSubtitle, ValidatedPlan,
+    AiEditorError, EditPlan, EditorRuntime, MediaInfo, PlanLimits, SkillId, SourceSubtitle,
+    ValidatedPlan,
 };
 
 pub struct ProductionContext<'a> {
@@ -740,6 +741,7 @@ async fn analyze(
         frames,
         json_schema: analysis_schema(&runtime.limits.plan, frozen.media.duration_ms),
     };
+    ensure_request_fits(&request, &runtime.configuration)?;
     let response = social_editor::complete(
         ctx.pool,
         &EditorContext {
@@ -779,14 +781,17 @@ async fn planning_audio_levels(frozen: &PreparingSnapshot, runtime: &EditorRunti
     )
     .await
     {
-        Ok(levels) => {
-            json!({ "step_ms": levels.step_ms, "rms_dbfs": levels.rms_dbfs, "note": "Voice band loudness of the source in dBFS, one value per step starting at 0 ms. Game sound is part of the mix, so compare values with the rest of the clip: clear peaks well above the typical level mark shouting or loud reactions, long low stretches mark quiet time. Use it with the segments to see when the streamer speaks or shouts and never cut through a loud reaction." })
-        }
+        Ok(levels) => planning_audio_json(levels),
         Err(error) => {
             tracing::warn!(code = ?error.code, "Audio levels unavailable for planning");
             Value::Null
         }
     }
+}
+
+fn planning_audio_json(levels: super::AudioLevels) -> Value {
+    let levels = levels.capped(PLANNING_AUDIO_LEVELS);
+    json!({ "step_ms": levels.step_ms, "rms_dbfs": levels.rms_dbfs, "note": "Voice band loudness of the source in dBFS, the loudest value of each step starting at 0 ms. Game sound is part of the mix, so compare values with the rest of the clip: clear peaks well above the typical level mark shouting or loud reactions, long low stretches mark quiet time. Use it with the segments to see when the streamer speaks or shouts and never cut through a loud reaction." })
 }
 
 pub(super) enum PlanFailure {
@@ -917,15 +922,14 @@ async fn plan_edit(
             Vec::new()
         }
     };
-    let request = EditorRequest {
-        system: frozen.system(&skill_ids)?,
-        text: planning_text(
-            json!({ "task": "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. analysis.uncertainty is already shown to the user next to review_reasons: put only concerns about this edit that the analysis does not already state into review_reasons, and never restate an analysis uncertainty in other words. Publication copy follows the requested language and template, not subtitle language. overlay_title controls the large title burned in during the first seconds: clip_title shows clip_title, custom shows your own short text, none shows no title. Use custom or none when clip_title is misleading, shouty or not supported by the analysis. subtitles_enabled switches the burned-in speech captions on or off; keep it true for a new edit, and for a revision follow revision.instruction and keep the value from revision.previous unless the feedback asks to change the captions.", "source_duration_ms": frozen.media.duration_ms, "clip_title": frozen.source.title, "streamer": streamer_context(&frozen.source.login), "analysis": analysis, "language": language, "segments": segments, "audio_levels": audio_levels, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base,&frozen.source.title)) }),
-            &personal,
-        ),
-        frames: vec![],
-        json_schema: schema,
+    let evidence = PlanningEvidence {
+        analysis: &analysis,
+        language,
+        segments,
+        audio_levels,
+        revision: revision.zip(base.as_ref()),
     };
+    let request = planning_request(frozen, runtime, &skill_ids, &evidence, &personal, schema)?;
     let response = social_editor::complete(
         ctx.pool,
         &EditorContext {
@@ -1020,6 +1024,61 @@ async fn plan_edit(
         review_reasons,
         edit_plan,
     })
+}
+
+const PLANNING_TASK: &str = "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. analysis.uncertainty is already shown to the user next to review_reasons: put only concerns about this edit that the analysis does not already state into review_reasons, and never restate an analysis uncertainty in other words. Publication copy follows the requested language and template, not subtitle language. overlay_title controls the large title burned in during the first seconds: clip_title shows clip_title, custom shows your own short text, none shows no title. Use custom or none when clip_title is misleading, shouty or not supported by the analysis. subtitles_enabled switches the burned-in speech captions on or off; keep it true for a new edit, and for a revision follow revision.instruction and keep the value from revision.previous unless the feedback asks to change the captions.";
+
+const PLANNING_AUDIO_LEVELS: usize = 125;
+
+struct PlanningEvidence<'a> {
+    analysis: &'a Analysis,
+    language: &'a Option<String>,
+    segments: Vec<&'a TranscriptSegment>,
+    audio_levels: Value,
+    revision: Option<(&'a super::revision::RevisionRequest, &'a Planning)>,
+}
+
+fn planning_request(
+    frozen: &PreparingSnapshot,
+    runtime: &EditorRuntime,
+    skill_ids: &[SkillId],
+    evidence: &PlanningEvidence<'_>,
+    personal: &[String],
+    json_schema: Value,
+) -> Result<EditorRequest, AiEditorError> {
+    let title = &frozen.source.title;
+    let request = EditorRequest {
+        system: frozen.system(skill_ids)?,
+        text: planning_text(
+            json!({ "task": PLANNING_TASK, "source_duration_ms": frozen.media.duration_ms, "clip_title": title, "streamer": streamer_context(&frozen.source.login), "analysis": evidence.analysis, "language": evidence.language, "segments": evidence.segments, "audio_levels": evidence.audio_levels, "layout": frozen.layout, "publication": frozen.publication, "limits": planning_limits(&runtime.limits.plan), "revision": evidence.revision.map(|(request, base)| super::revision::request_context(request, base, title)) }),
+            personal,
+        ),
+        frames: vec![],
+        json_schema,
+    };
+    ensure_request_fits(&request, &runtime.configuration)?;
+    Ok(request)
+}
+
+fn planning_limits(limits: &PlanLimits) -> Value {
+    json!({ "max_output_duration_ms": limits.max_output_duration_ms, "max_intervals": limits.max_intervals, "max_highlights": limits.max_highlights, "max_review_reasons": limits.max_review_reasons, "max_text_bytes": limits.max_text_bytes, "min_kept_percent": limits.min_kept_percent })
+}
+
+fn ensure_request_fits(
+    request: &EditorRequest,
+    configuration: &EditorConfig,
+) -> Result<(), AiEditorError> {
+    let bytes = request.system.len().saturating_add(request.text.len());
+    let limit = configuration.provider.max_text_bytes;
+    if bytes > limit {
+        tracing::warn!(
+            bytes,
+            limit,
+            "Social AI request exceeds the provider text limit"
+        );
+        return Err(AiEditorError::RequestTooLarge);
+    }
+    Ok(())
 }
 
 fn streamer_context(login: &str) -> Value {

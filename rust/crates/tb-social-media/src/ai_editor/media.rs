@@ -453,6 +453,23 @@ pub struct AudioLevels {
     pub rms_dbfs: Vec<i16>,
 }
 
+impl AudioLevels {
+    pub fn capped(self, max_levels: usize) -> Self {
+        if max_levels == 0 || self.rms_dbfs.len() <= max_levels {
+            return self;
+        }
+        let factor = self.rms_dbfs.len().div_ceil(max_levels);
+        Self {
+            step_ms: self.step_ms.saturating_mul(factor as u64),
+            rms_dbfs: self
+                .rms_dbfs
+                .chunks(factor)
+                .filter_map(|chunk| chunk.iter().copied().max())
+                .collect(),
+        }
+    }
+}
+
 fn rms_dbfs(samples: &[u8]) -> Vec<i16> {
     let step_bytes = (AUDIO_LEVEL_SAMPLE_RATE * AUDIO_LEVEL_STEP_MS / 1000 * 2) as usize;
     samples

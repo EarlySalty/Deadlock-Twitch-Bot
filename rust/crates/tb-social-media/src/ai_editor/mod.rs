@@ -32,13 +32,13 @@ pub mod brain;
 pub mod store;
 pub mod stt;
 
+pub use browser_passkey::keep_gemini_session;
 pub use pipeline::{produce, FrozenSkill, ProducedOutcome, ProductionContext};
 pub use runtime_config::{EditorRuntime, MediaRuntime, RuntimeConfig};
 pub use service::{
     create_manual_job, get_manual_job, list_manual_jobs, manual_original_file,
     manual_version_original_file, retry_manual_job, ManualWorker,
 };
-pub use browser_passkey::keep_gemini_session;
 pub use source::authorized_path;
 
 #[derive(Debug, thiserror::Error)]
@@ -61,6 +61,8 @@ pub enum AiEditorError {
     Provider,
     #[error("Der KI-Zugang ist auf dem Server nicht vollständig eingerichtet.")]
     ProviderAccess,
+    #[error("Der Clip ist zu lang, um ihn per KI zu bearbeiten.")]
+    RequestTooLarge,
     #[error("Die Untertitel konnten nicht erstellt werden.")]
     Transcription,
     #[error("Der Schnittplan ist ungültig.")]
@@ -121,7 +123,7 @@ impl AiEditorError {
         matches!(self, Self::Consent)
     }
 
-    const UNIT_VARIANTS: [AiEditorError; 20] = [
+    const UNIT_VARIANTS: [AiEditorError; 21] = [
         Self::Configuration,
         Self::Source,
         Self::SourceDownload,
@@ -131,6 +133,7 @@ impl AiEditorError {
         Self::Budget,
         Self::Provider,
         Self::ProviderAccess,
+        Self::RequestTooLarge,
         Self::Transcription,
         Self::Plan,
         Self::Render,

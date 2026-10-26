@@ -647,6 +647,7 @@ export const SOCIAL_EN: Record<string, string> = {
   'Kamera-Layout': 'Camera layout',
   'Keine neue Fassung': 'No new version',
   'Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt.': 'The requested change could not be applied. No new version was created.',
+  'Der Clip ist zu lang, um ihn per KI zu bearbeiten. Es wurde keine neue Fassung erstellt.': 'The clip is too long to be edited by AI. No new version was created.',
   'Beta: Hier kann noch einiges haken': 'Beta: some things may still break here',
   'Der Social-Media-Manager macht aus deinen Twitch-Clips Hochformat-Videos für TikTok, YouTube Shorts und Instagram. Du entscheidest, ob du jedes Video vorher prüfst oder ob es automatisch gepostet wird.': 'The Social Media Manager turns your Twitch clips into vertical videos for TikTok, YouTube Shorts and Instagram. You decide whether you review every video first or let it post automatically.',
   'Vieles ist neu und noch nicht fertig.': 'A lot of this is new and not finished yet.',

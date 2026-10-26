@@ -3673,3 +3673,174 @@ fn trimmed_revision_names_the_cut_and_the_new_length() {
         "Geändert: Schnitt geändert, jetzt 11,8 s lang."
     );
 }
+
+fn sentence(bytes: usize) -> String {
+    let words = "Der Streamer ruft laut nach dem Push, das Team gewinnt den Kampf über die Mitte und betäubt einen Gegner in der Luft. ";
+    let mut text = String::new();
+    for character in words.chars().cycle() {
+        if text.len() + character.len_utf8() > bytes {
+            break;
+        }
+        text.push(character);
+    }
+    text
+}
+
+fn sixty_second_snapshot(runtime: &EditorRuntime) -> PreparingSnapshot {
+    let skills = [
+        SkillId::EditingStrategy,
+        SkillId::VideoLayout,
+        SkillId::Subtitles,
+        SkillId::Copywriting,
+        SkillId::FeedbackLearning,
+    ]
+    .into_iter()
+    .map(|id| {
+        let skill = super::super::skill_snapshot(id);
+        FrozenSkill {
+            id,
+            version: skill.version.to_owned(),
+            sha256: skill.sha256,
+            text: skill.text.to_owned(),
+        }
+    })
+    .collect();
+    PreparingSnapshot {
+        source: SourceIdentity {
+            twitch_clip_id: "BrainyBlazingRaisinWutFace-vqwlEdcwwhp-Sj9K".into(),
+            path: PathBuf::from("clips/130466.mp4"),
+            sha256: "f".repeat(64),
+            bytes: 58_127_472,
+            login: "luckymakkydead".into(),
+            title: "Clip des Streams".into(),
+        },
+        media: MediaInfo {
+            duration_ms: 60_010,
+            width: 1920,
+            height: 1080,
+            has_audio: true,
+        },
+        configuration: runtime.configuration.clone(),
+        skills,
+        layout: Some(
+            json!({"mode": "blur_pad", "source": {"width": 1920, "height": 1080}, "version": 1, "cam_crop": {"h": 380, "w": 380, "x": 1500, "y": 50}, "game_crop": {"h": 1080, "w": 1087, "x": 408, "y": 0}, "cam_enabled": false, "cam_position": {"h": 600, "w": 1080, "x": 0, "y": 0}}),
+        ),
+        publication: json!({"language": "de", "template": {"hashtags": null, "description_template": null}, "multi_output_enabled": false, "experimental_ai_layout": false}),
+    }
+}
+
+fn sixty_second_analysis() -> Analysis {
+    serde_json::from_value(json!({
+        "highlights": [
+            {"start_ms": 0, "end_ms": 60_010, "description": sentence(200)},
+            {"start_ms": 32_000, "end_ms": 40_000, "description": sentence(160)},
+            {"start_ms": 50_500, "end_ms": 53_000, "description": sentence(150)}
+        ],
+        "uncertainty": [sentence(130), sentence(100), sentence(120), sentence(90)],
+        "analysis_notes": [sentence(250), sentence(150), sentence(260), sentence(140), sentence(130), sentence(90)]
+    }))
+    .expect("analysis fixture")
+}
+
+fn sixty_second_segments() -> Vec<TranscriptSegment> {
+    (0..10)
+        .map(|index| TranscriptSegment {
+            start_ms: index * 6_000,
+            end_ms: index * 6_000 + 2_000,
+            text: sentence(30),
+        })
+        .collect()
+}
+
+fn sixty_second_parent() -> Planning {
+    let copy = |title: usize, description: usize| json!({"title": sentence(title), "description": sentence(description), "hashtags": ["#Deadlock", "#Gaming", "#Twitch"]});
+    serde_json::from_value(json!({
+        "plan": {
+            "schema_version": 1,
+            "source_duration_ms": 60_010,
+            "kept_intervals": [{"start_ms": 0, "end_ms": 60_010, "reason": sentence(200)}],
+            "hook": {"start_ms": 50_500, "end_ms": 53_000, "reason": sentence(130)},
+            "observed_highlights": [
+                {"start_ms": 0, "end_ms": 60_010, "observation": sentence(150)},
+                {"start_ms": 32_000, "end_ms": 40_000, "observation": sentence(150)},
+                {"start_ms": 50_500, "end_ms": 53_000, "observation": sentence(150)}
+            ],
+            "significant_uncertainty": true,
+            "review_reasons": [sentence(130), sentence(100), sentence(120), sentence(90)],
+            "layout": "existing_stable"
+        },
+        "platforms": {
+            "tiktok": copy(40, 100),
+            "youtube": copy(60, 140),
+            "instagram": copy(40, 100)
+        },
+        "overlay_title": {"mode": "custom", "text": "Teamkampf und Luftkampf"},
+        "subtitles_enabled": true
+    }))
+    .expect("parent plan fixture")
+}
+
+fn sixty_second_revision(
+    runtime: &EditorRuntime,
+    analysis: &Analysis,
+) -> Result<EditorRequest, AiEditorError> {
+    let frozen = sixty_second_snapshot(runtime);
+    let segments = sixty_second_segments();
+    let parent = sixty_second_parent();
+    let request = super::super::revision::RevisionRequest {
+        feedback: "Fang bitte 3 Sekunden später an.".into(),
+        parent_version_id: 1,
+        confirmed: false,
+        reanalysis_confirmed: false,
+    };
+    let evidence = PlanningEvidence {
+        analysis,
+        language: &Some("de".into()),
+        segments: speech_segments(&segments),
+        audio_levels: planning_audio_json(super::super::AudioLevels {
+            step_ms: super::super::media::AUDIO_LEVEL_STEP_MS,
+            rms_dbfs: vec![-34; 241],
+        }),
+        revision: Some((&request, &parent)),
+    };
+    let skills = [
+        SkillId::EditingStrategy,
+        SkillId::VideoLayout,
+        SkillId::Subtitles,
+        SkillId::Copywriting,
+        SkillId::FeedbackLearning,
+    ];
+    planning_request(&frozen, runtime, &skills, &evidence, &[], json!({}))
+}
+
+#[test]
+fn sixty_second_revision_request_fits_the_provider_limit_with_margin() {
+    let root = tempfile::tempdir().expect("root");
+    let runtime = runtime(root.path());
+    let limit = runtime.configuration.provider.max_text_bytes;
+    let request = sixty_second_revision(&runtime, &sixty_second_analysis())
+        .expect("a 60 s revision must fit the provider text limit");
+    let bytes = request.system.len() + request.text.len();
+    assert!(
+        bytes + 256 <= limit,
+        "{bytes} of {limit} bytes leaves no margin"
+    );
+}
+
+#[test]
+fn oversized_request_fails_as_request_too_large_instead_of_provider_unavailable() {
+    let root = tempfile::tempdir().expect("root");
+    let runtime = runtime(root.path());
+    let mut analysis = sixty_second_analysis();
+    analysis
+        .analysis_notes
+        .extend((0..20).map(|_| sentence(250)));
+    let error = sixty_second_revision(&runtime, &analysis).err();
+    assert!(matches!(error, Some(AiEditorError::RequestTooLarge)));
+    let error = AiEditorError::RequestTooLarge;
+    assert!(!error.is_transient());
+    assert_eq!(
+        super::super::service::failure(&error, AiStage::Planning).code(),
+        "request_too_large"
+    );
+}

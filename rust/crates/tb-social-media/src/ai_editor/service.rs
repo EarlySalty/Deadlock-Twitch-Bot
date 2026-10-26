@@ -55,7 +55,7 @@ async fn project(
 ) -> Result<AiJobView, AiEditorError> {
     if matches!(
         job.failure_code.as_deref(),
-        Some("invalid_checkpoint" | "revision_unchanged")
+        Some("invalid_checkpoint" | "revision_unchanged" | "request_too_large")
     ) {
         job.can_retry = false;
     }
@@ -244,7 +244,7 @@ pub async fn retry_manual_job(
     project(pool, runtime, owner, job).await
 }
 
-fn failure(error: &AiEditorError, stage: AiStage) -> JobFailure {
+pub(super) fn failure(error: &AiEditorError, stage: AiStage) -> JobFailure {
     match error {
         AiEditorError::Source
         | AiEditorError::SourceDownload
@@ -259,6 +259,7 @@ fn failure(error: &AiEditorError, stage: AiStage) -> JobFailure {
         AiEditorError::Render => JobFailure::RenderingFailed,
         AiEditorError::Validation => JobFailure::ValidationFailed,
         AiEditorError::RevisionUnchanged => JobFailure::RevisionUnchanged,
+        AiEditorError::RequestTooLarge => JobFailure::RequestTooLarge,
         _ => match stage {
             AiStage::Preparing => JobFailure::SourceUnavailable,
             AiStage::Transcribing => JobFailure::TranscriptionFailed,
