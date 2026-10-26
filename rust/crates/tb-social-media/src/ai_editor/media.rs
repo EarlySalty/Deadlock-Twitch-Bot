@@ -284,7 +284,7 @@ pub async fn inspect_media(
 
 pub const MAX_CONTACT_SHEET_FPS: u32 = 16;
 const CONTACT_SHEET_WINDOW_MS: u64 = 1000;
-const MAX_CONTACT_SHEET_WIDTH: u32 = 1568;
+const MAX_CONTACT_SHEET_WIDTH: u32 = 2576;
 const CONTACT_SHEET_QUALITIES: [u8; 5] = [4, 7, 11, 16, 23];
 
 pub fn contact_sheet_grid(fps: u32) -> (u32, u32) {
@@ -862,7 +862,9 @@ mod tests {
         assert_eq!(contact_sheet_grid(4), (2, 2));
         assert_eq!(contact_sheet_grid(8), (3, 3));
         assert_eq!(contact_sheet_tile_width(4, 640), 640);
-        assert_eq!(contact_sheet_tile_width(8, 640), 522);
+        assert_eq!(contact_sheet_tile_width(8, 640), 640);
+        assert_eq!(contact_sheet_tile_width(4, 960), 960);
+        assert_eq!(contact_sheet_tile_width(8, 960), 858);
         assert_eq!(
             contact_sheet_starts(3_500, 4, 4),
             vec![0, 1_000, 2_000, 3_000]
