@@ -1,7 +1,7 @@
 with f as (
-  select v.session_id, min(v.minutes_from_start) as first_min, min(s.started_at) as st
+  select v.session_id, floor(extract(epoch from (min(v.ts_utc) - min(s.started_at))) / 60) as first_min, min(s.started_at) as st
   from twitch_session_viewers v join twitch_stream_sessions s on s.id = v.session_id
-  where v.ts_utc >= '2026-01-01'
+  where v.ts_utc >= '2026-01-01' and v.ts_utc < '2026-10-25 17:28:00+00'
   group by v.session_id
 )
 select case when st < '2026-08-01' then 'before Aug' else 'since Aug' end as era,
@@ -239,7 +239,7 @@ with base as (
   select id, stream_id, streamer_login, started_at, ended_at,
          coalesce(ended_at, started_at + make_interval(secs => duration_seconds)) as end_at,
          duration_seconds, start_viewers, peak_viewers, end_viewers, avg_viewers,
-         row_number() over (partition by stream_id order by duration_seconds desc nulls last, id desc) as rn
+         row_number() over (partition by coalesce(stream_id, id::text) order by duration_seconds desc nulls last, id desc) as rn
   from twitch_stream_sessions
   where started_at >= '2026-01-09'
 ),
@@ -275,7 +275,7 @@ f as (
   select b.*, extract(epoch from (b.end_at - b.started_at)) as dur_s, fs.first_min
   from b
   left join lateral (
-    select v.minutes_from_start as first_min
+    select floor(extract(epoch from (v.ts_utc - b.started_at)) / 60) as first_min
     from twitch_session_viewers v
     where v.session_id = b.first_id
     order by v.ts_utc

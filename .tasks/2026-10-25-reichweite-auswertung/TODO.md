@@ -1,4 +1,4 @@
-# TODO: Twitch reach analysis (state 2026-10-26, after gate round 3 fixes)
+# TODO: Twitch reach analysis (state 2026-10-26, after gate round 4 fixes)
 
 User goal: deep analysis of all Twitch data on how German Deadlock streams win new viewers, turn
 lurkers into chatters and newcomers into followers, subs and regulars; also when Twitch shows a
@@ -44,7 +44,7 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
 - More German streams live costs no new viewers within streamer (V5). Early-stream jumps are
   returning regulars, not discovery (V6).
 - Ending near the peak does not lift the next start once reconnects are merged into one broadcast
-  (+0.007, CI -0.015 to +0.025, V8; the earlier +0.07 was a reconnect artifact). Title word effects mostly vanish against a +-14 day local baseline; only titles under 30
+  (+0.008, CI -0.015 to +0.025, V8; the earlier +0.07 was a reconnect artifact). Title word effects mostly vanish against a +-14 day local baseline; only titles under 30
   characters keep a small cost (V9). Neither a broadcaster chat message nor an active chat raises new chatters
   in the next 5 minutes within the session (V10, after trimming the late start of tracked chat;
   the first run's +1.7 pp for active chat was that artifact). Social messages draw no extra
@@ -68,5 +68,16 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
    follows only in channels with follow tracking. New numbers: V7 +12.1 pp (78 replies), lurker
    presence 10.1 vs 81.2 per 1,000, P09 +0.087 follows per raid within 60 min. The blog needs the
    V7 and lurker numbers updated after the merge.
-3. Re-run `gate_hook.py --review` (skill rolle-merge-schleuse) until ALLOW, merge to main, clean
+3. Gate round 4 (BLOCK, 2 findings) is fixed: V8 dedups broadcasts with
+   `coalesce(stream_id, id::text)` so sessions without a stream id are no longer collapsed, and
+   P08 q2f splits every sample interval at raid window start and end as well as at the 5-minute
+   and peak bins, taking attributes at the piece midpoint. While rerunning, a collector fault
+   showed up: `twitch_session_viewers.minutes_from_start` is stuck at 0 for 314 sessions from
+   2026-06-22 to 2026-07-03. Every query now uses the session clock
+   `floor(extract(epoch from (ts_utc - started_at)) / 60)`, and P04, P08, P11, V1 and V8 were
+   rerun on it (`p04-curves.py`, `p08-aligned.py` reproduce the tables). New numbers: raid window
+   7.9 per 100 vh, 0 to 5 minutes before the peak 11.5, minutes 0 to 10 12.4 per 100 vh (483 vh),
+   V8 +0.008 (73 streamers), strong previous session +0.020 with CI including 0, P11 ramp
+   0.18 / 0.65 / 0.84. The blog needs the raid, peak and minute-table numbers updated.
+4. Re-run `gate_hook.py --review` (skill rolle-merge-schleuse) until ALLOW, merge to main, clean
    up branch and worktree, cancel wakeup `reichweite`. Report to the user in English.

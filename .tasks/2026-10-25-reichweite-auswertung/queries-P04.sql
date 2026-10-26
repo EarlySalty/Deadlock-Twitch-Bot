@@ -1,5 +1,5 @@
 \echo Q0 overview: stream sessions since 2026-01-09
-select count(*), count(distinct streamer_login), min(started_at)::date, max(started_at)::date, count(*) filter (where had_deadlock_in_session) from twitch_stream_sessions where started_at >= '2026-01-09';
+select count(*), count(distinct streamer_login), min(started_at)::date, max(started_at)::date, count(*) filter (where game_name = 'Deadlock') from twitch_stream_sessions where started_at >= '2026-01-09' and started_at < '2026-10-25 17:28:00+00';
 
 \echo Q0 overview: category snapshots by month since 2025-10-01
 select date_trunc('month', ts_utc) m, count(*) n, count(distinct streamer) streamers, count(distinct game_name) games, count(*) filter (where game_name ilike '%deadlock%') dl_rows, count(*) filter (where language is null) null_lang, count(*) filter (where language is not null and language not like 'de%') non_de from twitch_stats_category where ts_utc >= '2025-10-01' group by 1 order by 1;
@@ -8,16 +8,16 @@ select date_trunc('month', ts_utc) m, count(*) n, count(distinct streamer) strea
 select date_trunc('month',started_at)::date m, count(*) n, count(*) filter (where first_time_chatters=0 and unique_chatters>0) ftc0_but_chatters, count(*) filter (where unique_chatters>0) with_chatters from twitch_stream_sessions where started_at>='2026-01-09' group by 1 order by 1;
 
 \echo Q0 curve coverage: first recorded minute per session
-with f as (select session_id, min(minutes_from_start) mn0, max(minutes_from_start) mx, count(*) n from twitch_session_viewers where ts_utc >= '2026-01-09' group by 1) select 'first_min_bucket', case when mn0=0 then '0' when mn0<=4 then '1-4' when mn0<=15 then '5-15' when mn0<=60 then '16-60' else '>60' end b, count(*), round(avg(n)) from f group by 2 order by 2;
+with f as (select v.session_id, min(v.mi) mn0, max(v.mi) mx, count(*) n from (select sv.session_id, sv.ts_utc, sv.viewer_count, floor(extract(epoch from (sv.ts_utc - ss.started_at)) / 60)::int mi from twitch_session_viewers sv join twitch_stream_sessions ss on ss.id = sv.session_id) v where v.ts_utc >= '2026-01-09' and v.ts_utc < '2026-10-25 17:28:00+00' group by 1) select 'first_min_bucket', case when mn0=0 then '0' when mn0<=4 then '1-4' when mn0<=15 then '5-15' when mn0<=60 then '16-60' else '>60' end b, count(*), round(avg(n)) from f group by 2 order by 2;
 
 \echo Q0 size class counts (Deadlock sessions >= 60 min since 2026-01-09)
-select case when m<5 then '0-4' when m<20 then '5-19' when m<100 then '20-99' else '100+' end c, count(*) from (select streamer_login, percentile_cont(0.5) within group (order by avg_viewers) m from twitch_stream_sessions where started_at >= '2026-01-09' and game_name='Deadlock' and duration_seconds>=3600 group by 1) x group by 1 order by 1;
+select case when m<5 then '0-4' when m<20 then '5-19' when m<100 then '20-99' else '100+' end c, count(*) from (select streamer_login, percentile_cont(0.5) within group (order by avg_viewers) m from twitch_stream_sessions where started_at >= '2026-01-09' and started_at < '2026-10-25 17:28:00+00' and game_name='Deadlock' and duration_seconds>=3600 group by 1) x group by 1 order by 1;
 
 \echo Q1a curve summary per session (size class, peak timing, hour means)
 with sess as (
   select id, streamer_login, duration_seconds
   from twitch_stream_sessions
-  where started_at >= '2026-01-09' and game_name = 'Deadlock' and duration_seconds >= 3600
+  where started_at >= '2026-01-09' and started_at < '2026-10-25 17:28:00+00' and game_name = 'Deadlock' and duration_seconds >= 3600
 ),
 cls as (
   select streamer_login,
@@ -25,14 +25,14 @@ cls as (
   from (
     select streamer_login, percentile_cont(0.5) within group (order by avg_viewers) m
     from twitch_stream_sessions
-    where started_at >= '2026-01-09' and game_name = 'Deadlock' and duration_seconds >= 3600
+    where started_at >= '2026-01-09' and started_at < '2026-10-25 17:28:00+00' and game_name = 'Deadlock' and duration_seconds >= 3600
     group by 1) x
 ),
 mn as (
-  select v.session_id, v.minutes_from_start mi, avg(v.viewer_count)::float vc, count(*) n
-  from twitch_session_viewers v
+  select v.session_id, v.mi mi, avg(v.viewer_count)::float vc, count(*) n
+  from (select sv.session_id, sv.ts_utc, sv.viewer_count, floor(extract(epoch from (sv.ts_utc - ss.started_at)) / 60)::int mi from twitch_session_viewers sv join twitch_stream_sessions ss on ss.id = sv.session_id) v
   join sess s on s.id = v.session_id
-  where v.ts_utc >= '2026-01-09' and v.minutes_from_start between 0 and 480
+  where v.ts_utc >= '2026-01-09' and v.ts_utc < '2026-10-25 17:28:00+00' and v.mi between 0 and 480
   group by 1, 2
 ),
 cov as (
@@ -73,7 +73,7 @@ group by s.id, c.sc, cov.first_mi, cov.last_mi, cov.n_min, pk.pk, am.argmax_mi, 
 with sess as (
   select id, streamer_login
   from twitch_stream_sessions
-  where started_at >= '2026-01-09' and game_name = 'Deadlock' and duration_seconds >= 3600
+  where started_at >= '2026-01-09' and started_at < '2026-10-25 17:28:00+00' and game_name = 'Deadlock' and duration_seconds >= 3600
 ),
 cls as (
   select streamer_login,
@@ -81,14 +81,14 @@ cls as (
   from (
     select streamer_login, percentile_cont(0.5) within group (order by avg_viewers) m
     from twitch_stream_sessions
-    where started_at >= '2026-01-09' and game_name = 'Deadlock' and duration_seconds >= 3600
+    where started_at >= '2026-01-09' and started_at < '2026-10-25 17:28:00+00' and game_name = 'Deadlock' and duration_seconds >= 3600
     group by 1) x
 ),
 mn as (
-  select v.session_id, v.minutes_from_start mi, avg(v.viewer_count)::float vc
-  from twitch_session_viewers v
+  select v.session_id, v.mi mi, avg(v.viewer_count)::float vc
+  from (select sv.session_id, sv.ts_utc, sv.viewer_count, floor(extract(epoch from (sv.ts_utc - ss.started_at)) / 60)::int mi from twitch_session_viewers sv join twitch_stream_sessions ss on ss.id = sv.session_id) v
   join sess s on s.id = v.session_id
-  where v.ts_utc >= '2026-01-09' and v.minutes_from_start between 0 and 480
+  where v.ts_utc >= '2026-01-09' and v.ts_utc < '2026-10-25 17:28:00+00' and v.mi between 0 and 480
   group by 1, 2
 ),
 cov as (

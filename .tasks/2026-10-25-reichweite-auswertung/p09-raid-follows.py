@@ -68,9 +68,9 @@ def control_comparison(raid_rows, t0_by_id):
     ev = []
     for r in raid_rows:
         t = ts(r["t_utc"])
-        if r["covers60"] != "t" or r["other_raids_pm60"] != "0" or not r["session_id"] or t < START:
+        if t is None or r["covers60"] != "t" or r["other_raids_pm60"] != "0" or not r["session_id"] or t < START:
             continue
-        if r["tid"] in t0_by_id and t >= t0_by_id[r["tid"]] and window_ok(t, t + timedelta(minutes=60)):
+        if r["tid"] and r["tid"] in t0_by_id and t >= t0_by_id[r["tid"]] and window_ok(t, t + timedelta(minutes=60)):
             ev.append(r)
     raid = [r for r in ev if r["kind"] == "raid"]
     ctl = [r for r in ev if r["kind"] == "ctl"]
@@ -92,11 +92,11 @@ def window_share(raid_rows, sessions, follows, t0_by_login):
     session_by_id = {r["session_id"]: r for r in sessions}
     raids = collections.defaultdict(list)
     for r in raid_rows:
-        if r["kind"] == "raid" and r["session_id"] in session_by_id:
+        if r["kind"] == "raid" and r["session_id"] and r["session_id"] in session_by_id:
             raids[session_by_id[r["session_id"]]["streamer"]].append(ts(r["t_utc"]))
     live = collections.defaultdict(list)
     for r in sessions:
-        if r["streamer"] in t0_by_login and ts(r["started_at"]):
+        if r["streamer"] and r["streamer"] in t0_by_login and ts(r["started_at"]):
             live[r["streamer"]].append([ts(r["started_at"]), session_end(r)])
     tot_live = tot_win = n = n_in = 0
     channels = set()
@@ -120,8 +120,12 @@ sessions = list(csv.DictReader(open(sys.argv[2])))
 follows, t0_by_login, t0_by_id = collections.defaultdict(list), {}, {}
 for r in csv.DictReader(open(sys.argv[3])):
     t = ts(r["followed_at"])
-    follows[r["streamer"]].append(t)
-    t0_by_login[r["streamer"]] = min(t0_by_login.get(r["streamer"], t), t)
-    t0_by_id[r["twitch_user_id"]] = min(t0_by_id.get(r["twitch_user_id"], t), t)
+    if t is None:
+        continue
+    if r["streamer"]:
+        follows[r["streamer"]].append(t)
+        t0_by_login[r["streamer"]] = min(t0_by_login.get(r["streamer"], t), t)
+    if r["twitch_user_id"]:
+        t0_by_id[r["twitch_user_id"]] = min(t0_by_id.get(r["twitch_user_id"], t), t)
 control_comparison(raid_rows, t0_by_id)
 window_share(raid_rows, sessions, follows, t0_by_login)

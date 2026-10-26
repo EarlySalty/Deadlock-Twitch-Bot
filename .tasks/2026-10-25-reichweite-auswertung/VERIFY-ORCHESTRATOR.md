@@ -6,10 +6,12 @@ Own queries against the production DB (read-only), run 2026-10-25. Queries: `que
 
 | Sessions started | Sessions | First sample after min 5 | After min 15 | After min 30 |
 |---|---|---|---|---|
-| 2026-01 to 2026-07 | 8,847 | 58.8 % | 25.3 % | 18.4 % |
-| since 2026-08 | 5,691 | 55.5 % | 23.9 % | 22.0 % |
+| 2026-01 to 2026-07 | 8,847 | 60.1 % | 25.7 % | 18.8 % |
+| 2026-08 to 2026-10-25 17:28 UTC | 5,678 | 55.5 % | 24.0 % | 22.1 % |
 
-The earlier brief note "about 60 % after minute 15" was wrong; the correct figure is about 25 %. Confirms P11.
+The first sample minute is `floor((first sample - started_at) / 60)`. The earlier brief note "about 60 % after minute 15" was wrong; the correct figure is about 25 %. Confirms P11 (14,525 sessions in both).
+
+Collector fault found during this check: the stored `twitch_session_viewers.minutes_from_start` is 0 for every sample of 314 sessions from 2026-06-22 to 2026-07-03 and equals the session clock everywhere else. All minute measures in P04, P08, P11 and here now use the session clock.
 
 ## V2. Does a broadcaster chat reply bring newcomers back?
 
@@ -91,17 +93,22 @@ Most quick follows in the reply arm come before the broadcaster message: the fol
 
 ## V8. Ending near the peak does not lift the next start
 
-P11 reported +0.120 (in units of the streamer's median viewers) on the next start when a session ends above its own median end-to-peak ratio. Recheck (`queries-VERIFY.sql` V8, `verify-v8-end-next.py`): rows of the same stream_id are deduplicated, and sessions of one streamer that start within 10 minutes of the previous end (or overlap it) are merged into one broadcast, so a reconnect is not counted as the next stream. Broadcasts of at least 1 h since 2026-01-09, next broadcast within 48 h and first sampled by minute 5, three earlier broadcasts known, streamer fixed effects, values capped at 5x the median, bootstrap over streamers (300 resamples).
+P11 reported +0.125 (in units of the streamer's median viewers) on the next start when a session ends above its own median end-to-peak ratio. Recheck (`queries-VERIFY.sql` V8, `verify-v8-end-next.py`): rows of the same stream_id are deduplicated, and sessions of one streamer that start within 10 minutes of the previous end (or overlap it) are merged into one broadcast, so a reconnect is not counted as the next stream. Broadcasts of at least 1 h since 2026-01-09, next broadcast within 48 h and first sampled by minute 5, three earlier broadcasts known, streamer fixed effects, values capped at 5x the median, bootstrap over streamers (300 resamples).
 
 | Model | Pairs | Streamers | Effect on next start (95 % CI) |
 |---|---|---|---|
-| Raw | 3,059 | 74 | +0.010 (-0.011 to +0.033) |
-| + current average, current start, mean of last 3 broadcasts | 3,059 | 74 | +0.007 (-0.014 to +0.026) |
-| + duration and current peak | 3,059 | 74 | +0.007 (-0.015 to +0.025) |
-| Placebo: same flag vs the PREVIOUS broadcast's start | 3,018 | 73 | -0.006 (-0.025 to +0.017) |
-| Channels with median 5+ viewers, full model | 422 | 13 | +0.038 (-0.009 to +0.089) |
+| Raw | 3,045 | 73 | +0.011 (-0.011 to +0.030) |
+| + current average, current start, mean of last 3 broadcasts | 3,045 | 73 | +0.008 (-0.014 to +0.025) |
+| + duration and current peak | 3,045 | 73 | +0.008 (-0.015 to +0.025) |
+| Placebo: same flag vs the PREVIOUS broadcast's start | 2,993 | 71 | -0.007 (-0.027 to +0.015) |
+| Channels with median 5+ viewers, full model | 418 | 13 | +0.042 (-0.003 to +0.097) |
+| Strong broadcast (average above own median), raw | 3,045 | 73 | +0.030 (+0.003 to +0.055) |
+| Strong broadcast, + current start, mean of last 3 broadcasts | 3,045 | 73 | +0.020 (-0.002 to +0.044) |
+| Placebo: strong broadcast vs the PREVIOUS broadcast's start | 2,993 | 71 | +0.013 (-0.018 to +0.044) |
 
-Null result. An earlier version of this check found +0.06 to +0.07 on session pairs without the merge. Of the 6,031 pairs it exported, 681 had the next start within 10 minutes of the end and 495 overlapped the current session: those were reconnects of one broadcast, where the "next start" is the audience that was still there. With reconnects merged, the effect is +0.007 to +0.010 with intervals that include zero. Ending while the room is still full is not a measured lever for the next stream.
+Null result. An earlier version of this check found +0.06 to +0.07 on session pairs without the merge. Of the 6,031 pairs it exported, 681 had the next start within 10 minutes of the end and 495 overlapped the current session: those were reconnects of one broadcast, where the "next start" is the audience that was still there. With reconnects merged, the effect is +0.008 to +0.011 with intervals that include zero. Ending while the room is still full is not a measured lever for the next stream.
+
+The same merge tests P11's "strong previous session" result (section 6, +0.065 on session pairs). A broadcast with average viewers above the streamer's median goes with +0.030 on the next start raw, +0.020 with start and level controls (interval includes zero), and +0.013 against the previous start (placebo). Most of the raw lift is the streamer's current level, so a strong broadcast is not an established lever either.
 
 ## V9. Title effects from P01 shrink to near zero against nearby sessions
 

@@ -1,7 +1,7 @@
 # P04: Stream length, frequency, consistency and long-term growth
 
 Saved by the orchestrator from the P04 agent's final report (the agent's Write call was rejected).
-Queries: `queries-P04.sql`.
+Queries: `queries-P04.sql`. Curve summaries: `p04-curves.py` on the Q1a export.
 
 ## Question
 
@@ -11,16 +11,16 @@ Which streaming habits go along with channels actually growing over months?
 
 | Source | Filter | Size | Time range |
 |---|---|---|---|
-| `twitch_session_viewers` | Deadlock sessions of at least 60 min with a curve | 7,534,673 rows; 9,816 curve sessions, 1,602 streamers | since 2026-01-09 |
-| `twitch_stream_sessions` | Deadlock sessions | 14,979 sessions (all games), 12,943 Deadlock, 1,869 logins | since 2026-01-09 |
+| `twitch_session_viewers` | Deadlock sessions of at least 60 min with a curve | 7,534,673 rows; 9,830 curve sessions, 1,574 streamers | 2026-01-09 to 2026-10-25 17:28 UTC |
+| `twitch_stream_sessions` | Deadlock sessions | 14,993 sessions (all games), 12,957 Deadlock, 1,870 logins | 2026-01-09 to 2026-10-25 17:28 UTC |
 | `twitch_stats_category` | German filter, June 2026 incident rule applied | 4,989,250 rows, 1,380 user ids; 10,680 derived streams of at least 20 min | since 2025-10-01 |
 | `twitch_session_chatters` | sessions | 164,861 rows (130,269 lurker rows, 34,592 chatter rows) | since 2026-01-31 |
 
-Size classes (curve analyses): median Deadlock session `avg_viewers` per streamer, sessions of at least 60 min: 0-4 (1,233 streamers), 5-19 (279), 20-99 (61), 100+ (29).
+Size classes (curve analyses): median Deadlock session `avg_viewers` per streamer, sessions of at least 60 min: 0-4 (1,234 streamers), 5-19 (281), 20-99 (61), 100+ (29).
 
 ## Method
 
-- Curves: per-session minute averages normalized by the session's own peak; only sessions whose first sample is at or before minute 15 and peak at least 3. About 25 % of sessions start sampling after minute 15 and about 57 % after minute 5 (orchestrator check, 14,538 sessions since 2026-01). Snapshot curves from `twitch_stats_category` as second source.
+- Curves: per-session minute averages on the session clock, `floor((ts_utc - started_at) / 60)`, normalized by the session's own peak; only sessions whose first sample is at or before minute 15 and peak at least 3. About 25 % of sessions start sampling after minute 15 and about 58 % after minute 5 (14,525 sessions with a curve, P11 rerun). Snapshot curves from `twitch_stats_category` as second source.
 - Duration and habit effects: ratio of sums per hour; within-streamer differences, median across streamers.
 - Cohort: active week = at least 2 h live. Baseline = median weekly mean over the first 4 active weeks; outcome = weeks 8 to 12 later. Grower = at least 1.5x and +2 viewers; decliner = at most 0.67x and -2 viewers.
 - Breaks: median of next 4 streams divided by previous 4.
@@ -32,20 +32,20 @@ Size classes (curve analyses): median Deadlock session `avg_viewers` per streame
 
 | Class | Sessions | Median time to 95 % of peak (min) | IQR | Median argmax (min) |
 |---|---|---|---|---|
-| 0-4 | 4,081 | 83 | 42 to 144 | quantized |
-| 5-19 | 841 | 97 | 53 to 166 | 100 |
-| 20-99 | 62 | 100 | | |
+| 0-4 | 4,136 | 84 | 43 to 144 | quantized |
+| 5-19 | 832 | 98 | 57 to 168 | 104 |
+| 20-99 | 61 | 102 | | |
 | 100+ | 18 | 121 | | |
 
-Sessions of at least 5 h, class 5-19 (n=201): time to 95 % of peak median 191 min, argmax median 203 min, 59 % of peaks at 180 min or later.
+Sessions of at least 5 h, class 5-19 (n=196): time to 95 % of peak median 195 min, argmax median 206 min, 60 % of peaks at 180 min or later.
 
-Normalized level, class 5-19 (session basis / snapshot basis): minute 30 0.515 / 0.615, minute 60 0.625 / 0.667, minute 120 0.692 / 0.704, minute 180 0.714 / 0.684, minute 240 0.700 / 0.692, minute 300 0.676 / 0.647.
+Normalized level, class 5-19 (session basis / snapshot basis): minute 30 0.523 / 0.615, minute 60 0.630 / 0.667, minute 120 0.692 / 0.704, minute 180 0.714 / 0.684, minute 240 0.700 / 0.692, minute 300 0.667 / 0.647.
 
-Hour k relative to hour 2 (same stream):
+Hour k relative to hour 2 (same stream; session basis = median per-stream ratio from `p04-curves.py`):
 
 | Class | Basis | Hour 3 | Hour 4 | Hour 5 | Hour 6 | Hour 8 |
 |---|---|---|---|---|---|---|
-| 5-19 | session (n=495 / 311 / 178 / 102 / 36) | 1.066 | 1.152 | 1.237 | 1.248 | 1.193 |
+| 5-19 | session (n=515 / 322 / 182 / 105 / 37) | 1.074 | 1.156 | 1.246 | 1.248 | 1.199 |
 | 5-19 | snapshot, streams of 5 h or more (n=147) | 1.091 | 1.126 | 1.170 | 1.169 | 1.267 |
 | 0-4 | snapshot, 5 h or more (n=265) | 0.997 | 0.980 | 0.952 | | |
 | 20-99 | snapshot, 5 h or more (n=32) | 1.042 | 1.027 | 1.025 | | |
@@ -88,7 +88,7 @@ Class 5-19 after 14 days: 56 events, 1.13; after 30 days: 38 events, 1.105.
 
 ## Actionable tips
 
-1. Small channels (5-19 viewers) gain from long streams: hour 5 is 1.17x to 1.24x hour 2, peak typically after minute 180 in 5 h streams. Confidence medium (self-selection).
+1. Small channels (5-19 viewers) gain from long streams: hour 5 is 1.17x to 1.25x hour 2, peak typically after minute 180 in 5 h streams. Confidence medium (self-selection).
 2. Longer streams do not bring more first-time chatters per hour within a streamer (-0.13, n=117). Confidence medium.
 3. Pauses of 7 to 30 days cost nothing measurable (1.02 to 1.05). Confidence medium.
 4. Schedule regularity shows no measurable within-streamer effect (+0.01, n=147). Confidence low.
@@ -97,7 +97,9 @@ Class 5-19 after 14 days: 56 events, 1.13; after 30 days: 38 events, 1.105.
 ## Caveats
 
 - Chat fields in `twitch_stream_sessions` are zero from March to May 2026; `follower_delta` implausible in January and February 2026.
-- About 25 % of sessions start sampling after minute 15 (57 % after minute 5). The earlier note of 60 % after minute 15 was wrong; P04's curve filter is unaffected.
+- About 25 % of sessions start sampling after minute 15 (58 % after minute 5).
+- Session clock: the stored `minutes_from_start` is stuck at 0 for 314 sessions from 2026-06-22 to 2026-07-03 (collector fault). The curves above use the session clock; the earlier figures on the stored field differed by at most 0.01 in level and 4 minutes in timing.
+- The hour-k session row reproduces from `p04-curves.py` on the exported curve sessions; the earlier row (1.066 / 1.152 / 1.237 / 1.248 / 1.193) came from the agent's own run and did not reproduce. The earlier note of 60 % after minute 15 was wrong; P04's curve filter is unaffected.
 - Class 0-4 curves are quantized.
 - Hour-k values exist only for streams that lasted hour k (survivorship).
 - Cohort is small: 110 streamers, 5 growers.

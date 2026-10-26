@@ -58,25 +58,25 @@ with trk as (
   select lower(streamer_login) as login, min(followed_at) as t0 from twitch_follow_events group by 1
 ),
 ss as (
-  select s.id, lower(s.streamer_login) as login, t.t0,
+  select s.id, lower(s.streamer_login) as login, s.started_at, t.t0,
          coalesce(s.ended_at, s.started_at + make_interval(secs => s.duration_seconds)) as end_at
   from twitch_stream_sessions s join trk t on t.login = lower(s.streamer_login)
   where coalesce(s.ended_at, s.started_at + make_interval(secs => s.duration_seconds)) >= t.t0
 ),
 raw as (
-  select sv.session_id, sv.ts_utc, sv.minutes_from_start, sv.viewer_count, ss.t0, ss.end_at,
+  select sv.session_id, sv.ts_utc, floor(extract(epoch from (sv.ts_utc - ss.started_at)) / 60)::int as mi, sv.viewer_count, ss.t0, ss.end_at,
          lead(sv.ts_utc) over (partition by sv.session_id order by sv.ts_utc) as next_ts
   from twitch_session_viewers sv
   join ss on ss.id = sv.session_id
   where sv.ts_utc >= :'m1'::timestamptz - interval '2 days' and sv.ts_utc < :'m2'::timestamptz + interval '2 days'
 ),
 w as (
-  select session_id, ts_utc, minutes_from_start, viewer_count,
+  select session_id, ts_utc, mi, viewer_count,
          greatest(extract(epoch from (least(coalesce(next_ts, end_at), ts_utc + interval '300 seconds', end_at) - greatest(ts_utc, t0))), 0) as dt
   from raw
   where ts_utc >= :'m1'::timestamptz and ts_utc < :'m2'::timestamptz
 )
-select case when minutes_from_start is null then null else floor(minutes_from_start/10)*10 end as stream_min_bucket,
+select floor(mi / 10) * 10 as stream_min_bucket,
        case when viewer_count < 5 then '0-4' when viewer_count < 10 then '5-9' when viewer_count < 20 then '10-19'
             when viewer_count < 50 then '20-49' when viewer_count < 100 then '50-99' when viewer_count < 300 then '100-299' else '300+' end as viewer_band,
        count(*) filter (where dt > 0) as samples, sum(dt) as seconds, sum(dt*viewer_count) as viewer_seconds
@@ -410,7 +410,7 @@ ss as (
   where coalesce(s.ended_at, s.started_at + make_interval(secs => s.duration_seconds)) >= t.t0
 ),
 raw as (
-  select sv.session_id, ss.login, ss.started_at, sv.ts_utc, sv.minutes_from_start, sv.viewer_count, ss.t0, ss.end_at,
+  select sv.session_id, ss.login, ss.started_at, sv.ts_utc, sv.viewer_count, ss.t0, ss.end_at,
          lead(sv.ts_utc) over (partition by sv.session_id order by sv.ts_utc) as next_ts
   from twitch_session_viewers sv
   join ss on ss.id = sv.session_id
@@ -420,23 +420,65 @@ pk as (
   select distinct on (session_id) session_id, ts_utc as peak_ts from raw order by session_id, viewer_count desc, ts_utc
 ),
 iv as (
-  select session_id, login, started_at, ts_utc, minutes_from_start, viewer_count,
+  select session_id, login, started_at, ts_utc, viewer_count,
          greatest(ts_utc, t0) as a,
-         least(coalesce(next_ts, end_at), ts_utc + interval '300 seconds', end_at, :'cut'::timestamptz) as b
+         least(coalesce(next_ts, end_at), ts_utc + interval '300 seconds', end_at, :'cut'::timestamptz,
+               case when ts_utc < :'g1'::timestamptz then :'g1'::timestamptz else 'infinity'::timestamptz end) as b
   from raw
   where ts_utc >= :'m1'::timestamptz and ts_utc < :'m2'::timestamptz and ts_utc < :'cut'::timestamptz
     and not (ts_utc >= :'g1'::timestamptz and ts_utc < :'g2'::timestamptz)
 ),
+iv2 as (
+  select iv.*, pk.peak_ts from iv join pk using (session_id) where iv.b > iv.a
+),
+rd as (
+  select lower(rh.to_broadcaster_login) as login, rh.executed_at as r
+  from twitch_raid_history rh
+  where rh.success
+    and rh.executed_at >= :'m1'::timestamptz - interval '1 day' and rh.executed_at < :'m2'::timestamptz + interval '1 day'
+),
+sb as (
+  select session_id, min(login) as login, min(a) as lo, max(b) as hi from iv2 group by session_id
+),
+rs as (
+  select sb.session_id, rd.r
+  from sb join rd on rd.login = sb.login and rd.r > sb.lo - interval '10 minutes' and rd.r < sb.hi
+),
+cuts as (
+  select session_id, ts_utc, a as t from iv2
+  union
+  select iv2.session_id, iv2.ts_utc, x.t
+  from iv2 cross join lateral (values
+    (iv2.started_at + make_interval(secs => 300 * (floor(extract(epoch from (iv2.a - iv2.started_at)) / 300) + 1))),
+    (iv2.started_at + make_interval(secs => 300 * (floor(extract(epoch from (iv2.a - iv2.started_at)) / 300) + 2))),
+    (iv2.peak_ts + make_interval(secs => 300 * (floor(extract(epoch from (iv2.a - iv2.peak_ts)) / 300) + 1))),
+    (iv2.peak_ts + make_interval(secs => 300 * (floor(extract(epoch from (iv2.a - iv2.peak_ts)) / 300) + 2)))
+  ) x(t)
+  where x.t > iv2.a and x.t < iv2.b
+  union
+  select iv2.session_id, iv2.ts_utc, x.t
+  from iv2 join rs on rs.session_id = iv2.session_id and rs.r > iv2.a - interval '10 minutes' and rs.r < iv2.b
+  cross join lateral (values (rs.r), (rs.r + interval '10 minutes')) x(t)
+  where x.t > iv2.a and x.t < iv2.b
+),
+sub as (
+  select iv2.session_id, iv2.login, iv2.started_at, iv2.ts_utc, iv2.viewer_count, iv2.peak_ts,
+         c.t as a,
+         coalesce(lead(c.t) over (partition by c.session_id, c.ts_utc order by c.t), iv2.b) as b
+  from cuts c join iv2 using (session_id, ts_utc)
+),
+mids as (
+  select sub.*, sub.a + (sub.b - sub.a) / 2 as mid from sub where sub.b > sub.a
+),
 ivf as (
-  select iv.*, extract(epoch from (iv.b - iv.a)) as dt,
-         case when iv.minutes_from_start is null then null else floor(iv.minutes_from_start / 5) * 5 end as min5,
-         case when iv.viewer_count < 5 then '0-4' when iv.viewer_count < 10 then '5-9' when iv.viewer_count < 20 then '10-19'
-              when iv.viewer_count < 50 then '20-49' when iv.viewer_count < 100 then '50-99' when iv.viewer_count < 300 then '100-299' else '300+' end as band,
-         floor(extract(epoch from (iv.ts_utc - pk.peak_ts)) / 300) * 5 as peak5,
-         exists (select 1 from twitch_raid_history rh where rh.to_broadcaster_login = iv.login and rh.success
-                 and rh.executed_at <= iv.ts_utc and rh.executed_at > iv.ts_utc - interval '10 minutes') as in_raid
-  from iv join pk using (session_id)
-  where iv.b > iv.a
+  select m.session_id, m.login, m.started_at, m.a, m.b, m.viewer_count,
+         extract(epoch from (m.b - m.a)) as dt,
+         floor(extract(epoch from (m.mid - m.started_at)) / 300) * 5 as min5,
+         case when m.viewer_count < 5 then '0-4' when m.viewer_count < 10 then '5-9' when m.viewer_count < 20 then '10-19'
+              when m.viewer_count < 50 then '20-49' when m.viewer_count < 100 then '50-99' when m.viewer_count < 300 then '100-299' else '300+' end as band,
+         floor(extract(epoch from (m.mid - m.peak_ts)) / 300) * 5 as peak5,
+         exists (select 1 from rs where rs.session_id = m.session_id and rs.r <= m.mid and rs.r > m.mid - interval '10 minutes') as in_raid
+  from mids m
 ),
 fol as (
   select f.id as follow_id, lower(f.streamer_login) as login, f.followed_at

@@ -7,31 +7,31 @@ WITH s AS (
          t.stream_title, t.notification_text, t.game_name, t.had_deadlock_in_session,
          t.language, t.tags, t.twitch_user_id
   FROM twitch_stream_sessions t
-  WHERE t.started_at >= '2026-01-09' AND t.started_at < '2026-10-26'
+  WHERE t.started_at >= '2026-01-09' AND t.started_at < '2026-10-25 17:28:00+00'
 ),
 cv AS (
   SELECT v.session_id,
-         min(v.minutes_from_start) AS first_min,
-         max(v.minutes_from_start) AS last_min,
-         avg(v.viewer_count) FILTER (WHERE v.minutes_from_start = 0)  AS v0,
-         avg(v.viewer_count) FILTER (WHERE v.minutes_from_start = 5)  AS v5,
-         avg(v.viewer_count) FILTER (WHERE v.minutes_from_start = 10) AS v10,
-         avg(v.viewer_count) FILTER (WHERE v.minutes_from_start = 15) AS v15,
-         avg(v.viewer_count) FILTER (WHERE v.minutes_from_start = 30) AS v30,
+         min(v.mi) AS first_min,
+         max(v.mi) AS last_min,
+         avg(v.viewer_count) FILTER (WHERE v.mi = 0)  AS v0,
+         avg(v.viewer_count) FILTER (WHERE v.mi = 5)  AS v5,
+         avg(v.viewer_count) FILTER (WHERE v.mi = 10) AS v10,
+         avg(v.viewer_count) FILTER (WHERE v.mi = 15) AS v15,
+         avg(v.viewer_count) FILTER (WHERE v.mi = 30) AS v30,
          max(v.viewer_count) AS curve_max
-  FROM twitch_session_viewers v
+  FROM (SELECT sv.session_id, sv.ts_utc, sv.viewer_count, floor(extract(epoch FROM (sv.ts_utc - ss.started_at)) / 60)::int AS mi FROM twitch_session_viewers sv JOIN twitch_stream_sessions ss ON ss.id = sv.session_id) v
   JOIN s ON s.id = v.session_id
-  WHERE v.ts_utc >= '2026-01-09' AND v.ts_utc < '2026-10-26'
+  WHERE v.ts_utc >= '2026-01-09' AND v.ts_utc < '2026-10-25 17:28:00+00'
   GROUP BY v.session_id
 ),
 tl AS (
   SELECT v.session_id,
-         avg(v.viewer_count) FILTER (WHERE v.minutes_from_start > (cv.last_min - 30)) AS last30_avg,
-         avg(v.viewer_count) FILTER (WHERE v.minutes_from_start > (cv.last_min - 10)) AS last10_avg,
-         avg(v.viewer_count) FILTER (WHERE v.minutes_from_start BETWEEN 15 AND 45)     AS mid_avg
-  FROM twitch_session_viewers v
+         avg(v.viewer_count) FILTER (WHERE v.mi > (cv.last_min - 30)) AS last30_avg,
+         avg(v.viewer_count) FILTER (WHERE v.mi > (cv.last_min - 10)) AS last10_avg,
+         avg(v.viewer_count) FILTER (WHERE v.mi BETWEEN 15 AND 45)     AS mid_avg
+  FROM (SELECT sv.session_id, sv.ts_utc, sv.viewer_count, floor(extract(epoch FROM (sv.ts_utc - ss.started_at)) / 60)::int AS mi FROM twitch_session_viewers sv JOIN twitch_stream_sessions ss ON ss.id = sv.session_id) v
   JOIN cv ON cv.session_id = v.session_id
-  WHERE v.ts_utc >= '2026-01-09' AND v.ts_utc < '2026-10-26'
+  WHERE v.ts_utc >= '2026-01-09' AND v.ts_utc < '2026-10-25 17:28:00+00'
   GROUP BY v.session_id
 ),
 ch AS (
@@ -107,16 +107,31 @@ SELECT t.id AS session_id,
 FROM twitch_stream_sessions t
 LEFT JOIN twitch_chat_messages c
   ON c.session_id = t.id AND c.message_ts >= t.started_at AND c.message_ts >= '2026-01-31'
-WHERE t.started_at >= '2026-02-01' AND t.started_at < '2026-10-26'
+WHERE t.started_at >= '2026-02-01' AND t.started_at < '2026-10-25 17:28:00+00'
 GROUP BY t.id, t.started_at, t.streamer_login
 ;
 
 WITH f AS (
-  SELECT v.session_id, min(v.minutes_from_start) AS first_min
-  FROM twitch_session_viewers v
+  SELECT v.session_id, min(v.mi) AS first_min
+  FROM (SELECT sv.session_id, sv.ts_utc, sv.viewer_count, floor(extract(epoch FROM (sv.ts_utc - ss.started_at)) / 60)::int AS mi FROM twitch_session_viewers sv JOIN twitch_stream_sessions ss ON ss.id = sv.session_id) v
   JOIN twitch_stream_sessions t ON t.id = v.session_id
-  WHERE t.started_at >= '2026-08-01' AND t.started_at < '2026-10-26'
-    AND v.ts_utc >= '2026-08-01' AND v.ts_utc < '2026-10-26'
+  WHERE t.started_at >= '2026-08-01' AND t.started_at < '2026-10-25 17:28:00+00'
+    AND v.ts_utc >= '2026-08-01' AND v.ts_utc < '2026-10-25 17:28:00+00'
+  GROUP BY v.session_id
+)
+SELECT count(*) AS sessions_with_curve,
+       round(100.0*avg((first_min > 5)::int),1) AS pct_first_after_5,
+       round(100.0*avg((first_min > 15)::int),1) AS pct_first_after_15,
+       round(100.0*avg((first_min <= 5)::int),1) AS pct_first_le_5
+FROM f
+;
+
+WITH f AS (
+  SELECT v.session_id, min(v.mi) AS first_min
+  FROM (SELECT sv.session_id, sv.ts_utc, sv.viewer_count, floor(extract(epoch FROM (sv.ts_utc - ss.started_at)) / 60)::int AS mi FROM twitch_session_viewers sv JOIN twitch_stream_sessions ss ON ss.id = sv.session_id) v
+  JOIN twitch_stream_sessions t ON t.id = v.session_id
+  WHERE t.started_at >= '2026-01-01' AND t.started_at < '2026-10-25 17:28:00+00'
+    AND v.ts_utc >= '2026-01-01' AND v.ts_utc < '2026-10-25 17:28:00+00'
   GROUP BY v.session_id
 )
 SELECT count(*) AS sessions_with_curve,
@@ -128,18 +143,18 @@ FROM f
 
 WITH s AS (
   SELECT t.id, t.started_at, t.ended_at, t.streamer_login FROM twitch_stream_sessions t
-  WHERE t.started_at >= '2026-01-09' AND t.started_at < '2026-10-26'
+  WHERE t.started_at >= '2026-01-09' AND t.started_at < '2026-10-25 17:28:00+00'
 ),
 cm AS (
-  SELECT v.session_id, max(v.viewer_count) AS curve_max, max(v.minutes_from_start) AS last_min
-  FROM twitch_session_viewers v JOIN s ON s.id = v.session_id
-  WHERE v.ts_utc >= '2026-01-09' AND v.ts_utc < '2026-10-26'
+  SELECT v.session_id, max(v.viewer_count) AS curve_max, max(v.mi) AS last_min
+  FROM (SELECT sv.session_id, sv.ts_utc, sv.viewer_count, floor(extract(epoch FROM (sv.ts_utc - ss.started_at)) / 60)::int AS mi FROM twitch_session_viewers sv JOIN twitch_stream_sessions ss ON ss.id = sv.session_id) v JOIN s ON s.id = v.session_id
+  WHERE v.ts_utc >= '2026-01-09' AND v.ts_utc < '2026-10-25 17:28:00+00'
   GROUP BY v.session_id
 ),
 hp AS (
-  SELECT v.session_id, max(v.minutes_from_start) AS half_last_min
-  FROM twitch_session_viewers v JOIN cm ON cm.session_id = v.session_id
-  WHERE v.ts_utc >= '2026-01-09' AND v.ts_utc < '2026-10-26'
+  SELECT v.session_id, max(v.mi) AS half_last_min
+  FROM (SELECT sv.session_id, sv.ts_utc, sv.viewer_count, floor(extract(epoch FROM (sv.ts_utc - ss.started_at)) / 60)::int AS mi FROM twitch_session_viewers sv JOIN twitch_stream_sessions ss ON ss.id = sv.session_id) v JOIN cm ON cm.session_id = v.session_id
+  WHERE v.ts_utc >= '2026-01-09' AND v.ts_utc < '2026-10-25 17:28:00+00'
     AND v.viewer_count >= 0.5 * cm.curve_max
   GROUP BY v.session_id
 ),
@@ -161,21 +176,21 @@ ORDER BY s.id
 
 WITH s AS (
   SELECT t.id, t.ended_at, t.started_at FROM twitch_stream_sessions t
-  WHERE t.started_at >= '2026-01-09' AND t.started_at < '2026-10-26' AND t.ended_at IS NOT NULL
+  WHERE t.started_at >= '2026-01-09' AND t.started_at < '2026-10-25 17:28:00+00' AND t.ended_at IS NOT NULL
 ),
 cm AS (
-  SELECT v.session_id, max(v.minutes_from_start) AS last_min, max(v.viewer_count) AS curve_max
-  FROM twitch_session_viewers v JOIN s ON s.id = v.session_id
-  WHERE v.ts_utc >= '2026-01-09' AND v.ts_utc < '2026-10-26'
+  SELECT v.session_id, max(v.mi) AS last_min, max(v.viewer_count) AS curve_max
+  FROM (SELECT sv.session_id, sv.ts_utc, sv.viewer_count, floor(extract(epoch FROM (sv.ts_utc - ss.started_at)) / 60)::int AS mi FROM twitch_session_viewers sv JOIN twitch_stream_sessions ss ON ss.id = sv.session_id) v JOIN s ON s.id = v.session_id
+  WHERE v.ts_utc >= '2026-01-09' AND v.ts_utc < '2026-10-25 17:28:00+00'
   GROUP BY v.session_id
 )
 SELECT v.session_id, cm.curve_max, cm.last_min,
-       floor((cm.last_min - v.minutes_from_start) / 5.0)::int AS bin_from_end,
+       floor((cm.last_min - v.mi) / 5.0)::int AS bin_from_end,
        avg(v.viewer_count) AS avg_vc, count(*) AS n
-FROM twitch_session_viewers v
+FROM (SELECT sv.session_id, sv.ts_utc, sv.viewer_count, floor(extract(epoch FROM (sv.ts_utc - ss.started_at)) / 60)::int AS mi FROM twitch_session_viewers sv JOIN twitch_stream_sessions ss ON ss.id = sv.session_id) v
 JOIN cm ON cm.session_id = v.session_id
-WHERE v.ts_utc >= '2026-01-09' AND v.ts_utc < '2026-10-26'
-  AND cm.last_min - v.minutes_from_start <= 60
+WHERE v.ts_utc >= '2026-01-09' AND v.ts_utc < '2026-10-25 17:28:00+00'
+  AND cm.last_min - v.mi <= 60
   AND cm.last_min >= 60
 GROUP BY v.session_id, cm.curve_max, cm.last_min, bin_from_end
 ORDER BY v.session_id, bin_from_end
@@ -185,7 +200,7 @@ WITH g AS (
   SELECT x.id AS tid, x.exp_session_id, x.streamer, x.from_game, x.to_game, x.viewer_count AS vc_at_switch,
          x.ts_utc::timestamptz AS ts
   FROM exp_game_transitions x
-  WHERE x.ts_utc::timestamptz >= '2026-03-01' AND x.ts_utc::timestamptz < '2026-10-26'
+  WHERE x.ts_utc::timestamptz >= '2026-03-01' AND x.ts_utc::timestamptz < '2026-10-25 17:28:00+00'
 ),
 gs AS (
   SELECT g.*, t.id AS session_id, t.started_at AS s_start, t.ended_at AS s_end
@@ -216,7 +231,7 @@ WITH g AS (
   FROM exp_game_transitions x
   JOIN exp_sessions e ON e.id = x.exp_session_id
   JOIN twitch_stream_sessions t ON t.stream_id = e.stream_id
-  WHERE x.ts_utc::timestamptz >= '2026-03-01' AND x.ts_utc::timestamptz < '2026-10-26'
+  WHERE x.ts_utc::timestamptz >= '2026-03-01' AND x.ts_utc::timestamptz < '2026-10-25 17:28:00+00'
     AND t.started_at >= '2026-03-01'
     AND x.ts_utc::timestamptz >= t.started_at AND x.ts_utc::timestamptz <= coalesce(t.ended_at, x.ts_utc::timestamptz)
 )
@@ -250,6 +265,6 @@ SELECT t.id AS session_id, t.streamer_login, t.started_at, e.game_name AS exp_ga
 FROM twitch_stream_sessions t
 JOIN exp_sessions e ON e.stream_id = t.stream_id
 LEFT JOIN tr ON tr.exp_session_id = e.id
-WHERE t.started_at >= '2026-03-01' AND t.started_at < '2026-10-26'
+WHERE t.started_at >= '2026-03-01' AND t.started_at < '2026-10-25 17:28:00+00'
 ;
 

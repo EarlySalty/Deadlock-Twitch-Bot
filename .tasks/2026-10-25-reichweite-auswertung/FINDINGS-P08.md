@@ -28,7 +28,7 @@ Bot-like logins: 77 logins seen in 30+ distinct channels in twitch_session_chatt
 ## Method
 
 - Follow to session mapping: session with started_at <= followed_at <= coalesce(ended_at, started_at + duration); ties broken by latest start, then shortest duration (29 follows overlapped two sessions).
-- Exposure (q2f in `queries-P08.sql`): each viewer sample is an interval [a, b) with a = max(sample time, t0) and b = the earliest of the next sample, the session end, 300 s later and the cutoff 2026-10-25 17:28 UTC. Samples inside the follow collection gap (2026-03-15 18:00 to 2026-06-16 16:45 UTC) are dropped. Each interval carries its stream minute (5-minute bin of the sample), viewer band, offset to the session peak and raid flag.
+- Exposure (q2f in `queries-P08.sql`): each viewer sample is an interval [a, b) with a = max(sample time, t0) and b = the earliest of the next sample, the session end, 300 s later and the cutoff 2026-10-25 17:28 UTC. Samples inside the follow collection gap (2026-03-15 18:00 to 2026-06-16 16:45 UTC) are dropped. Each interval is split at every 5-minute boundary of the session clock (from started_at), at every 5-minute boundary of the offset to the session peak, and at the start and end of each 10-minute raid window. Each piece takes its stream minute bin, peak bin and raid flag at its own midpoint and the viewer band of its sample. A follow takes the attributes of the piece it falls into, so follows and exposure share the same bins.
 - Every rate takes numerator and denominator from the same intervals: a follow counts when it falls inside an interval [a, b) and takes that interval's attributes (aligned set, 1,252 follows; 3 follows inside two overlapping sessions count once, for the later-starting session). Conversion = follows / viewer-hours.
 - Tracked exposure starts at each streamer's first follow event (t0), so only follow-tracked streamers count. Every session that ends at or after t0 is included, so the session holding the first follow counts from t0 on. Peak and raid exposure use the same rule.
 - Within-streamer comparisons: for each streamer, feature sessions vs other sessions. Reported: median of per-streamer differences, share of streamers positive, number of streamers and sessions. Size classes 0-4, 5-19, 20-99, 100+ average viewers.
@@ -42,22 +42,21 @@ Bot-like logins: 77 logins seen in 30+ distinct channels in twitch_session_chatt
 
 ### Part 1: follows and live sessions
 
-Aligned set: 1,252 follows, 44,633 tracked viewer-hours. Exposure and follows by stream minute (5-minute bin of the sample interval; n = follows, 1 follow has no minute):
+Aligned set: 1,252 follows, 44,633 tracked viewer-hours. Exposure and follows by stream minute (session clock, 5-minute bins on both sides; n = follows):
 
 | Stream minute | n | Viewer-hours | per 100 vh |
 |---|---|---|---|
-| 0-10 | 95 | 1,864 | 5.1 |
-| 10-20 | 66 | 828 | 8.0 |
-| 20-30 | 55 | 983 | 5.6 |
-| 30-45 | 85 | 1,713 | 5.0 |
-| 45-60 | 78 | 1,871 | 4.2 |
-| 60-90 | 115 | 3,980 | 2.9 |
-| 90-120 | 105 | 3,895 | 2.7 |
-| 120-180 | 172 | 7,189 | 2.4 |
-| 180-240 | 124 | 5,852 | 2.1 |
-| 240-360 | 124 | 7,751 | 1.6 |
-| 360+ | 232 | 8,697 | 2.7 |
-| unknown | 1 | 10 | n/a |
+| 0-10 | 60 | 483 | 12.4 |
+| 10-20 | 63 | 866 | 7.3 |
+| 20-30 | 57 | 1,026 | 5.5 |
+| 30-45 | 88 | 1,787 | 4.9 |
+| 45-60 | 82 | 1,951 | 4.2 |
+| 60-90 | 121 | 4,142 | 2.9 |
+| 90-120 | 110 | 4,060 | 2.7 |
+| 120-180 | 182 | 7,481 | 2.4 |
+| 180-240 | 129 | 6,065 | 2.1 |
+| 240-360 | 125 | 7,931 | 1.6 |
+| 360+ | 235 | 8,842 | 2.7 |
 
 Viewer band of the interval holding the follow:
 
@@ -71,11 +70,12 @@ Viewer band of the interval holding the follow:
 | 100-299 | 1 | 672 | 0.15 |
 | 300+ | 0 | 721 | 0.0 |
 
-- Follow timing (aligned set): exact median 130.8 minutes into the stream; 7.3% in the first 15 minutes; 72.0% after minute 60. In the minute bins above, 872 of 1,251 (69.7%) fall from minute 60 on and 652 (52.1%) from minute 120 on; the bins use the start of the sample interval, so they sit slightly below the exact shares.
+- Follow timing (aligned set): exact median 130.8 minutes into the stream; 7.3% in the first 15 minutes; 72.0% after minute 60. In the minute bins above, 902 of 1,252 (72.0%) fall from minute 60 on and 671 (53.6%) from minute 120 on.
+- Per viewer-hour the first minutes convert best: 12.4 follows per 100 vh in minutes 0 to 10 and 7.3 in minutes 10 to 20, against 2.1 to 2.9 from minute 60 on. Few viewers are present early (483 vh in the first 10 minutes), so most follows still come later. The early rate rests on 60 follows and only on sessions sampled from the start (late sampling, see P11).
 - 419 of 1,252 aligned follows (33.5%) fall in the 0-4 viewer band. Mapped set (1,278, nearest sample): median 7.0 viewers at follow.
 - Follows with an incoming raid earlier in the same session (mapped set): 264 of 1,278 (20.7%).
-- Raid window (10 minutes after an incoming raid, aligned set): 62 follows (5.0%), 806 viewer-hours, 7.7 per 100 vh, against 2.7 per 100 vh outside (1,190 follows, 43,827 vh).
-- Peak timing (ex-post sample maximum, offset of the interval start to the peak sample, aligned set): bin [-5, 0) (0 to 5 minutes before the peak): 107 follows, 910 vh, 11.8 per 100 vh; bin [0, 5): 70 follows, 1,446 vh, 4.8 per 100 vh; bin [-10, -5): 41 follows, 822 vh, 5.0 per 100 vh; bin [5, 10): 28 follows, 1,105 vh, 2.5 per 100 vh. 177 of 1,252 (14.1%) fall in the two bins around the peak. Mapped set: median follow 3.6 minutes before the session peak.
+- Raid window (10 minutes after an incoming raid, aligned set): 63 follows (5.0%), 802 viewer-hours, 7.9 per 100 vh, against 2.7 per 100 vh outside (1,189 follows, 43,831 vh).
+- Peak timing (ex-post sample maximum, offset to the peak sample at the piece midpoint, aligned set): bin [-5, 0) (0 to 5 minutes before the peak): 108 follows, 937 vh, 11.5 per 100 vh; bin [0, 5): 69 follows, 1,413 vh, 4.9 per 100 vh; bin [-10, -5): 42 follows, 816 vh, 5.1 per 100 vh; bin [5, 10): 28 follows, 1,105 vh, 2.5 per 100 vh. 177 of 1,252 (14.1%) fall in the two bins around the peak. Mapped set: median follow 3.6 minutes before the session peak.
 - Offline follows (no session covers the time): 214 (14.3% of 1,492). In a session but outside any sampled interval: 26. Both are excluded from all rates.
 
 ### Part 2: follow and chat relation
@@ -193,7 +193,7 @@ Late-sampling check (orchestrator expected about 25% after minute 15): not repro
 
 1. (Medium confidence) Greet and reply to first-time chatters within minutes. Follow within 60 minutes: 9.3% after a broadcaster reply within 3 minutes vs 3.4% without (n 680 vs 10,094). Association only; active streams get more replies.
    Orchestrator note: downgraded to an association. V7 in `VERIFY-ORCHESTRATOR.md` respects the order of message, reply and follow: most quick follows in the reply arm come before the broadcaster message (38 of 52), so the raw gap is largely the alert thank-you. Measured from the reply on, a smaller lift remains: +2.3 pp within 60 minutes for a first message in a session (CI -0.3 to +4.8) and +12.1 pp for a first message ever in the channel (CI +3.1 to +18.1, 78 replies); the placebo is null. Answering a first line soon is a likely-helpful habit, not a measured lever.
-2. (Medium confidence) Use incoming raids as a conversion moment. Follows in the 10 minutes after a raid: 7.7 per 100 vh vs 2.7 outside (62 follows, 806 vh). Raids overlap with peaks, so this is not isolated.
+2. (Medium confidence) Use incoming raids as a conversion moment. Follows in the 10 minutes after a raid: 7.9 per 100 vh vs 2.7 outside (63 follows, 802 vh). Raids overlap with peaks, so this is not isolated.
 3. (Medium confidence) Chat activity and raids go with more follower gains in 5 to 19 viewer streams (raid +0.25, 21 streamers, 76% positive; high chat activation +0.25, 35 streamers, 74% positive). Weak in 0 to 4 viewer streams (chat +0.07, 54% positive).
 4. (Medium confidence) Silent viewers rarely convert on their own: 10.1 follows per 1,000 silent presences vs 81.2 for chatters. Bring viewers into chat with direct questions; chat is the step that precedes follows.
 5. (Low confidence) Gifted recipients rarely chat (14.5% within 30 days, n 166 from 8 streamers) vs new paid subscribers (75.8%, n 132 from 32 streamers). A personal welcome in chat may help; small cohort.
@@ -203,13 +203,14 @@ Not actionable (null or unsupported): start time bands (median diff 0, 32 to 36%
 
 ## Caveats and dead ends
 
+- Session clock: the stored `twitch_session_viewers.minutes_from_start` is stuck at 0 for 314 sessions from 2026-06-22 to 2026-07-03, a collector fault. All stream minutes here come from `ts_utc - started_at`. An earlier version binned by the stored field at the sample start and showed 1,864 vh and 5.1 per 100 vh in minutes 0 to 10 (now 483 vh and 12.4).
 - Follow collection gap: no follow events between 2026-03-15 17:56:29 and 2026-06-16 16:45:01 UTC, while chat is still recorded (April 6,229 and May 6,333 messages from 27 and 25 streamers, against 32,497 in March). Treated as a gap, not zero conversion. Exposure from 2026-03-15 18:00 to 2026-06-16 16:45 UTC is dropped from every rate, and so is every first message or session presence whose follow window touches that span, so March and June are partial months. A viewer who followed inside the gap has no follow row and counts as not yet following afterwards.
 - twitch_follow_events.id is not unique (1,476 distinct ids of 1,492 rows). All joins keyed on (streamer, follower, followed_at) with row_number() keys.
 - Raw follow rows since 2026-01-01: 1,494. The analysis set is 1,492; the 2-row difference was not investigated.
-- Rate consistency: the minute, band, raid, peak and monthly tables come from one set of exposure intervals and sum to the same 1,252 follows and 44,633 viewer-hours (up to rounding; the minute table holds 10 vh and 1 follow without a minute). Earlier versions of this file combined the 1,278 mapped follows with exposure that included April, May and the partial months around the gap; the figures here replace them.
+- Rate consistency: the minute, band, raid, peak and monthly tables come from one set of exposure intervals and sum to the same 1,252 follows and 44,633 viewer-hours (up to rounding). Earlier versions of this file combined the 1,278 mapped follows with exposure that included April, May and the partial months around the gap; the figures here replace them.
 - Tracked exposure starts at each streamer's first follow event (t0), so that first follow is counted in the numerator with exposure starting at it. Excluding the first follow per streamer: 2.70 instead of 2.81 per 100 vh (45 of 63 first follows fall inside an exposure interval).
-- Peak timing is an ex-post sample maximum, so follows near the peak are partly selection, and the 5-minute peak bins use the interval start. Raids co-occur with peaks; the raid effect is not separated from the peak.
-- Per-band rates above 50 viewers rest on 17 follows (50-99) and 1 follow (100-299). Poisson relative SE is about 13% at 62 follows per bucket and larger for smaller buckets.
+- Peak timing is an ex-post sample maximum, so follows near the peak are partly selection. Raids co-occur with peaks; the raid effect is not separated from the peak.
+- Per-band rates above 50 viewers rest on 17 follows (50-99) and 1 follow (100-299). Poisson relative SE is about 24% at 17 follows and 100% at 1 follow.
 - Top 5 streamers hold 48.6% of follows.
 - Session chat fields in twitch_stream_sessions are zero from March to May. Per-session chat baselines from session features are unreliable: only 40.5% of sessions of 10 minutes or more have chat > 0. Activation uses the chat table instead.
 - Within-streamer gain comparisons are associations; good days and raid-worthy streams may cause both.
@@ -225,5 +226,5 @@ Not actionable (null or unsupported): start time bands (median diff 0, 32 to 36%
 ## Reproduction
 
 - SQL: queries-P08.sql in this folder (17 statements, then the follow gap query and q2f). q2f, the aligned exposure query, is the source of every rate in Part 1 and Part 3 and supersedes the two earlier exposure statements. Run it once per month via `/tmp/tq560.sh --csv -v m1=<month start> -v m2=<next month start> -v cut='2026-10-25 17:28:00+00' -v g1='2026-03-15 18:00:00+00' -v g2='2026-06-16 16:45:00+00'`; the rest via /tmp/tq.sh, read-only, 180 s timeout.
-- Post-processing: python3 -I stdlib scripts in /tmp/reichweite-scratch/P08/ (a1c_timing_tracked.py, a2b_peak_raid.py, a3b_lurker_nobots.py, a4_conversion.py, a5_conversion2.py, a6_titles_perhour.py, f1_numbers.py, f2b_numbers.py, f3_numbers.py, f4_cp_covered.py, f5_sub_numbers.py, f6_checks.py, and p08_aligned.py for the aligned rates: `python3 -I p08_aligned.py aligned3_`) on the CSV extracts in the same folder. Part 2 first-chat rates and the lurker presence rates come from the committed `p08-chat-follow-rates.py`: `python3 -I p08-chat-follow-rates.py <statement 10> <statement 13> <statement 14> <statement 12> <statement 6>` (CSV exports of those statements; statement 10 applies the gap rule in SQL, the script applies it to the presence windows).
+- Post-processing: python3 -I stdlib scripts in /tmp/reichweite-scratch/P08/ (a1c_timing_tracked.py, a2b_peak_raid.py, a3b_lurker_nobots.py, a4_conversion.py, a5_conversion2.py, a6_titles_perhour.py, f1_numbers.py, f2b_numbers.py, f3_numbers.py, f4_cp_covered.py, f5_sub_numbers.py, f6_checks.py, ) on the CSV extracts in the same folder. The aligned rates come from the committed `p08-aligned.py`: `python3 -I p08-aligned.py <export dir> aligned5_` reads the monthly q2f exports `aligned5_<YYYY-MM-DD>.csv` and `follows_mapped.csv` (statement 1). Part 2 first-chat rates and the lurker presence rates come from the committed `p08-chat-follow-rates.py`: `python3 -I p08-chat-follow-rates.py <statement 10> <statement 13> <statement 14> <statement 12> <statement 6>` (CSV exports of those statements; statement 10 applies the gap rule in SQL, the script applies it to the presence windows).
 - Scratch CSVs are not committed (they hold chatter and streamer identifiers).

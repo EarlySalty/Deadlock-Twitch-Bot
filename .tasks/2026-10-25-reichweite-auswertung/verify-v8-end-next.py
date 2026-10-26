@@ -63,7 +63,7 @@ def run(label, sub, ycol, xcols):
         b, _ = fe_fit(s2, ycol, xcols)
         bs.append(b[0])
     bs.sort()
-    print(f"{label}: n {sum(len(by[k]) for k in keys)} streamers {len(keys)} coef hi_endpeak {beta[0]:+.3f} CI {bs[7]:+.3f} to {bs[292]:+.3f}")
+    print(f"{label}: n {sum(len(by[k]) for k in keys)} streamers {len(keys)} coef {xcols[0]} {beta[0]:+.3f} CI {bs[7]:+.3f} to {bs[292]:+.3f}")
 
 med_ep = defaultdict(list)
 for r in rows:
@@ -73,6 +73,7 @@ for k, v in med_ep.items():
     med_ep[k] = v[len(v) // 2]
 for r in rows:
     r["hi"] = 1.0 if r["endpeak"] > med_ep[r["st"]] else 0.0
+    r["hi_avg"] = 1.0 if r["cur_avg_n"] > 1.0 else 0.0
     r["cur_avg_c"] = clip(r["cur_avg_n"])
     r["cur_start_c"] = clip(r["cur_start_n"])
     r["lvl3_c"] = clip(r["lvl3_n"])
@@ -88,3 +89,6 @@ run("Placebo: hi_endpeak vs PREVIOUS start, raw", pl, "prev_start_n", ["hi"])
 run("Placebo: hi_endpeak vs PREVIOUS start, + level3", pl, "prev_start_n", ["hi", "lvl3_c"])
 pop = [r for r in base if r["med"] >= 5]
 run("Pop (median >= 5), model C", pop, "next_start_n", ["hi", "cur_avg_c", "cur_start_c", "lvl3_c", "dur_h", "peak_c"])
+run("Strong broadcast: average above own median, raw", base, "next_start_n", ["hi_avg"])
+run("Strong broadcast: + current start, level3", base, "next_start_n", ["hi_avg", "cur_start_c", "lvl3_c"])
+run("Placebo: strong broadcast vs PREVIOUS start, raw", pl, "prev_start_n", ["hi_avg"])
