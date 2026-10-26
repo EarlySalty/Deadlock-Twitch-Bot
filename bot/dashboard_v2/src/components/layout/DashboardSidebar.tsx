@@ -19,6 +19,7 @@ import { useOnboarding } from '@/components/onboarding/onboardingState';
 import { currentPathname, isPublicTourPath, tourHref } from '@/publicTour';
 import { FeedbackBadge } from '@/components/feedback/FeedbackBadge';
 import { useT } from '@/context/LanguageContext';
+import { LanguageSwitch } from '@/components/layout/LanguageSwitch';
 import {
   BarChart3,
   BookOpen,
@@ -199,6 +200,11 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
               {planName}
             </div>
           </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">{t('Sprache')}</span>
+          <LanguageSwitch />
         </div>
 
         {compactNavigation && <button
