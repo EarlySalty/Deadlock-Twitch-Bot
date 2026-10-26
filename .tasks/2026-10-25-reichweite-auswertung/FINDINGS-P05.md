@@ -35,7 +35,7 @@ Window: 2026-07-01 to 2026-10-25 for all session-level analyses. Lurker rows exi
 | First-write events with session grid | Empty-room base | 2,116 events; 9,812 sessions with grid | not counted |
 | Category chat, raw messages, hour level | Category check | 17 days; 287,339 channel-hours (avg > 0, at least 30 live minutes); 32,099 channels; 190,173 channel-hours with any chat | 32,099 channels |
 
-Bot list: 58 logins (57 user IDs) seen in 30 or more channels since 2026-07-01. Identifiers are kept only in scratch. Bots account for 57,800 of 366,805 viewer messages (15.8%) and 13.6% of question-labelled messages in the first count.
+Bot list: 58 logins (57 user IDs) seen in 30 or more channels since 2026-07-01. Identifiers are kept only in scratch. Bots account for 57,800 of 366,805 viewer messages (15.8%) and 16.9% of question-labelled messages in fully labelled sessions (4,092 of 24,194).
 
 Monthly lurker coverage (raw, not bot-adjusted, broadcaster excluded):
 
@@ -107,7 +107,7 @@ Conversion (bot-excluded):
 | Paired change in viewer msgs per minute (first-write session minus own earlier lurker sessions, median) | 2,151 | +0.200 (76% positive) | +0.009 (52% positive; 8,968 viewers) |
 | Same, with the viewer's own first message removed | 2,151 | +0.152 (70.5% positive) | not applicable |
 | Paired change in log average viewers | 2,149 | +0.032 (53% positive) | +0.016 |
-| Paired change in question share | 1,663 | +0.007 (55% positive) | +0.000 |
+| Paired change in question share (fully labelled sessions) | 982 | +0.010 (56% positive) | +0.010 (2,718 viewers) |
 | Paired change in command share | 1,663 | +0.000 (39% positive) | +0.000 |
 
 - Share of converting viewers who write within one observed lurk day: 0.734 (first run with bots: 0.702).
@@ -129,8 +129,8 @@ Median per-streamer difference in chatters per avg viewer (base 5,929 sessions, 
 |---|---|---|---|---|
 | Broadcaster chatted in own chat | 110 | 988 / 1,988 | +0.418 | 0.84 |
 | Any command message | 86 | 791 / 1,296 | +0.331 | 0.81 |
-| Viewer question share >= 0.05 | 147 | 1,744 / 958 | +0.268 | 0.80 |
-| Viewer question share >= 0.10 | 151 | 1,193 / 1,579 | +0.216 | 0.71 |
+| Viewer question share >= 0.05 (fully labelled sessions) | 86 | 1,135 / 600 | +0.288 | 0.84 |
+| Viewer question share >= 0.10 (fully labelled sessions) | 91 | 811 / 1,001 | +0.205 | 0.69 |
 | Command share >= 0.05 | 42 | 230 / 1,149 | -0.028 | 0.45 |
 | Title contains "?" | 54 | 271 / 1,511 | +0.000 | 0.43 |
 | Deadlock game | 30 | 946 / 553 | -0.035 | 0.43 |
@@ -142,13 +142,13 @@ Continuous checks (Spearman per streamer, at least 6 sessions):
 | Predictor | Streamers | Median rho (activation) | Share positive | Median rho (viewer msgs per viewer-hour) |
 |---|---|---|---|---|
 | Broadcaster messages per hour | 139 | +0.290 | 0.84 | +0.301 |
-| Viewer question share (sessions with >= 20 messages) | 76 | +0.039 | 0.53 | -0.053 |
+| Viewer question share (fully labelled sessions with >= 20 messages) | 52 | +0.048 | 0.56 | -0.112 |
 | Command share (sessions with >= 20 messages) | 67 | +0.105 | 0.58 | -0.067 |
 | Duration (hours) | 212 | +0.396 | 0.85 | +0.160 |
 | Local start hour | 211 | -0.038 | 0.45 | +0.020 |
 | Viewer chat speed (msgs per minute) | 212 | +0.800 | 0.97 | +0.980 |
 
-Viewer messages per viewer-hour, threshold splits: broadcaster chatted +1.647 (110 streamers, 87% positive); question share >= 0.05 +2.136 (147 streamers, 88% positive, but the continuous check is null); command share >= 0.05 -0.340 (42 streamers, 31% positive).
+Viewer messages per viewer-hour, threshold splits: broadcaster chatted +1.647 (110 streamers, 87% positive); question share >= 0.05 +2.073 (86 streamers, fully labelled sessions, 91% positive, but the continuous check is null); command share >= 0.05 -0.340 (42 streamers, 31% positive).
 
 ### 4. Category-wide check
 
@@ -184,7 +184,7 @@ Probability of at least one new chatter in a 5-minute slot, by viewer messages p
 - Silent slots cannot produce a new chatter by definition, so the 0 row is a construction, not a finding.
 - No sharp threshold: all non-zero bins up to 6.4 per minute sit between 0.30 and 0.40. The top bin (> 6.4) is small (620 slots).
 - Per-message yield falls as speed rises. Sparse rooms convert each message into a new chatter more often.
-- Lead-lag, next slot (within session): broadcaster message in slot t gives P(new in t+1) 0.158 (3,074 slots) vs 0.063 otherwise. Viewer question in slot t: 0.185 (17,003) vs 0.055. Viewer messages >= 3 in slot t: 0.172 (29,620) vs 0.049. No viewer messages in slot t: 0.043 (188,606) vs 0.153 (45,615).
+- Lead-lag, next slot (within session): broadcaster message in slot t gives P(new in t+1) 0.158 (3,074 slots) vs 0.063 otherwise. Viewer question in slot t, fully labelled sessions only: 0.172 (10,681) vs 0.050 (145,081). Viewer messages >= 3 in slot t: 0.172 (29,620) vs 0.049. No viewer messages in slot t: 0.043 (188,606) vs 0.153 (45,615).
 - Arrival pattern: 80.2% of slots follow a silent slot; 46.0% of new starts follow one. P(new start | silent previous slot) 0.042 (7,967 of 187,773) vs 0.152 after an active previous slot (7,066 of 46,448).
 
 ## Actionable tips
@@ -192,7 +192,7 @@ Probability of at least one new chatter in a 5-minute slot, by viewer messages p
 Orchestrator note: V10 in `VERIFY-ORCHESTRATOR.md` tests tips 1 to 3 within the same session on 5-minute slots, after dropping the first 10 minutes of tracked chat (tracked chat often starts late, P07, so untracked slots look silent and everyone present counts as a new chatter once tracking starts). A broadcaster chat message does not raise the chance of a new chatter in the next slot (+1.4 pp, CI -2.3 to +5.1; in silent slots -0.4 pp), and neither does an active chat (+0.0 pp, CI -0.7 to +0.6). The 4.2 % vs 15.2 % gap in tip 3 is mostly this artifact plus room level. Tips 1 and 3 do not hold as levers; tip 5 (no speed target) stands.
 
 1. Chat in your own channel. Evidence: within-streamer median +0.418 chatters per avg viewer when the broadcaster chatted (110 streamers, 988 vs 1,988 sessions, 84% positive). Dose-response rho +0.290 (139 streamers). Category: +0.080 per channel (1,147 channels, 70% positive), strongest in 0-4 rooms (+0.241) and close to zero at 100+. Confidence: medium. Association only; streamers who chat are also more interactive in general.
-2. In small rooms, speak to individual viewers directly. Evidence: a viewer question in a 5-minute slot is followed by a new chatter in the next slot 18.5% of the time vs 5.5% otherwise (17,003 slots). Confidence: medium for the lead-lag. Low for question share as a session-level lever: the threshold split is +0.268 (147 streamers), but the continuous check is null (rho +0.039, 53% positive).
+2. In small rooms, speak to individual viewers directly. Evidence: a viewer question in a 5-minute slot is followed by a new chatter in the next slot 17.2% of the time vs 5.0% otherwise (10,681 slots in fully labelled sessions). Confidence: medium for the lead-lag. Low for question share as a session-level lever: the threshold split is +0.288 (86 streamers), but the continuous check is null (rho +0.048, 56% positive).
 3. Fill silent stretches. Evidence: a new chatter appears in a slot 4.2% of the time after a silent slot vs 15.2% after an active one, and 80% of slots follow a silent slot. Confidence: medium (association, not an experiment).
 4. Expect lurkers to start writing when the room is already moving. Evidence: converting viewers' first-write sessions are +0.200 viewer messages per minute above their earlier sessions (control +0.009; 76% positive; n = 2,151). The effect remains +0.152 without the viewer's own message. Confidence: medium.
 5. Do not chase a chat-speed number. Evidence: P(new chatter) is flat at 0.30 to 0.40 across all non-zero speed bins up to 6.4 per minute (240,254 slots). Confidence: high for the flatness. The practical lever is steady message flow, not a target rate.
@@ -209,7 +209,8 @@ No tip is supported for: game category (Deadlock vs other, -0.035, 30 streamers)
 - Chat speed as a driver is tautological. Viewer messages per minute shares its numerator with the viewer-hour outcome (rho +0.980), and activation rises with chat volume (rho +0.800). Reported as an identity-level correlation, not a driver.
 - Duration as a driver is partly mechanical: distinct chatters accumulate over longer sessions (rho +0.396). Reported with this caveat only.
 - Command effect is mechanical at presence level (any command message +0.331), but the share threshold is null (-0.028). Dead end as a lever.
-- Question-share threshold is inconsistent between the split (+0.268) and the continuous check (rho +0.039). Not established.
+- Question-share threshold is inconsistent between the split (+0.288) and the continuous check (rho +0.048). Not established.
+- Label coverage: `twitch_chat_message_labels` covers every message before 2026-10-05 00:00 UTC and about two thirds after (63.5 to 78.0% per day from 2026-10-05 to 2026-10-25, `q_label_coverage.sql`). Unlabelled messages would count as "not Question", so every question-label result uses only sessions that end before 2026-10-05 (4,568 of 6,945 July to October sessions); for later sessions the label fields are treated as missing in both arms. An earlier version counted those sessions (split +0.268 on 147 streamers, rho +0.039 on 76, lead-lag 18.5% vs 5.5% on 17,003 slots, conversion question share +0.007 on 1,663 viewers, bot share 13.6%).
 - Category: the exact export is live and bot-excluded (254,860 hour rows in the export vs 253,877 in the first run). 153 hours' distinct viewers and 325 hours' messages changed from late-arriving data. Effect on size-class values is at most 0.01 (for example 0-4: 0.483 vs 0.488).
 - Category rollup is not usable for distinct chatters: rollup distinct sum 2,278,717 vs exact 1,756,584 (bot-excluded), while rollup message totals agree (11,525,478 vs 11,501,570). Use raw category_chat_messages only.
 - Velocity artifact: an earlier first-message anchor (first_message_at) created false windows. Fixed by anchoring on min(message_ts).

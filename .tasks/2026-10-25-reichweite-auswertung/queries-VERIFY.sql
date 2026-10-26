@@ -174,7 +174,7 @@ from a
 group by 1
 order by min(case when at_first then -1 else amin end);
 
--- V7 first messages with broadcaster message and follow delays, order-respecting landmark test in verify-v7-reply-follow.py
+-- V7 first messages (per broadcast: overlapping sessions of one streamer merged) with broadcaster message and follow delays, order-respecting landmark test in verify-v7-reply-follow.py
 with trk as (
   select lower(streamer_login) as login, min(followed_at) as t0
   from twitch_follow_events group by 1
@@ -192,13 +192,28 @@ firstall as (
     and m.message_ts >= '2026-01-31'
   group by 1, 2
 ),
+sess as (
+  select id, lower(streamer_login) as login, started_at,
+         coalesce(ended_at, started_at + make_interval(secs => coalesce(duration_seconds, 0))) as end_at
+  from twitch_stream_sessions
+),
+brk as (
+  select id, login, started_at,
+         case when started_at < max(end_at) over (partition by login order by started_at, id rows between unbounded preceding and 1 preceding)
+              then 0 else 1 end as b
+  from sess
+),
+bu as (
+  select id, login, sum(b) over (partition by login order by started_at, id) as unit from brk
+),
 fe as (
-  select distinct on (m.session_id, m.chatter_login)
+  select distinct on (bu.login, bu.unit, m.chatter_login)
          m.streamer_login, m.chatter_login, m.session_id, m.message_ts as first_ts
   from twitch_chat_messages m
+  join bu on bu.id = m.session_id
   where m.chatter_login is not null and m.chatter_login <> m.streamer_login
     and m.message_ts >= '2026-02-01' and not coalesce(m.is_command, false)
-  order by m.session_id, m.chatter_login, m.message_ts
+  order by bu.login, bu.unit, m.chatter_login, m.message_ts
 ),
 fol as (
   select lower(streamer_login) as login, follower_login, min(followed_at) as fol_at
@@ -221,8 +236,8 @@ ev as (
   left join fol on fol.login = fe.streamer_login and fol.follower_login = fe.chatter_login
   left join reach r on r.chatter_login = fe.chatter_login
   where fe.first_ts >= trk.t0
-    and fe.first_ts <= timestamptz '2026-10-25 17:28:00+00' - interval '24 hours'
-    and not (fe.first_ts > timestamptz '2026-03-15 18:00:00+00' - interval '24 hours' and fe.first_ts < timestamptz '2026-06-16 16:45:00+00')
+    and fe.first_ts <= timestamptz '2026-10-25 17:28:00+00' - interval '24 hours 3 minutes'
+    and not (fe.first_ts > timestamptz '2026-03-15 18:00:00+00' - interval '24 hours 3 minutes' and fe.first_ts < timestamptz '2026-06-16 16:45:00+00')
     and coalesce(r.n_ch, 0) < 10
     and (fol.fol_at is null or fol.fol_at >= fe.first_ts)
 )

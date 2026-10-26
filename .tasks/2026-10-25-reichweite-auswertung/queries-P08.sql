@@ -64,17 +64,28 @@ ss as (
   where coalesce(s.ended_at, s.started_at + make_interval(secs => s.duration_seconds)) >= t.t0
 ),
 raw as (
-  select sv.session_id, sv.ts_utc, floor(extract(epoch from (sv.ts_utc - ss.started_at)) / 60)::int as mi, sv.viewer_count, ss.t0, ss.end_at,
+  select sv.session_id, ss.login, ss.started_at, sv.ts_utc, floor(extract(epoch from (sv.ts_utc - ss.started_at)) / 60)::int as mi, sv.viewer_count, ss.t0, ss.end_at,
          lead(sv.ts_utc) over (partition by sv.session_id order by sv.ts_utc) as next_ts
   from twitch_session_viewers sv
   join ss on ss.id = sv.session_id
   where sv.ts_utc >= :'m1'::timestamptz - interval '2 days' and sv.ts_utc < :'m2'::timestamptz + interval '2 days'
 ),
+iv0 as (
+  select session_id, login, started_at, ts_utc, mi, viewer_count, greatest(ts_utc, t0) as a,
+         least(coalesce(next_ts, end_at), ts_utc + interval '300 seconds', end_at) as b
+  from raw
+  where ts_utc >= :'m1'::timestamptz - interval '2 days' and ts_utc < :'m2'::timestamptz
+),
+ivc as (
+  select iv0.*,
+         max(b) over (partition by login order by a, started_at, session_id, ts_utc rows between unbounded preceding and 1 preceding) as prev_b
+  from iv0 where b > a
+),
 w as (
   select session_id, ts_utc, mi, viewer_count,
-         greatest(extract(epoch from (least(coalesce(next_ts, end_at), ts_utc + interval '300 seconds', end_at) - greatest(ts_utc, t0))), 0) as dt
-  from raw
-  where ts_utc >= :'m1'::timestamptz and ts_utc < :'m2'::timestamptz
+         greatest(extract(epoch from (b - greatest(a, coalesce(prev_b, a)))), 0) as dt
+  from ivc
+  where ts_utc >= :'m1'::timestamptz
 )
 select floor(mi / 10) * 10 as stream_min_bucket,
        case when viewer_count < 5 then '0-4' when viewer_count < 10 then '5-9' when viewer_count < 20 then '10-19'
@@ -115,13 +126,13 @@ with trk as (
   select lower(streamer_login) as login, min(followed_at) as t0 from twitch_follow_events group by 1
 ),
 ss as (
-  select s.id, lower(s.streamer_login) as login, t.t0,
+  select s.id, lower(s.streamer_login) as login, s.started_at, t.t0,
          coalesce(s.ended_at, s.started_at + make_interval(secs => s.duration_seconds)) as end_at
   from twitch_stream_sessions s join trk t on t.login = lower(s.streamer_login)
   where coalesce(s.ended_at, s.started_at + make_interval(secs => s.duration_seconds)) >= t.t0
 ),
 raw as (
-  select sv.session_id, ss.login, sv.ts_utc, sv.viewer_count, ss.t0, ss.end_at,
+  select sv.session_id, ss.login, ss.started_at, sv.ts_utc, sv.viewer_count, ss.t0, ss.end_at,
          lead(sv.ts_utc) over (partition by sv.session_id order by sv.ts_utc) as next_ts
   from twitch_session_viewers sv
   join ss on ss.id = sv.session_id
@@ -130,11 +141,22 @@ raw as (
 pk as (
   select distinct on (session_id) session_id, ts_utc as peak_ts from raw order by session_id, viewer_count desc, ts_utc
 ),
+iv0 as (
+  select session_id, login, started_at, ts_utc, viewer_count, greatest(ts_utc, t0) as a,
+         least(coalesce(next_ts, end_at), ts_utc + interval '300 seconds', end_at) as b
+  from raw
+  where ts_utc >= :'m1'::timestamptz - interval '2 days' and ts_utc < :'m2'::timestamptz
+),
+ivc as (
+  select iv0.*,
+         max(b) over (partition by login order by a, started_at, session_id, ts_utc rows between unbounded preceding and 1 preceding) as prev_b
+  from iv0 where b > a
+),
 w as (
   select session_id, login, ts_utc, viewer_count,
-         greatest(extract(epoch from (least(coalesce(next_ts, end_at), ts_utc + interval '300 seconds', end_at) - greatest(ts_utc, t0))), 0) as dt
-  from raw
-  where ts_utc >= :'m1'::timestamptz and ts_utc < :'m2'::timestamptz
+         greatest(extract(epoch from (b - greatest(a, coalesce(prev_b, a)))), 0) as dt
+  from ivc
+  where ts_utc >= :'m1'::timestamptz
 ),
 flag as (
   select w.*, pk.peak_ts,
@@ -245,6 +267,7 @@ select channel_twitch_user_id, count(*) viewer_days, count(distinct twitch_user_
 from twitch_community_points_viewer_daily
 group by 1 order by 2 desc;
 
+\echo statements 10, 13 and 14 are per session; p08-chat-follow-rates.py merges overlapping sessions of one streamer into one broadcast over every session from statement 20 and keeps one first message and one presence per viewer and broadcast
 with trk as (
   select lower(streamer_login) as login, min(followed_at) as t0 from twitch_follow_events group by 1
 ),
@@ -419,14 +442,24 @@ raw as (
 pk as (
   select distinct on (session_id) session_id, ts_utc as peak_ts from raw order by session_id, viewer_count desc, ts_utc
 ),
-iv as (
+iv0 as (
   select session_id, login, started_at, ts_utc, viewer_count,
          greatest(ts_utc, t0) as a,
          least(coalesce(next_ts, end_at), ts_utc + interval '300 seconds', end_at, :'cut'::timestamptz,
                case when ts_utc < :'g1'::timestamptz then :'g1'::timestamptz else 'infinity'::timestamptz end) as b
   from raw
-  where ts_utc >= :'m1'::timestamptz and ts_utc < :'m2'::timestamptz and ts_utc < :'cut'::timestamptz
+  where ts_utc >= :'m1'::timestamptz - interval '2 days' and ts_utc < :'m2'::timestamptz and ts_utc < :'cut'::timestamptz
     and not (ts_utc >= :'g1'::timestamptz and ts_utc < :'g2'::timestamptz)
+),
+ivc as (
+  select iv0.*,
+         max(b) over (partition by login order by a, started_at, session_id, ts_utc rows between unbounded preceding and 1 preceding) as prev_b
+  from iv0 where b > a
+),
+iv as (
+  select session_id, login, started_at, ts_utc, viewer_count, greatest(a, coalesce(prev_b, a)) as a, b
+  from ivc
+  where ts_utc >= :'m1'::timestamptz
 ),
 iv2 as (
   select iv.*, pk.peak_ts from iv join pk using (session_id) where iv.b > iv.a
@@ -495,3 +528,10 @@ select 'fol', fol.follow_id, fol.followed_at, ivf.started_at,
        round((extract(epoch from (fol.followed_at - ivf.started_at)) / 60)::numeric, 2),
        ivf.min5, ivf.band, ivf.peak5, ivf.in_raid, null, null
 from fol join ivf on ivf.login = fol.login and fol.followed_at >= ivf.a and fol.followed_at < ivf.b;
+
+\echo statement 20: every session span since 2026-01-25, the broadcast merge in p08-chat-follow-rates.py (same end rule as V7)
+select s.id as session_id, lower(s.streamer_login) as login, s.started_at,
+  coalesce(s.ended_at, s.started_at + make_interval(secs => coalesce(s.duration_seconds, 0))) as end_at
+from twitch_stream_sessions s
+where s.started_at >= '2026-01-25'
+order by s.started_at;

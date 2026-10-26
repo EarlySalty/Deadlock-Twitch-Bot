@@ -62,6 +62,7 @@ Chat results therefore use 2026-08 onward only.
 - Switch metric: mean viewers in the 10 minutes after a transition minus the 10 minutes before, divided by the streamer median. Placebo: the same difference at pseudo-switches 30 minutes before and 30 minutes after, averaged. Per streamer: real minus placebo; across streamers: median, sign test, bootstrap CI. Transitions need at least 8 samples on each side.
 - Pure versus mixed: Deadlock-start sessions with no switch (pure) versus at least one switch (mixed).
 - Next start: next session's start viewers divided by the streamer median. Pairs with a gap of at most 48 hours and a next session first sampled at or before minute 5.
+- First-time chatters: message-writing first-time chatters per session from `chat-counts.sql` (rows with `messages >= 1` and `is_first_time_streamer`, logins seen in 30 or more channels excluded), joined by session id in place of `first_time_chatters` from `queries-P11.sql`; that session column also counts lurkers.
 - Confidence: high = many streamers, p below 0.01, CI excludes 0, same in early and period-split checks. Medium = p below 0.05 with at least 20 streamers, or stable across periods. Low = fewer streamers, p above 0.05, or one subset only.
 
 ## Results
@@ -209,7 +210,7 @@ Confidence: end near peak followed by a stronger next start, medium (positive in
 | Average viewers above streamer median, unrestricted | pop | 12 | 275/279 | +0.142 | +0.100 | 0.064 to 0.212 | 0.039 | not used: late samples in the previous session inflate it |
 | Average viewers above streamer median, unrestricted | all sizes | 77 | 2,116/1,987 | +0.045 | +0.052 | 0.013 to 0.094 | 0.019 | |
 | Average viewers above streamer median, streamers with median 0 to 4 | all sizes | 65 | 1,841/1,708 | +0.026 | +0.020 | 0.000 to 0.082 | 0.12 | |
-| First-time chatters above streamer median, from June | pop | 9 | 114/179 | +0.009 | -0.032 | -0.063 to 0.204 | 0.51 | |
+| First-time chatters above streamer median, from June | pop | 7 | 77/128 | +0.031 | +0.034 | -0.074 to 0.095 | 1.0 | message-writing first-timers from `chat-counts.sql`; the session column version (9 streamers, +0.009, p 0.51) counted lurkers |
 | Previous session had outgoing raid | pop | 6 | 52/393 | -0.157 | -0.059 | -0.529 to 0.118 | 0.69 | |
 
 Confidence: low. The pop effect shrinks from p 0.039 (unrestricted) to p 0.065 (both early-sampled). The all-size effect is significant (p 0.021), but these pairs include reconnects of one broadcast. On merged broadcasts (V8 in `VERIFY-ORCHESTRATOR.md`, strong-broadcast rows) the raw effect is +0.030 (CI +0.003 to +0.055, 73 streamers), it falls to +0.020 (CI -0.002 to +0.044) with start and level controls, and the placebo against the previous start is +0.013. Not established.

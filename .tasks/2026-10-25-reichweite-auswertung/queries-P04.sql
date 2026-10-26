@@ -231,6 +231,7 @@ select uid, min(ts) stream_start, max(ts) stream_end, count(*) snaps,
   mode() within group (order by l) lang_mode
 from g2 group by uid, sid;
 
+\echo Q3 note: first_time_chatters, unique_chatters and returning_chatters are replaced by chat_ftc, chat_uc and chat_ret from chat-counts.sql, joined by session id, because the session columns also count lurkers
 \echo Q3 session export for duration, breaks, consistency and habits (title as hash)
 select id session_id, streamer_login, twitch_user_id, started_at, ended_at, duration_seconds, start_viewers, peak_viewers, end_viewers,
   round(avg_viewers::numeric, 3) avg_viewers, samples, dropoff_pct, unique_chatters, first_time_chatters, returning_chatters,

@@ -52,7 +52,7 @@ Hour k relative to hour 2 (same stream; session basis = median per-stream ratio 
 
 ### 2. Duration vs chatters and followers (within streamer)
 
-First-time chatters per hour (June to October 2026): under 2 h 0.93 (983 sessions), 2 to 4 h 0.87 (1,395), 4 h or more 1.08 (1,244). Within streamer (117 streamers): 4 h or more minus under 2 h = -0.13 per hour, 44 % positive.
+First-time chatters per hour (June to October 2026, sessions with at least one chatter): under 2 h 1.23 (767 sessions), 2 to 4 h 0.71 (1,351), 4 h or more 0.81 (1,290). Within streamer (153 streamers): 4 h or more minus under 2 h = -0.38 per hour, 25 % positive. A first-time chatter is a `twitch_session_chatters` row with `messages >= 1` and `is_first_time_streamer`, logins seen in 30 or more channels excluded, the same definition as P02, computed by `chat-counts.sql`; the session columns `first_time_chatters` and `unique_chatters` include lurkers and are not used. An earlier version used those columns (0.93, 0.87, 1.08; -0.13 on 117 streamers).
 
 Follower delta per hour (March to October 2026): under 2 h 0.065, 2 to 4 h 0.084, 4 h or more 0.038. Within streamer (209): median 0.00.
 
@@ -89,7 +89,7 @@ Class 5-19 after 14 days: 56 events, 1.13; after 30 days: 38 events, 1.105.
 ## Actionable tips
 
 1. Small channels (5-19 viewers) gain from long streams: hour 5 is 1.17x to 1.25x hour 2, peak typically after minute 180 in 5 h streams. Confidence medium (self-selection).
-2. Longer streams do not bring more first-time chatters per hour within a streamer (-0.13, n=117). Confidence medium.
+2. Longer streams do not bring more first-time chatters per hour within a streamer (-0.38, n=153). Confidence medium.
 3. Pauses of 7 to 30 days cost nothing measurable (1.02 to 1.05). Confidence medium.
 4. Schedule regularity shows no measurable within-streamer effect (+0.01, n=147). Confidence low.
 5. Growth over 8 to 12 weeks is rare (4.5 % of 110). Growers streamed about 14 h per week vs 3.8 h, but the correlation vanishes on the strict subset. Confidence low for habit claims.

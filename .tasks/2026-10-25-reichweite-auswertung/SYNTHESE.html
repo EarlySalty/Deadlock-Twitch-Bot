@@ -86,7 +86,7 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
     <div class="tile"><div class="l">First-10-minute arrivals who are regulars</div><div class="v">93 %</div><div class="s">No early discovery push; new people trickle in at about 2 per 100 stream minutes</div></div>
     <div class="tile"><div class="l">German newcomers whose room is live again within 7 days</div><div class="v">72 %</div><div class="s">All languages 83 %. Return is equal (23 %) and highest at 5 to 7 live days</div></div>
     <div class="tile"><div class="l">Viewers kept per raider after 1 hour (1 to 4 viewer channels)</div><div class="v">+0.19</div><div class="s">257 raids; gone by the next stream</div></div>
-    <div class="tile"><div class="l">Follows per 100 viewer-hours in the 10 minutes after a raid</div><div class="v">7.9</div><div class="s">vs 2.7 the rest of the time (63 follows, 802 viewer-hours)</div></div>
+    <div class="tile"><div class="l">Follows per 100 viewer-hours in the 10 minutes after a raid</div><div class="v">7.9</div><div class="s">vs 2.7 the rest of the time (63 follows, 802 viewer-hours); no gain against matched control windows</div></div>
   </div>
 
   <div class="grid2">
@@ -125,7 +125,8 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
         <li>Go-live notification</li>
         <li>Shared chat</li>
         <li>Outgoing raids for own growth</li>
-        <li>Ending near the peak (next start +0.7 %, CI includes zero)</li>
+        <li>Incoming raids for follows (matched controls, +0.04 per raid, CI includes zero)</li>
+        <li>Ending near the peak (next start +0.8 %, CI includes zero)</li>
         <li>Typed reply to a newcomer (return)</li>
         <li>Typing in chat, also to fill silence</li>
         <li>A moving chat or a chat-speed target</li>
@@ -144,10 +145,10 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
       <thead><tr><th>#</th><th>Lever</th><th>Evidence</th><th>Confidence</th></tr></thead>
       <tbody>
         <tr><td class="num">1</td><td>Stream more days per week, ideally consecutive, so a newcomer finds a next stream within 1 to 4 days</td><td>Room live again within 7 days for 72 % of German newcomers vs 83 %; return equal (23 %) and highest at 5 to 7 live days; German returns a median 2 days after the first visit</td><td><span class="pill">medium</span></td></tr>
-        <tr><td class="num">2</td><td>Longer sessions (4 h+) instead of several short ones</td><td>1.14x own average viewers; hour 5 holds 1.17 to 1.24x hour 2 at 5 to 19 viewers; new people arrive per minute live</td><td><span class="pill">medium, self-selection</span></td></tr>
-        <tr><td class="num">3</td><td>Get raided: raid ties with channels of similar or larger size</td><td>+0.185 viewers per raider after 1 h at 1 to 4 viewers; follows 7.9 vs 2.7 per 100 viewer-hours in the 10 minutes after a raid</td><td><span class="pill">medium</span></td></tr>
+        <tr><td class="num">2</td><td>Longer sessions (4 h+) instead of several short ones</td><td>1.14x own average viewers; hour 5 holds 1.17 to 1.25x hour 2 at 5 to 19 viewers; new people arrive per minute live</td><td><span class="pill">medium, self-selection</span></td></tr>
+        <tr><td class="num">3</td><td>Get raided: raid ties with channels of similar or larger size</td><td>+0.185 viewers per raider after 1 h at 1 to 4 viewers; follows 7.9 vs 2.7 per 100 viewer-hours in the 10 minutes after a raid, but no follow gain against matched control windows (+0.04 per raid, CI includes zero)</td><td><span class="pill">medium</span></td></tr>
         <tr><td class="num">4</td><td>Draw newcomers into a back-and-forth; the second and third message matter</td><td>2+ messages +17 pp 30-day return; 5+ messages 31 % vs 15.5 % silent; a typed reply soon after a first message ever goes with more follows (association)</td><td><span class="pill">medium association</span></td></tr>
-        <tr><td class="num">5</td><td>Expect most follows late and at high points</td><td>Median follow at minute 131, 72 % after minute 60; chatters follow about 8x as often per session as silent viewers</td><td><span class="pill">low to medium</span></td></tr>
+        <tr><td class="num">5</td><td>Expect most follows late and at high points</td><td>Median follow at minute 131, 72 % after minute 60; per viewer-hour the first 10 minutes convert best (12.6 per 100, only 60 follows); chatters follow about 8x as often per broadcast as silent viewers</td><td><span class="pill">low to medium</span></td></tr>
         <tr><td class="num">6</td><td>Titles of 30+ characters, otherwise free</td><td>Under 30 characters -1.7 % in (average viewers + 1) against sessions within 14 days</td><td><span class="pill">medium, small</span></td></tr>
       </tbody>
     </table>

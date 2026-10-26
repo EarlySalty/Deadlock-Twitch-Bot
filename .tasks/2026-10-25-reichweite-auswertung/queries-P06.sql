@@ -127,6 +127,7 @@ LEFT JOIN twitch_chat_messages y
   ON y.session_id = nc.sid AND y.message_ts > nc.t0 - interval '5 minutes' AND y.message_ts <= nc.t0 + interval '10 minutes'
 GROUP BY nc.s, nc.c, nc.sid;
 
+\echo first_label is read only for the burn-in 30 d rows used in section 6; their first messages all fall before 2026-10-05 00:00 UTC (latest 2026-09-25), where twitch_chat_message_labels is complete
 WITH fm AS (
   SELECT DISTINCT ON (streamer_login, chatter_login)
          streamer_login AS s, chatter_login AS c, id AS mid, session_id AS sid, message_ts AS t0

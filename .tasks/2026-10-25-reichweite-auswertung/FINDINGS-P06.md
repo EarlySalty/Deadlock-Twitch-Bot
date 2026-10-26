@@ -38,6 +38,7 @@ What makes a first-time chatter come back to the same channel and become a regul
   - Opportunity (category): the room had any chat on a later day within 7 days.
 - Within-channel estimator: Mantel-Haenszel risk difference, stratified by streamer. The strata count and positive-stratum share use strata with at least 3 newcomers per arm (`mh.py`). The CIs are a cluster bootstrap over streamer strata, 2,000 resamples, seed 20261025, using all strata with both arms (`boot.py`). Point estimates agree between the two scripts; the strata counts do not.
 - Category window: first observation 2026-09-28 to 2026-10-17 (main). Lookback check: first observation 2026-10-04 to 2026-10-17. Live-days check: first day 2026-10-09 to 2026-10-17 with live days from the snapshots (`p06-live-days.py`).
+- Label coverage: `twitch_chat_message_labels` is complete for messages before 2026-10-05 00:00 UTC and covers 63.5 to 78.0% per day after (`q_label_coverage.sql` in `queries-P05.sql`). The first-message labels in section 6 come only from newcomers with 30 days of follow-up, whose first messages all fall on or before 2026-09-25, so every one of them is in the fully labelled period and no label is missing for coverage reasons.
 - All queries are in `queries-P06.sql`. Raw extracts are in `/tmp/reichweite-scratch/P06/` only.
 
 ## Results

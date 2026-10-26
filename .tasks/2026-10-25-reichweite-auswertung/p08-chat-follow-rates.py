@@ -27,8 +27,34 @@ def rows(path):
     return list(csv.DictReader(open(path)))
 
 
-def first_chat(path):
-    fr = rows(path)
+def broadcast_units(spans_path, sessions_path):
+    sampled = {r["session_id"] for r in rows(sessions_path) if r["sampled"] == "t" and r["end_at"]}
+    by = collections.defaultdict(list)
+    for r in rows(spans_path):
+        by[r["login"].lower()].append((ts(r["started_at"]), ts(r["end_at"]), r["session_id"], r["session_id"] in sampled))
+    unit, span = {}, {}
+    for login, ss in by.items():
+        ss.sort()
+        head = end = None
+        for start, stop, sid, sampled in ss:
+            if end is None or start >= end:
+                head, end = sid, stop
+                span[head] = dict(login=login, start=start, end=stop, sampled=sampled)
+            else:
+                end = max(end, stop)
+                span[head]["end"] = end
+                span[head]["sampled"] = span[head]["sampled"] or sampled
+            unit[sid] = head
+    return unit, span
+
+
+def first_chat(path, unit):
+    first = {}
+    for r in rows(path):
+        key = (unit[r["session_id"]], r["chatter_login"].lower())
+        if key not in first or ts(r["first_ts"]) < ts(first[key]["first_ts"]):
+            first[key] = r
+    fr = list(first.values())
     rep = [r for r in fr if r["bc_reply_3m"] == "t"]
     non = [r for r in fr if r["bc_reply_3m"] == "f"]
     rate = lambda xs, k: sum(r[k] == "t" for r in xs) / len(xs)
@@ -37,14 +63,17 @@ def first_chat(path):
         print(f"  {k}: reply {100 * rate(rep, k):.2f}% (n {len(rep)}) vs none {100 * rate(non, k):.2f}% (n {len(non)}), ratio {rate(rep, k) / rate(non, k):.2f}, all {100 * rate(fr, k):.2f}%")
 
 
-def presences(sessions_path, presence_path, bots_path, follows_path):
+def presences(unit, span, presence_path, bots_path, follows_path):
     bots = {r["chatter"].lower() for r in rows(bots_path)}
-    sessions = {r["session_id"]: dict(login=r["login"].lower(), start=ts(r["started_at"]), end=ts(r["end_at"]))
-                for r in rows(sessions_path) if r["sampled"] == "t" and r["end_at"]}
-    pres = collections.defaultdict(list)
+    sessions = {u: s for u, s in span.items() if s["sampled"]}
+    silent_by = collections.defaultdict(lambda: True)
     for r in rows(presence_path):
-        if r["chatter"].lower() not in bots:
-            pres[r["session_id"]].append((r["chatter"].lower(), int(r["messages"] or 0) == 0))
+        if r["chatter"].lower() not in bots and r["session_id"] in unit:
+            key = (unit[r["session_id"]], r["chatter"].lower())
+            silent_by[key] = silent_by[key] and int(r["messages"] or 0) == 0
+    pres = collections.defaultdict(list)
+    for (u, chatter), silent in silent_by.items():
+        pres[u].append((chatter, silent))
     fol = collections.defaultdict(list)
     for r in rows(follows_path):
         if r["follower_login"].lower() not in bots:
@@ -62,11 +91,12 @@ def presences(sessions_path, presence_path, bots_path, follows_path):
             cnt[k] += 1
             hit[k] += any(s["start"] <= t <= s["end"] + WINDOW for t in fl)
     rate = {k: hit[k] / cnt[k] for k in cnt}
-    print(f"sampled sessions {len(used)}, channels {len({sessions[x]['login'] for x in used})}")
+    print(f"sampled broadcasts (overlapping sessions merged) {len(used)}, channels {len({sessions[x]['login'] for x in used})}")
     for k in ("silent", "chatter"):
         print(f"  {k} presences {cnt[k]}, follow in session + 60 min {hit[k]} = {1000 * rate[k]:.2f} per 1,000")
     print(f"  ratio chatter / silent {rate['chatter'] / rate['silent']:.1f}")
 
 
-first_chat(sys.argv[1])
-presences(*sys.argv[2:6])
+units, spans = broadcast_units(sys.argv[2], sys.argv[3])
+first_chat(sys.argv[1], units)
+presences(units, spans, *sys.argv[4:7])

@@ -10,7 +10,7 @@ Status: analysis complete on the data exported 2026-10-25 between 18:35 and 18:4
 - Incoming raids give a small, measurable, short-lived viewer gain. Net of same-channel controls, the channel holds 0.114 extra viewers per viewer sent at +60 min (CI 0.044 to 0.205, n=346 raids). For targets with 1-4 viewers at raid time the figure is 0.185 (CI 0.107 to 0.298, n=257).
 - Raids bring new chatters within the hour: +0.115 per raid within 60 min (paired, CI 0.035 to 0.192, n=425).
 - Raids bring silent new viewers: +1.02 per raid within 60 min (CI 0.74 to 1.31, n=391). They return later at the organic rate (22.2 vs 20.9 percent in controls), so no extra loyalty.
-- Raids add few follows: +0.087 per raid within 60 min (0.167 vs 0.080; 76 vs 56 follows, n=454 raids vs 697 controls; 43 follow-tracked channels, follow gap excluded).
+- Raids bring no measurable follow gain: +0.037 follows per raid within 60 min against matched controls (CI -0.018 to +0.091; 0.107 vs 0.070; 22 vs 27 follows; 205 raids with 356 controls in 19 follow-tracked channels, follow gap excluded).
 - A raided channel does not keep a higher level in later streams (null: median per-streamer -0.047, n=116).
 - Shared chat shows no viewer effect (null). Its chatter effect is weak and not robust.
 - The earlier "0.45 percent of weekly viewer minutes" does not reproduce as one number. Estimates range from 0.01 to 0.97 percent depending on the denominator.
@@ -43,7 +43,7 @@ Time windows: raids since 2026-02-01; lurker rows since 2026-02-19 (silent-viewe
 
 **Chatters.** A chatter is a row with messages >= 1. New chatter = first tracked message in the channel, counted within the window. Silent new viewer = lurker row (messages = 0) first seen in the 60-min window with no message in that window (since 2026-02-20). Silent return = lurker seen again in a later session of the same channel. Outcomes are paired per raid against the valid controls.
 
-**Follows.** Follow events within 30 and 60 min after the raid vs the same windows in the valid controls. Only raids and controls since 2026-02-15 in channels with follow tracking count, and only from the channel's first recorded follow on; a raid in a channel without tracking is not a zero. Follow outcome windows follow one rule: a unit with window [a, b) is kept only if b <= 2026-10-25 17:28 UTC and the window does not overlap the follow gap from 2026-03-15 18:00 to 2026-06-16 16:45 UTC. The window share uses tracked live time since 2026-02-15 with the gap removed; sessions without `ended_at` end at start plus duration.
+**Follows.** Follow events within 30 and 60 min after the raid vs the same windows in the valid controls. Only raids and controls since 2026-02-15 in channels with follow tracking count, and only from the channel's first recorded follow on; a raid in a channel without tracking is not a zero. Follow outcome windows follow one rule: a unit with window [a, b) is kept only if b <= 2026-10-25 17:28 UTC and the window does not overlap the follow gap from 2026-03-15 18:00 to 2026-06-16 16:45 UTC. The window share uses tracked live time since 2026-02-15 with the gap removed; sessions without `ended_at` end at start plus duration. The control comparison is matched: each control row is mapped to its source raid by (raid id, control time minus 7 × k days), both arms pass the same unit filter (60 min covered, no other raid within ±60 min, follow-tracked channel, gap rule), and a raid counts only with at least one valid control. Per raid the outcome minus the mean of its controls; reported is the mean of these differences with a bootstrap 95% CI over raids (2,000 resamples, seed 7).
 
 **Shared chat.** Session-level comparison of channels with and without shared-chat copies, as per-streamer medians of differences. Chatter counts are recomputed from raw chat (distinct non-shared chatters with messages), not from the session chat fields (see caveats).
 
@@ -124,10 +124,10 @@ Control-adjusted follows (raids vs valid controls):
 
 | Window | Raid per raid (events) | Control per raid (events) | Difference | n raids / n control events |
 |---|---|---|---|---|
-| 30 min | 0.090 (41) | 0.044 (31) | +0.046 | 454 / 697 |
-| 60 min | 0.167 (76) | 0.080 (56) | +0.087 | 454 / 697 |
+| 30 min | 0.063 (13) | 0.047 (17) | +0.016 (CI -0.026 to +0.059) | 205 / 356 |
+| 60 min | 0.107 (22) | 0.070 (27) | +0.037 (CI -0.018 to +0.091) | 205 / 356 |
 
-An earlier version reported +0.046 at 60 min on 883 raids vs 1,183 controls. It counted raids in channels without follow tracking and windows inside the follow gap as zero follows.
+An earlier version reported +0.046 at 60 min on 883 raids vs 1,183 controls. It counted raids in channels without follow tracking and windows inside the follow gap as zero follows. A second version reported +0.087 at 60 min on 454 raids vs 697 controls. It compared all raids with all controls, so raids without any valid control and controls of raids that failed the unit filter entered one arm only.
 
 ### 3. Outgoing raids, reciprocity and growth
 
@@ -184,7 +184,7 @@ The earlier 0.45 percent lies inside the range of the raided-streamer-week measu
 | 3 | Raids much smaller than the target showed no detectable gain. | Ratio < 0.5, +60 min | -0.231 (CI -0.830 to 0.328) | 86 raids | low |
 | 4 | Raids bring a few new chatters within the hour. | Paired new chatters, 60 min | +0.115 per raid (CI 0.035 to 0.192) | 425 raids | medium |
 | 5 | Raids bring silent viewers within the hour, but they return at the organic rate. | Silent new viewers, 60 min; return share | +1.02 per raid (CI 0.74 to 1.31); return 22.2 vs 20.9 percent | 391 raids | medium |
-| 6 | Raids add a few follows within the hour. Do not plan on follows from raids alone. | Follows vs control, 60 min | +0.087 per raid (76 vs 56 events) | 454 raids vs 697 controls, 43 channels | low |
+| 6 | Do not plan on follows from raids; no follow gain is measurable within the hour. | Follows vs matched control, 60 min | +0.037 per raid (CI -0.018 to +0.091; 22 vs 27 events) | 205 raids vs 356 controls, 19 channels | low |
 | 7 | Do not expect a lasting level increase after being raided. | Next-session level | -0.047 median per streamer; share positive 0.40 | 116 channels | medium |
 | 8 | Do not use shared chat as a viewer tool on this evidence. | Viewer ratio, shared vs non-shared (recheck) | 0.947 (share > 1 = 0.42) | 48 channels | low |
 | 9 | Raid timing within the stream showed no consistent effect; do not optimise for it. | Retention by minute of stream | Only 10-30 min (+60 min) and 60+ (+15 and +60 min) have CIs above zero; no consistent pattern | 19 to 223 raids per class | low |
@@ -195,7 +195,7 @@ Outgoing raids showed no evidence of own growth, and reciprocity is structural. 
 ## Caveats and dead ends
 
 - The shared-chat table `partner_effort_shared_chat_observations` is empty (0 rows). The proxy covers only sessions since 2026-09-27.
-- Follow coverage is 63 channels since 2026-02-15 (1,492 events). After the gap rule and the tracked-channel rule, 1,278 follows in 59 channels fall in tracked live time and the control comparison covers 43 channels. Follow results rest on small counts. Follows during the gap from 2026-03-15 to 2026-06-16 were not recorded, so that span is excluded.
+- Follow coverage is 63 channels since 2026-02-15 (1,492 events). After the gap rule and the tracked-channel rule, 1,278 follows in 59 channels fall in tracked live time and the matched control comparison covers 19 channels (205 raids with at least one valid control). Follow results rest on small counts. Follows during the gap from 2026-03-15 to 2026-06-16 were not recorded, so that span is excluded.
 - Lurker data starts 2026-02-19. Silent-viewer windows start 2026-02-20. Lurker rows make up 79.0 percent of session-chatter rows since 2026-02-01.
 - `twitch_chatter_rollup`: 18,023 of 36,435 rows (49.5 percent) have zero messages, and `first_seen_at` counts lurkers. Not used for chatter definitions.
 - Session chat fields are unreliable. `unique_chatters` is zero for every session in March (2,599 of 2,599), April (1,609 of 1,609) and May (1,455 of 1,455), and still zero for 400 of 1,428 sessions in September and 1,049 of 2,697 in October. Not used. The shared-chat chatter comparison was recomputed from raw chat.

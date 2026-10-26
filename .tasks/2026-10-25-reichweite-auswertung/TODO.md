@@ -1,4 +1,4 @@
-# TODO: Twitch reach analysis (state 2026-10-26, after gate round 4 fixes)
+# TODO: Twitch reach analysis (state 2026-10-26, after gate round 5 fixes)
 
 User goal: deep analysis of all Twitch data on how German Deadlock streams win new viewers, turn
 lurkers into chatters and newcomers into followers, subs and regulars; also when Twitch shows a
@@ -44,7 +44,7 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
 - More German streams live costs no new viewers within streamer (V5). Early-stream jumps are
   returning regulars, not discovery (V6).
 - Ending near the peak does not lift the next start once reconnects are merged into one broadcast
-  (+0.008, CI -0.015 to +0.025, V8; the earlier +0.07 was a reconnect artifact). Title word effects mostly vanish against a +-14 day local baseline; only titles under 30
+  (+0.008, CI -0.015 to +0.025, V8; +0.074 to +0.084 without the merge is a reconnect artifact). Title word effects mostly vanish against a +-14 day local baseline; only titles under 30
   characters keep a small cost (V9). Neither a broadcaster chat message nor an active chat raises new chatters
   in the next 5 minutes within the session (V10, after trimming the late start of tracked chat;
   the first run's +1.7 pp for active chat was that artifact). Social messages draw no extra
@@ -66,8 +66,8 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
    2026-06-16 16:45 UTC (V7 in `queries-VERIFY.sql`, P08 first chat in statement 10, P08 lurker
    presence in `p08-chat-follow-rates.py`, P09 raids in `p09-raid-follows.py`). P09 also counts
    follows only in channels with follow tracking. New numbers: V7 +12.1 pp (78 replies), lurker
-   presence 10.1 vs 81.2 per 1,000, P09 +0.087 follows per raid within 60 min. The blog needs the
-   V7 and lurker numbers updated after the merge.
+   presence 10.1 vs 81.2 per 1,000, P09 +0.087 follows per raid within 60 min. The blog carries
+   them since Website commit 13956fa.
 3. Gate round 4 (BLOCK, 2 findings) is fixed: V8 dedups broadcasts with
    `coalesce(stream_id, id::text)` so sessions without a stream id are no longer collapsed, and
    P08 q2f splits every sample interval at raid window start and end as well as at the 5-minute
@@ -78,6 +78,20 @@ Branch `analysis/reichweite-20261025`, worktree `/home/nathanael/.worktrees/twit
    rerun on it (`p04-curves.py`, `p08-aligned.py` reproduce the tables). New numbers: raid window
    7.9 per 100 vh, 0 to 5 minutes before the peak 11.5, minutes 0 to 10 12.4 per 100 vh (483 vh),
    V8 +0.008 (73 streamers), strong previous session +0.020 with CI including 0, P11 ramp
-   0.18 / 0.65 / 0.84. The blog needs the raid, peak and minute-table numbers updated.
-4. Re-run `gate_hook.py --review` (skill rolle-merge-schleuse) until ALLOW, merge to main, clean
-   up branch and worktree, cancel wakeup `reichweite`. Report to the user in English.
+   0.18 / 0.65 / 0.84. The blog carries them since Website commit 0c13619 (live 2026-10-26).
+4. Gate round 5 (BLOCK, 6 findings) is fixed; the numbers below replace the round 2 and 3 values
+   above. P08 exposure intervals are disjoint per streamer (a sample interval starts no earlier
+   than the previous one ended), so every follow sits in exactly one interval: 2.81 per 100 vh on
+   44,546 vh, minutes 0 to 10 12.6 per 100 vh (476 vh). Overlapping sessions of one streamer
+   count as one broadcast for P08 first chat, P08 lurker presence (10.2 vs 81.6 per 1,000, 2,007
+   broadcasts) and V7 (first message in a broadcast +2.3 pp, CI -0.3 to +4.6; first message ever
+   +12.1 pp, CI +4.7 to +17.3); the V7 follow window is 24 h 3 min, which the cutoff and gap
+   checks use. P09 compares each raid with the mean of its own controls and bootstraps over
+   raids: +0.037 follows per raid within 60 min (CI -0.018 to +0.091, 205 raids), a null. P03,
+   P04 and P11 count first-time chatters from messages (`chat-counts.sql`) instead of the session
+   column that includes lurkers; the Saturday penalty and the 19-20h hint are withdrawn. P05
+   question labels count only for sessions ending before 2026-10-05 00:00 UTC, where labels are
+   complete; P06 needed no rerun (its labelled first messages end 2026-09-25).
+5. Re-run `gate_hook.py --review` (skill rolle-merge-schleuse) until ALLOW, merge to main, clean
+   up branch and worktree, cancel wakeup `reichweite`. Update the blog with the round 5 numbers.
+   Report to the user in English.

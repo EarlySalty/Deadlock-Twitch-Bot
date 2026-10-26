@@ -2,6 +2,9 @@
 -- Post-processing was done in stdlib python on the CSV exports (kept in /tmp/reichweite-scratch/P05/, not in this folder).
 -- Superseded: q_slots.sql (fixed session list) and q_conv_window.sql (fixed login list); replaced by q_base_sessions.sql and q_firstwrite_window.sql.
 -- q_conversion.sql window columns use first_message_at and are superseded by q_firstwrite_window.sql; its sighting and pair columns are used.
+-- Label coverage: twitch_chat_message_labels covers every message before 2026-10-05 00:00 UTC and 64 to 78% per day after (63.5 to 78.0%, 2026-10-05 to 2026-10-25, q_label_coverage.sql).
+-- Every Question count below (q_sessions, q_conversion, q_firstwrite_window, q_velocity and the bot-filtered twins) is used only for sessions with
+-- started_at + duration_seconds <= 2026-10-05 00:00 UTC; for later sessions the exported label counts are set to missing in python (lbl_build.py, labelcov.py).
 
 -- ===== q_sessions.sql
 -- Q-S1: session-level dataset, chat-tracked window (sessions from 2026-07-01)
@@ -706,3 +709,12 @@ from category_chat_messages m
 where m.sent_at >= :'d'::timestamptz and m.sent_at < :'d'::timestamptz + interval '1 day'
   and not m.shared_chat_copy
 group by 1, 2;
+
+-- ===== q_label_coverage.sql
+-- Q-LC: share of tracked chat messages with a label, per UTC day
+select (m.message_ts at time zone 'UTC')::date d, count(*) msgs, count(l.message_id) labelled,
+       round(100.0*count(l.message_id)/count(*),1) pct
+from twitch_chat_messages m
+left join twitch_chat_message_labels l on l.message_id = m.id
+where m.message_ts >= '2026-09-28' and m.message_ts < '2026-10-26'
+group by 1 order by 1;

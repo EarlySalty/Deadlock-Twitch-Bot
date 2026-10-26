@@ -53,6 +53,7 @@ select hr, days,
        round(vs_all/nullif(ss_all,0),1) all_viewers_per_stream
 from agg order by hr;
 
+\echo Session base for start hour, weekday and gap tests; first_time_chatters, unique_chatters and returning_chatters are replaced by chat_ftc, chat_uc and chat_ret from chat-counts.sql, joined by session id, because the session columns also count lurkers
 with base as (
   select id, streamer_login, started_at, duration_seconds, avg_viewers, peak_viewers, start_viewers,
          first_time_chatters, unique_chatters, returning_chatters, retention_10m, follower_delta,
@@ -84,6 +85,7 @@ select min(snapshot_at) from category_snapshots_normalized where snapshot_at >= 
 
 select count(*) from category_snapshots_normalized where snapshot_at >= '2026-10-01' and snapshot_at < '2026-10-26';
 
+\echo Coverage by month from the session columns; the reported coverage counts sessions with chat_ftc > 0 from chat-counts.sql
 select to_char(started_at at time zone 'Europe/Berlin','YYYY-MM') m,
        count(*) sessions,
        count(distinct streamer_login) streamers,

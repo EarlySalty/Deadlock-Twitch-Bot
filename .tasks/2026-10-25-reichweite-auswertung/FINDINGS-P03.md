@@ -21,12 +21,14 @@ When is it favourable to stream German Deadlock content on Twitch?
 |---|---|---|---|
 | `twitch_stats_category` (polls) | language `de%` or NULL; 2026-06-10 to 06-13 excluded (incident) | 1,063,991 poll rows, 375 days | Extracted per calendar month, 2025-10 to 2026-10 |
 | `twitch_stream_sessions` | started_at from 2026-01-09; duration 600 to 86,400 s; had_deadlock_in_session; language `de%` or NULL | 11,249 sessions, 1,709 streamers | First qualifying session in February 2026; no qualifying January 2026 session |
-| `twitch_stream_sessions`, chat fields | same filter, June to October | 5,595 sessions, 1,060 streamers | 2026-06-01 to 2026-10-25 |
+| `twitch_session_chatters` (first-time chatters) | same session filter, June to October; rows with `messages >= 1` and `is_first_time_streamer`; logins seen in 30 or more channels excluded | 5,595 sessions, 1,060 streamers | 2026-06-01 to 2026-10-25 |
 | `category_snapshots_normalized` (all languages) | snapshot_at 2026-10-09 to 2026-10-25 | 17 days | Table data begins 2026-10-09 10:40 UTC |
 
 Qualifying sessions per month: Feb 909, Mar 2,218, Apr 1,346, May 1,181, Jun 653, Jul 734, Aug 1,091, Sep 924, Oct 2,193.
 
-Sessions with at least one first-time chatter: Feb 287 of 909; Mar, Apr and May 0 (chat fields empty); Jun 76 of 653 (12%); Jul 284 of 734 (39%); Aug 517 of 1,091 (47%); Sep 500 of 924 (54%); Oct 966 of 2,193 (44%). First-timer results therefore use June to October only.
+Sessions with at least one message-writing first-time chatter: Feb 275 of 909 (30%); Mar 333 of 2,218 (15%); Apr 69 of 1,346 (5%); May 62 of 1,181 (5%); Jun 71 of 653 (11%); Jul 256 of 734 (35%); Aug 537 of 1,091 (49%); Sep 504 of 924 (55%); Oct 1,252 of 2,193 (57%). March to May chat tracking is sparse, so first-timer results use June to October only.
+
+First-time chatter definition: a `twitch_session_chatters` row with `messages >= 1` and `is_first_time_streamer`, logins seen in 30 or more channels excluded (query `chat-counts.sql`, the same definition as P02 and P04). The session columns `first_time_chatters`, `unique_chatters` and `returning_chatters` count lurkers as well and are not used. An earlier version of this package used those columns; the results that changed are listed under caveats.
 
 ## Method
 
@@ -135,34 +137,34 @@ First-timers per session hour by start band (June 1 to Oct 25 2026, primary wind
 
 | Start (Berlin) | 0-4 index (CI) | 5-19 index (CI) | 0-19 index (CI), sessions, streamers |
 |---|---|---|---|
-| 00-05 | 1.056 (0.843-1.521) | 1.315 (0.623-2.061) | 1.073 (0.866-1.421), 406, 146 |
-| 06-11 | 1.029 (0.870-1.133) | 0.990 (0.774-1.241) | 1.014 (0.906-1.107), 493, 193 |
-| 12-14 | 0.942 (0.824-1.024) | 1.033 (0.688-1.407) | 0.959 (0.854-1.044), 715, 292 |
-| 15-16 | 1.031 (0.853-1.226) | 1.062 (0.885-1.407) | 1.039 (0.894-1.207), 598, 285 |
-| 17-18 | 0.945 (0.873-1.014) | 0.889 (0.767-1.035) | 0.929 (0.870-0.998), 986, 374 |
-| 19-20 | 1.052 (0.944-1.173) | 1.131 (0.951-1.250) | 1.072 (0.989-1.151), 1,245, 415 |
-| 21-22 | 0.967 (0.847-1.146) | 0.715 (0.498-1.030) | 0.933 (0.828-1.100), 711, 288 |
-| 23+ | 1.089 (0.938-1.248) | 1.071 (0.762-1.469) | 1.087 (0.951-1.222), 206, 115 |
+| 00-05 | 0.958 (0.841-1.114) | 0.922 (0.751-1.101) | 0.951 (0.873-1.067), 406, 146 |
+| 06-11 | 1.105 (1.013-1.222) | 1.090 (0.883-1.319) | 1.100 (1.024-1.206), 493, 193 |
+| 12-14 | 0.890 (0.825-0.949) | 0.939 (0.723-1.268) | 0.900 (0.841-0.983), 715, 292 |
+| 15-16 | 0.948 (0.847-1.042) | 1.160 (0.965-1.474) | 1.014 (0.919-1.141), 598, 285 |
+| 17-18 | 1.067 (0.992-1.130) | 0.940 (0.811-1.046) | 1.021 (0.957-1.084), 986, 374 |
+| 19-20 | 0.976 (0.924-1.025) | 0.997 (0.900-1.110) | 0.984 (0.933-1.032), 1,245, 415 |
+| 21-22 | 1.041 (0.943-1.150) | 0.902 (0.620-1.184) | 1.011 (0.933-1.119), 711, 288 |
+| 23+ | 1.059 (0.912-1.248) | 1.106 (0.543-1.868) | 1.065 (0.925-1.213), 206, 115 |
 
-Sensitivity July to October (0-19 pooled): 17-18 0.942 (0.868-1.023), 868 sessions; 19-20 1.075 (0.971-1.167), 1,112 sessions; 21-22 0.928 (0.829-1.063), 598 sessions.
+Sensitivity July to October (0-19 pooled): 06-11 1.076 (0.990-1.160), 448 sessions; 12-14 0.892 (0.831-0.970), 625 sessions; 17-18 1.023 (0.957-1.106), 868 sessions; 19-20 0.991 (0.942-1.060), 1,112 sessions; 21-22 1.016 (0.921-1.102), 598 sessions.
 
 First-timers per session hour by weekday (June 1 to Oct 25 2026):
 
 | Day | 0-4 index (CI) | 0-19 index (CI), sessions, streamers |
 |---|---|---|
-| Mo | 1.068 (0.906-1.268) | 1.086 (0.953-1.249), 685, 317 |
-| Di | 1.041 (0.941-1.158) | 1.077 (0.955-1.212), 754, 344 |
-| Mi | 1.052 (0.868-1.207) | 1.086 (0.932-1.268), 793, 347 |
-| Do | 0.986 (0.863-1.180) | 0.975 (0.872-1.088), 753, 338 |
-| Fr | 0.973 (0.896-1.069) | 0.972 (0.900-1.067), 765, 343 |
-| Sa | 0.860 (0.796-0.935) | 0.836 (0.766-0.915), 853, 387 |
-| So | 1.033 (0.930-1.152) | 0.997 (0.889-1.119), 757, 344 |
+| Mo | 1.058 (0.947-1.174) | 1.106 (1.005-1.228), 685, 317 |
+| Di | 1.011 (0.918-1.108) | 1.017 (0.946-1.113), 754, 344 |
+| Mi | 0.991 (0.923-1.070) | 0.983 (0.921-1.050), 793, 347 |
+| Do | 0.966 (0.887-1.063) | 0.971 (0.886-1.051), 753, 338 |
+| Fr | 1.033 (0.953-1.119) | 1.020 (0.948-1.095), 765, 343 |
+| Sa | 0.955 (0.896-1.020) | 0.911 (0.839-1.002), 853, 387 |
+| So | 0.998 (0.923-1.070) | 1.013 (0.935-1.084), 757, 344 |
 
 ### 3. Gap slots for small streamers
 
 Candidate gap slots (per-poll median rest_vps at least 1.5 and mean streams at most 4): Mo 03 (median 1.5, mean rest 1.71, median streams 1, mean streams 1.89), Do 14 (1.5, 1.66, 3, 3.55), Sa 13 (1.5, 1.68, 4, 3.88), So 12 (1.5, 1.70, 4, 3.76). Only four slots qualify.
 
-Gap class first-timer index (June 1 to Oct 25 2026, 0-19 pooled): A (high rest, few streams) 1.226 (0.689-2.105), 44 sessions, 36 streamers; B (high rest) 1.006 (0.981-1.033), 3,009 sessions, 723 streamers; C (middle) 0.935 (0.844-0.999), 1,425 sessions, 488 streamers; D (low rest) 1.060 (0.968-1.142), 849 sessions, 314 streamers.
+Gap class first-timer index (June 1 to Oct 25 2026, 0-19 pooled): A (high rest, few streams) 0.906 (0.389-1.452), 44 sessions, 36 streamers; B (high rest) 0.990 (0.970-1.009), 3,009 sessions, 723 streamers; C (middle) 0.998 (0.949-1.046), 1,425 sessions, 488 streamers; D (low rest) 1.037 (0.961-1.124), 849 sessions, 314 streamers.
 
 Gap class viewers index (Feb to Oct 2026, size class 0-4): A 1.013 (0.881-1.177), 77 sessions; B 0.984 (0.971-0.996), 5,158 sessions; C 1.007 (0.987-1.031), 2,399 sessions; D 1.047 (0.995-1.094), 1,401 sessions.
 
@@ -234,7 +236,7 @@ Viewers index, 0-19 pooled, start band x duration bucket (Feb 1 to Oct 25 2026; 
 
 Session length is the strongest session-level correlate of average viewers. Riding into prime time: sessions starting 15-18 and still live at 19h index 1.033 (1.008 to 1.060) for size class 0-4 (1,684 sessions, 497 streamers, duration index 1.217); sessions starting 15-18 that end before 19h index 0.882 (0.842 to 0.923) (859 sessions, 383 streamers, duration index 0.508). Pooled 0-19: riding 1.022 (0.991 to 1.056), ending before 0.888 (0.853 to 0.929), 21-22 starts 0.988 (0.961 to 1.013).
 
-First-timers, June to October, 0-19 pooled: start 15-18 riding into 19h 0.955 (0.900 to 1.013), 1,084 sessions; ending before 19h 1.056 (0.879 to 1.312), 500 sessions. Sessions of 4 h or more starting 19-20h: 1.145 (0.981 to 1.313), 347 sessions, 138 streamers; starting 21-22h: 0.851 (0.702 to 1.069), 121 sessions, 71 streamers.
+First-timers, June to October, 0-19 pooled: start 15-18 riding into 19h 1.005 (0.944 to 1.063), 1,084 sessions; ending before 19h 1.094 (0.949 to 1.238), 500 sessions. Sessions of 4 h or more starting 19-20h: 0.901 (0.829 to 0.975), 347 sessions, 138 streamers; starting 21-22h: 0.847 (0.700 to 1.029), 121 sessions, 71 streamers. Sessions under 2 h starting 19-20h: 1.275 (1.142 to 1.435), 426 sessions, 251 streamers. Per hour, first-timers favour short sessions, the opposite of average viewers; P04 item 2 shows the same pattern.
 
 ## Actionable tips
 
@@ -243,18 +245,19 @@ First-timers, June to October, 0-19 pooled: start 15-18 riding into 19h 0.955 (0
 | 1 | For average viewers, plan sessions of four hours or more. | Viewers index for 4 h+ sessions: 1.141 (1.088-1.201) starting up to 14h, 1.166 (1.061-1.305) starting 21-22h; under 2 h: 0.85 to 0.95. | 4 h+ sessions run 6 to 17% above the streamer's own average; under 2 h 5 to 15% below. | 896 and 296 sessions; 294 and 138 streamers | medium (association; streamers choose their length) |
 | 2 | An evening start at 19-20h does not raise a small streamer's average viewers above that streamer's own average. | Index 0.997 (0.969-1.021) for class 0-4; 0.971 (0.941-1.014) for class 5-19. | Null | 2,016 and 454 sessions | medium (null result) |
 | 3 | Staying live into the evening helps average viewers; ending before 19h costs them. | Class 0-4: riding into 19h 1.033 (1.008-1.060); ending before 0.882 (0.842-0.923). | About 17% difference between the two groups | 1,684 and 859 sessions | medium (duration confound: these sessions are also much longer) |
-| 4 | Evening starts (19-20h) may bring more first-time chatters per hour than the same streamer's other sessions. | 0-19 pooled first-timer index 1.072 (0.989-1.151); July to October 1.075 (0.971-1.167); class 5-19 1.131 (0.951-1.250). | Up to about 7% per hour, not significant | 1,245 sessions, 415 streamers | low (interval includes 1) |
-| 5 | Do not treat Saturday as a first-timer slot. | First-timer index Sa 0.836 (0.766-0.915); other days 0.97 to 1.09. Viewers index Sa 0.982 (0.953-1.017). | About 16% fewer first-timers per hour than the streamer's own average; no viewer penalty | 853 sessions, 387 streamers | low to medium (chat-field coverage varies by month) |
+| 4 | Do not pick a start hour for first-time chatters; the evening start at 19-20h brings the streamer's usual rate. | 0-19 pooled first-timer index 19-20h 0.984 (0.933-1.032); July to October 0.991 (0.942-1.060). Morning 06-11h 1.100 (1.024-1.206) and 12-14h 0.900 (0.841-0.983) are the only bands whose intervals exclude 1; July to October 06-11h 1.076 (0.990-1.160). | Within about 10% per hour; null for the evening | 1,245 sessions, 415 streamers (19-20h) | low (eight bands tested; morning sample smaller) |
+| 5 | Do not pick a weekday for first-time chatters. | First-timer index Sa 0.911 (0.839-1.002), Mo 1.106 (1.005-1.228), other days 0.97 to 1.02. Viewers index Sa 0.982 (0.953-1.017). | Within about 10% per hour; Saturday interval includes 1 | 853 sessions, 387 streamers (Saturday) | low (seven days tested; chat coverage varies by month) |
 | 6 | Weekday evenings have the most viewers per other small stream; weekend afternoons have few small streams. | Per-poll median rest_vps 2.0 to 2.2 on Mo, Di, Mi, Do 19-21h with 7 to 10 streams; Fr 11-14h 1.0 with 2 to 3 streams; Sa 13h 1.5 with 4 streams. | Descriptive only | 161 slots | medium (describes supply and demand; does not estimate the effect of a new streamer) |
 | 7 | Afternoons give the most German viewers per German stream; 19h shows the largest German average audience in the table. | Viewers per German stream 21.9 to 24.6 at 12-16h, 16.6 at 19h, 10.1 at 20h; German average viewers 271.7 at 19h. | Descriptive | 17 days of global data | medium (category means are dominated by large channels) |
 | 8 | Weekends have more streams but not more viewers per stream, so they do not beat weekdays per stream. | Fr-So minus Mo-Do streams +0.48 per day in 10 of 13 months; rest_vps 1.80 vs 1.87; viewers index by weekday 0.98 to 1.04. | Null on rest_vps | 212 and 163 days | medium |
 | 9 | Do not plan around patch days or holidays. | Day-0 patch median 1.071 (p 0.011) is matched by day -1 (1.090, p 0.18); placebo 1.00; holiday rest_vps above 1 on 4 of 11. | Null | 44 patch days; 11 holidays | low (no reliable effect) |
-| 10 | Do not expect a gap slot for small streamers from this data. | Gap class A first-timer index 1.226 (0.689-2.105) on 44 sessions; only four slots qualify. | Not established | 44 sessions | low (do not act on it) |
+| 10 | Do not expect a gap slot for small streamers from this data. | Gap class A first-timer index 0.906 (0.389-1.452) on 44 sessions; only four slots qualify. | Not established | 44 sessions | low (do not act on it) |
 
 ## Caveats and dead ends
 
-- **Withdrawn first-pass results.** The first pass used the full February to October window for first-timers, where March to May chat fields are zero. The 19-20h first-timer advantage (1.16 for class 5-19, CI 0.99 to 1.32) and the full-window riding and 19-20h 4 h+ results are withdrawn. The June-to-October values above replace them.
-- **Uneven chat coverage.** Share of sessions with positive first-time chatters: 12% in June, 39% in July, 47% in August, 54% in September, 44% in October. The June-to-October indices may partly reflect coverage changes. The July-to-October sensitivity agrees on 19-20h (1.075) and 21-22h (0.928).
+- **Withdrawn first-pass results.** The first pass used the full February to October window for first-timers, where March to May chat tracking is sparse. The 19-20h first-timer advantage (1.16 for class 5-19, CI 0.99 to 1.32) and the full-window riding and 19-20h 4 h+ results are withdrawn. The June-to-October values above replace them.
+- **Withdrawn session-column results.** An earlier version counted first-timers from the session column `first_time_chatters`, which includes lurkers. Its 19-20h first-timer hint (1.072, CI 0.989-1.151), the Saturday penalty (0.836, CI 0.766-0.915), the 4 h+ 19-20h value (1.145) and the gap class A value (1.226) are withdrawn. With message-based counts the evening hint and the Saturday penalty disappear.
+- **Uneven chat coverage.** Share of sessions with at least one message-writing first-time chatter: 11% in June, 35% in July, 49% in August, 55% in September, 57% in October. The June-to-October indices may partly reflect coverage changes. The July-to-October sensitivity agrees on 19-20h (0.991) and 21-22h (1.016).
 - **February 2026 level jump.** Daily viewers median 8.6 in January, 251.25 in February, 70.5 in March. Top-3 share stays at 0.82 to 0.92, so the level is driven by large channels. The cause is not verified (possibly collector coverage). The stream-count jump (909 in February, 2,218 in March) looks real.
 - **Patch list is hand-compiled.** The 46 patch dates are a list typed into `patch_study.py` in scratch, not derived from a database query in this package. Treat the patch result as unverified input.
 - **Gap classes use full-window slot metrics.** Slot classes come from the slot file over the full poll window, so they are not period-specific.

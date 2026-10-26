@@ -1,5 +1,6 @@
 import collections
 import csv
+import random
 import re
 import statistics as st
 import sys
@@ -64,20 +65,46 @@ def minutes(ivs):
     return sum((b - a).total_seconds() / 60 for a, b in ivs)
 
 
-def control_comparison(raid_rows, t0_by_id):
-    ev = []
+def unit_ok(r, t0_by_id):
+    t = ts(r["t_utc"])
+    if t is None or r["covers60"] != "t" or r["other_raids_pm60"] != "0" or not r["session_id"] or t < START:
+        return False
+    return bool(r["tid"]) and r["tid"] in t0_by_id and t >= t0_by_id[r["tid"]] and window_ok(t, t + timedelta(minutes=60))
+
+
+def source_key(r):
+    return (r["raid_id"], ts(r["t_utc"]) - timedelta(days=7 * int(r["k"])))
+
+
+def matched_pairs(raid_rows, t0_by_id):
+    raid, ctl = {}, collections.defaultdict(list)
     for r in raid_rows:
-        t = ts(r["t_utc"])
-        if t is None or r["covers60"] != "t" or r["other_raids_pm60"] != "0" or not r["session_id"] or t < START:
+        if not unit_ok(r, t0_by_id):
             continue
-        if r["tid"] and r["tid"] in t0_by_id and t >= t0_by_id[r["tid"]] and window_ok(t, t + timedelta(minutes=60)):
-            ev.append(r)
-    raid = [r for r in ev if r["kind"] == "raid"]
-    ctl = [r for r in ev if r["kind"] == "ctl"]
-    print(f"control comparison: raids {len(raid)}, controls {len(ctl)}, channels {len({r['tid'] for r in ev})}")
+        if r["kind"] == "raid":
+            raid[source_key(r)] = r
+        else:
+            ctl[source_key(r)].append(r)
+    return [(raid[key], ctl[key]) for key in sorted(raid) if ctl.get(key)]
+
+
+def bootstrap_ci(diffs, n=2000, seed=7):
+    rng = random.Random(seed)
+    means = sorted(st.mean(rng.choices(diffs, k=len(diffs))) for _ in range(n))
+    return means[int(0.025 * n)], means[int(0.975 * n) - 1]
+
+
+def control_comparison(raid_rows, t0_by_id):
+    pairs = matched_pairs(raid_rows, t0_by_id)
+    n_ctl = sum(len(c) for _, c in pairs)
+    print(f"control comparison (matched): raids {len(pairs)}, controls {n_ctl}, channels {len({r['tid'] for r, _ in pairs})}")
     for k in ("fol30", "fol60"):
-        rm, cm = st.mean(int(r[k]) for r in raid), st.mean(int(r[k]) for r in ctl)
-        print(f"  {k}: raid {rm:.3f} ({sum(int(r[k]) for r in raid)}) vs control {cm:.3f} ({sum(int(r[k]) for r in ctl)}), difference {rm - cm:+.3f}")
+        rv = [int(r[k]) for r, _ in pairs]
+        cv = [st.mean(int(c[k]) for c in cs) for _, cs in pairs]
+        diffs = [a - b for a, b in zip(rv, cv)]
+        lo, hi = bootstrap_ci(diffs)
+        print(f"  {k}: raid {st.mean(rv):.3f} ({sum(rv)}) vs matched control mean {st.mean(cv):.3f} ({sum(int(c[k]) for _, cs in pairs for c in cs)} events), "
+              f"mean difference {st.mean(diffs):+.3f} (CI {lo:+.3f} to {hi:+.3f})")
 
 
 def session_end(r):

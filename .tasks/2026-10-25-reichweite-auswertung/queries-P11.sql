@@ -1,3 +1,4 @@
+\echo Session base; prev_ftc from first_time_chatters is replaced by the previous session's chat_ftc from chat-counts.sql, joined by session id, because the session column also counts lurkers
 WITH s AS (
   SELECT t.id, t.streamer_login, t.started_at, t.ended_at, t.duration_seconds,
          t.start_viewers, t.peak_viewers, t.end_viewers, t.avg_viewers, t.samples,
