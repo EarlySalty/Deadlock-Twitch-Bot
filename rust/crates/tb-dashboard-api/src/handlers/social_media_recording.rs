@@ -298,11 +298,11 @@ async fn consent_granted(
     Ok(decision.as_deref() == Some("granted"))
 }
 
-async fn lock_session(
+async fn open_session(
     tx: &mut Transaction<'_, Postgres>,
     recorder: &Recorder,
     chunk: &Chunk,
-) -> Result<(String, i64), sqlx::Error> {
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO social_media_recording_sessions
              (id, twitch_user_id, twitch_login, user_agent, viewport_width, viewport_height)
@@ -317,14 +317,39 @@ async fn lock_session(
     .bind(viewport_value(chunk.meta.viewport_height))
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+async fn lock_session(
+    tx: &mut Transaction<'_, Postgres>,
+    recorder: &Recorder,
+    chunk: &Chunk,
+) -> Result<Option<(String, i64)>, sqlx::Error> {
+    if chunk.seq == 0 {
+        open_session(tx, recorder, chunk).await?;
+    }
     let row = sqlx::query(
         "SELECT twitch_user_id, total_bytes FROM social_media_recording_sessions
          WHERE id = $1::uuid FOR UPDATE",
     )
     .bind(chunk.session_id.to_string())
-    .fetch_one(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await?;
-    Ok((row.try_get(0)?, row.try_get(1)?))
+    row.map(|row| Ok((row.try_get(0)?, row.try_get(1)?)))
+        .transpose()
+}
+
+async fn chunk_stored(
+    tx: &mut Transaction<'_, Postgres>,
+    chunk: &Chunk,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM social_media_recording_chunks WHERE session_id = $1::uuid AND seq = $2)",
+    )
+    .bind(chunk.session_id.to_string())
+    .bind(chunk.seq)
+    .fetch_one(&mut **tx)
+    .await
 }
 
 async fn daily_bytes(
@@ -393,11 +418,19 @@ async fn ingest(
             "consent_required",
         ));
     }
-    let (owner, session_bytes) = lock_session(&mut tx, recorder, chunk).await?;
+    let Some((owner, session_bytes)) = lock_session(&mut tx, recorder, chunk).await? else {
+        return Ok(IngestOutcome::Rejected(StatusCode::GONE, "session_closed"));
+    };
     if owner != recorder.twitch_user_id {
         return Ok(IngestOutcome::Rejected(
             StatusCode::FORBIDDEN,
             "session_owner_mismatch",
+        ));
+    }
+    if chunk_stored(&mut tx, chunk).await? {
+        return Ok(IngestOutcome::Rejected(
+            StatusCode::CONFLICT,
+            "duplicate_chunk",
         ));
     }
     if session_bytes.saturating_add(size_bytes) > SESSION_MAX_BYTES {
@@ -702,12 +735,71 @@ mod tests {
             return;
         };
         assert_eq!(decide(&pool, "111", "granted").await, StatusCode::OK);
-        seed_bytes(&pool, SESSION, 2, DAILY_MAX_BYTES - 10).await;
+        let old_sessions = [
+            ("0b1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", SESSION_MAX_BYTES),
+            ("1b1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", SESSION_MAX_BYTES),
+            (
+                "2b1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+                DAILY_MAX_BYTES - 2 * SESSION_MAX_BYTES - 10,
+            ),
+        ];
+        for (session, bytes) in old_sessions {
+            seed_bytes(&pool, session, 2, bytes).await;
+        }
         assert_eq!(
-            send_chunk(&pool, "111", 1).await,
+            send_chunk(&pool, "111", 0).await,
             StatusCode::TOO_MANY_REQUESTS
         );
-        assert_eq!(chunk_rows(&pool).await, 1);
+        assert_eq!(chunk_rows(&pool).await, 3);
+    }
+
+    #[tokio::test]
+    async fn stored_chunk_retry_is_a_duplicate_even_at_the_caps() {
+        let Some(pool) = pool_or_skip("social_media_recording_retry_caps").await else {
+            return;
+        };
+        assert_eq!(decide(&pool, "111", "granted").await, StatusCode::OK);
+        assert_eq!(send_chunk(&pool, "111", 0).await, StatusCode::OK);
+        sqlx::query("UPDATE social_media_recording_sessions SET total_bytes = $1")
+            .bind(SESSION_MAX_BYTES)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(send_chunk(&pool, "111", 0).await, StatusCode::CONFLICT);
+        assert_eq!(
+            send_chunk(&pool, "111", 1).await,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        seed_bytes(
+            &pool,
+            "3b1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+            0,
+            DAILY_MAX_BYTES,
+        )
+        .await;
+        assert_eq!(send_chunk(&pool, "111", 0).await, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn deleted_session_is_not_recreated_by_later_chunks() {
+        let Some(pool) = pool_or_skip("social_media_recording_no_resurrect").await else {
+            return;
+        };
+        assert_eq!(decide(&pool, "111", "granted").await, StatusCode::OK);
+        assert_eq!(send_chunk(&pool, "111", 0).await, StatusCode::OK);
+        assert_eq!(send_chunk(&pool, "111", 1).await, StatusCode::OK);
+        sqlx::query("DELETE FROM social_media_recording_sessions")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(send_chunk(&pool, "111", 2).await, StatusCode::GONE);
+        let sessions: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM social_media_recording_sessions")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(sessions, 0);
+        assert_eq!(chunk_rows(&pool).await, 0);
     }
 
     #[tokio::test]

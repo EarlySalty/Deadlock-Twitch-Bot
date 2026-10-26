@@ -293,8 +293,15 @@ pub fn contact_sheet_grid(fps: u32) -> (u32, u32) {
     (columns, fps.div_ceil(columns))
 }
 
-fn contact_sheet_starts(duration_ms: u64, max_sheets: usize) -> Vec<u64> {
-    let seconds = duration_ms.div_ceil(CONTACT_SHEET_WINDOW_MS).max(1);
+fn contact_sheet_windows(duration_ms: u64, fps: u32) -> u64 {
+    let interval_ms = CONTACT_SHEET_WINDOW_MS.div_ceil(u64::from(fps.max(1)));
+    let full = duration_ms / CONTACT_SHEET_WINDOW_MS;
+    let tail = duration_ms % CONTACT_SHEET_WINDOW_MS;
+    (full + u64::from(tail >= interval_ms)).max(1)
+}
+
+fn contact_sheet_starts(duration_ms: u64, max_sheets: usize, fps: u32) -> Vec<u64> {
+    let seconds = contact_sheet_windows(duration_ms, fps);
     let count = seconds.min(max_sheets as u64);
     let last_start = duration_ms.saturating_sub(CONTACT_SHEET_WINDOW_MS);
     (0..count)
@@ -395,7 +402,7 @@ pub async fn extract_frames(
     let path = source_path(source_root, input, limits.max_source_bytes)?;
     let info = probe_path(&path, limits).await?;
     let owned = make_temp_directory(workspace_root)?;
-    let starts = contact_sheet_starts(info.duration_ms, limits.max_frames);
+    let starts = contact_sheet_starts(info.duration_ms, limits.max_frames, fps);
     tokio::time::timeout(
         Duration::from_millis(limits.total_frames_deadline_ms),
         async {
@@ -838,11 +845,39 @@ mod tests {
         assert_eq!(contact_sheet_grid(8), (3, 3));
         assert_eq!(contact_sheet_tile_width(4, 640), 640);
         assert_eq!(contact_sheet_tile_width(8, 640), 522);
-        assert_eq!(contact_sheet_starts(3_500, 4), vec![0, 1_000, 2_000, 3_000]);
         assert_eq!(
-            contact_sheet_starts(60_000, 4),
+            contact_sheet_starts(3_500, 4, 4),
+            vec![0, 1_000, 2_000, 3_000]
+        );
+        assert_eq!(
+            contact_sheet_starts(60_000, 4, 4),
             vec![7_000, 22_000, 37_000, 52_000]
         );
+    }
+
+    #[test]
+    fn contact_sheets_skip_tail_windows_without_a_frame() {
+        assert_eq!(contact_sheet_starts(3_010, 10, 4), vec![0, 1_000, 2_000]);
+        assert_eq!(
+            contact_sheet_starts(3_250, 10, 4),
+            vec![0, 1_000, 2_000, 3_000]
+        );
+        assert_eq!(contact_sheet_starts(3_050, 10, 16), vec![0, 1_000, 2_000]);
+        assert_eq!(
+            contact_sheet_starts(3_063, 10, 16),
+            vec![0, 1_000, 2_000, 3_000]
+        );
+        assert_eq!(contact_sheet_starts(3_999, 10, 1), vec![0, 1_000, 2_000]);
+        assert_eq!(contact_sheet_starts(400, 10, 4), vec![0]);
+        assert_eq!(contact_sheet_starts(5, 10, 16), vec![0]);
+        for fps in 1..=MAX_CONTACT_SHEET_FPS {
+            let interval = CONTACT_SHEET_WINDOW_MS.div_ceil(u64::from(fps));
+            for duration in [1_000, 2_001, 4_499, 7_900, 12_345] {
+                let starts = contact_sheet_starts(duration, 100, fps);
+                let last = starts.last().copied().unwrap_or_default();
+                assert!(duration - last >= interval, "fps {fps} duration {duration}");
+            }
+        }
     }
 
     #[test]

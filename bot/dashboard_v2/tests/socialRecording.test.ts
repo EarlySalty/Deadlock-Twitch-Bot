@@ -110,6 +110,28 @@ test('Chunks are sequential and stay under the chunk cap', async () => {
   });
 });
 
+test('A final keepalive flush waits behind a chunk that is still retrying', async () => {
+  const outcomes = [503, 200, 200];
+  const seqs: number[] = [];
+  let release: () => void = () => {};
+  const firstWait = new Promise<void>((resolve) => { release = resolve; });
+  const uploader = new RecordingUploader('s', async (body) => {
+    seqs.push((JSON.parse(body) as { seq: number }).seq);
+    return { status: outcomes.shift() ?? 200 };
+  }, META, () => {}, () => firstWait);
+  uploader.push({ type: 2, timestamp: 1 });
+  const pending = uploader.flush(false);
+  await Promise.resolve();
+  uploader.push({ type: 3, timestamp: 2 });
+  const final = uploader.flush(true);
+  await new Promise((resolve) => { setTimeout(resolve, 0); });
+  assert.deepEqual(seqs, [0]);
+  release();
+  await pending;
+  await final;
+  assert.deepEqual(seqs, [0, 0, 1]);
+});
+
 test('Keepalive is only used for bodies the browser accepts', async () => {
   const calls: boolean[] = [];
   const uploader = new RecordingUploader('s', async (_body, keepalive) => {

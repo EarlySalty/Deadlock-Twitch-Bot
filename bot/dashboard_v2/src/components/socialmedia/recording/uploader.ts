@@ -65,8 +65,8 @@ export class RecordingUploader {
   flush(keepalive: boolean): Promise<void> {
     if (this.stopped || this.buffer.length === 0) return this.queue;
     const body = this.nextBody();
-    if (keepalive) return this.deliver(body, byteLength(body) <= KEEPALIVE_MAX_BYTES);
-    this.queue = this.queue.then(() => this.deliver(body, false));
+    const useKeepalive = keepalive && byteLength(body) <= KEEPALIVE_MAX_BYTES;
+    this.queue = this.queue.then(() => this.deliver(body, useKeepalive));
     return this.queue;
   }
 
