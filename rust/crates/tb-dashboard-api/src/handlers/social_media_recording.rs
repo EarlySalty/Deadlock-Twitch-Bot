@@ -399,6 +399,43 @@ async fn insert_chunk(
     Ok(true)
 }
 
+fn rejected(status: StatusCode, code: &'static str) -> Result<Admission, sqlx::Error> {
+    Ok(Admission::Rejected(IngestOutcome::Rejected(status, code)))
+}
+
+enum Admission {
+    Admitted { session_bytes: i64 },
+    Rejected(IngestOutcome),
+}
+
+async fn admit_chunk(
+    tx: &mut Transaction<'_, Postgres>,
+    recorder: &Recorder,
+    chunk: &Chunk,
+    size_bytes: i64,
+) -> Result<Admission, sqlx::Error> {
+    if !consent_granted(tx, &recorder.twitch_user_id).await? {
+        return rejected(StatusCode::FORBIDDEN, "consent_required");
+    }
+    let Some((owner, session_bytes)) = lock_session(tx, recorder, chunk).await? else {
+        return rejected(StatusCode::GONE, "session_closed");
+    };
+    if owner != recorder.twitch_user_id {
+        return rejected(StatusCode::FORBIDDEN, "session_owner_mismatch");
+    }
+    if chunk_stored(tx, chunk).await? {
+        return rejected(StatusCode::CONFLICT, "duplicate_chunk");
+    }
+    if session_bytes.saturating_add(size_bytes) > SESSION_MAX_BYTES {
+        return rejected(StatusCode::PAYLOAD_TOO_LARGE, "session_cap_reached");
+    }
+    let today = daily_bytes(tx, &recorder.twitch_user_id).await?;
+    if today.saturating_add(size_bytes) > DAILY_MAX_BYTES {
+        return rejected(StatusCode::TOO_MANY_REQUESTS, "daily_cap_reached");
+    }
+    Ok(Admission::Admitted { session_bytes })
+}
+
 async fn ingest(
     pool: &PgPool,
     recorder: &Recorder,
@@ -412,43 +449,10 @@ async fn ingest(
     };
     let size_bytes = i64::from(size);
     let mut tx = pool.begin().await?;
-    if !consent_granted(&mut tx, &recorder.twitch_user_id).await? {
-        return Ok(IngestOutcome::Rejected(
-            StatusCode::FORBIDDEN,
-            "consent_required",
-        ));
-    }
-    let Some((owner, session_bytes)) = lock_session(&mut tx, recorder, chunk).await? else {
-        return Ok(IngestOutcome::Rejected(StatusCode::GONE, "session_closed"));
+    let session_bytes = match admit_chunk(&mut tx, recorder, chunk, size_bytes).await? {
+        Admission::Admitted { session_bytes } => session_bytes,
+        Admission::Rejected(outcome) => return Ok(outcome),
     };
-    if owner != recorder.twitch_user_id {
-        return Ok(IngestOutcome::Rejected(
-            StatusCode::FORBIDDEN,
-            "session_owner_mismatch",
-        ));
-    }
-    if chunk_stored(&mut tx, chunk).await? {
-        return Ok(IngestOutcome::Rejected(
-            StatusCode::CONFLICT,
-            "duplicate_chunk",
-        ));
-    }
-    if session_bytes.saturating_add(size_bytes) > SESSION_MAX_BYTES {
-        return Ok(IngestOutcome::Rejected(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "session_cap_reached",
-        ));
-    }
-    if daily_bytes(&mut tx, &recorder.twitch_user_id)
-        .await?
-        .saturating_add(size_bytes)
-        > DAILY_MAX_BYTES
-    {
-        return Ok(IngestOutcome::Rejected(
-            StatusCode::TOO_MANY_REQUESTS,
-            "daily_cap_reached",
-        ));
-    }
     if !insert_chunk(&mut tx, chunk, size).await? {
         return Ok(IngestOutcome::Rejected(
             StatusCode::CONFLICT,
@@ -697,6 +701,21 @@ mod tests {
         .unwrap();
     }
 
+    async fn seed_old_sessions_below_session_cap(pool: &PgPool, total: i64) {
+        let sessions = [
+            "0b1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+            "1b1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+            "2b1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+        ];
+        let mut left = total;
+        for session in sessions {
+            let bytes = left.min(SESSION_MAX_BYTES);
+            seed_bytes(pool, session, 2, bytes).await;
+            left -= bytes;
+        }
+        assert_eq!(left, 0);
+    }
+
     async fn decide(pool: &PgPool, id: &str, decision: &str) -> StatusCode {
         let body = Bytes::from(json!({ "decision": decision }).to_string());
         consent_post_handler(partner(id), State(pool.clone()), body)
@@ -735,17 +754,7 @@ mod tests {
             return;
         };
         assert_eq!(decide(&pool, "111", "granted").await, StatusCode::OK);
-        let old_sessions = [
-            ("0b1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", SESSION_MAX_BYTES),
-            ("1b1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", SESSION_MAX_BYTES),
-            (
-                "2b1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
-                DAILY_MAX_BYTES - 2 * SESSION_MAX_BYTES - 10,
-            ),
-        ];
-        for (session, bytes) in old_sessions {
-            seed_bytes(&pool, session, 2, bytes).await;
-        }
+        seed_old_sessions_below_session_cap(&pool, DAILY_MAX_BYTES - 10).await;
         assert_eq!(
             send_chunk(&pool, "111", 0).await,
             StatusCode::TOO_MANY_REQUESTS
