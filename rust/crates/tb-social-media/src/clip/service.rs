@@ -80,6 +80,11 @@ impl ClipFetchService {
             Ok(false) => {}
             Err(error) => return error_result(login, &error.to_string(), started),
         }
+        match self.repo.social_access_granted(user_id).await {
+            Ok(true) => return self.start_pool(user_id, login, started).await,
+            Ok(false) => {}
+            Err(error) => return error_result(login, &error.to_string(), started),
+        }
         let clips = match self
             .helix
             .fetch_clips(user_id, login, self.clip_limit)
@@ -135,6 +140,18 @@ impl ClipFetchService {
         }
 
         result
+    }
+
+    async fn start_pool(&self, owner: &str, login: &str, started: Instant) -> StreamerFetchResult {
+        match self.repo.start_pool_import(owner, login).await {
+            Ok(job) => tracing::info!(
+                login,
+                job = job.id,
+                "clip_fetch: Clip-Pool-Import automatisch gestartet"
+            ),
+            Err(error) => return error_result(login, &error.to_string(), started),
+        }
+        self.fetch_managed_recent(owner, login, started).await
     }
 
     async fn fetch_managed_recent(

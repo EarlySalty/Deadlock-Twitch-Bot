@@ -23,6 +23,23 @@ impl ClipRepository {
         crate::clip_pool::is_managed(&self.pool, owner).await
     }
 
+    pub async fn social_access_granted(&self, owner: &str) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM social_media_partner_access WHERE twitch_user_id = $1 AND granted)",
+        )
+        .bind(owner)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn start_pool_import(
+        &self,
+        owner: &str,
+        login: &str,
+    ) -> Result<crate::clip_pool::ImportJob, crate::clip_pool::PoolError> {
+        crate::clip_pool::start_import(&self.pool, owner, login).await
+    }
+
     pub async fn register_recent_pool(
         &self,
         owner: &str,
