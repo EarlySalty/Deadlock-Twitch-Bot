@@ -38,15 +38,32 @@ printf '[package]\nname = "tb-test-only"\n' > "$checkout/rust/crates/tb-test-onl
 printf '[package]\nname = "extra"\n' > "$checkout/rust/vendor/extra/Cargo.toml"
 printf 'const SQL: &str = include_str!("../../../migrations/one.sql");\n' > "$checkout/rust/bin/tb-bot/src/main.rs"
 
+git_safe=(git -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false)
+commit_fixture() {
+  "${git_safe[@]}" -C "$checkout" add -A
+  "${git_safe[@]}" -C "$checkout" commit -q -m "$1"
+  git_sha="$("${git_safe[@]}" -C "$checkout" rev-parse HEAD)"
+}
+"${git_safe[@]}" -C "$checkout" init -q
+commit_fixture fixture
+
 inputs="$(required_inputs binary tb-bot | LC_ALL=C sort -u | tr '\n' ' ')"
 for expected in rust/bin/tb-bot/ rust/crates/tb-config/ rust/crates/tb-error/ rust/vendor/extra/ rust/migrations/one.sql; do
   [[ " $inputs " == *" $expected "* ]] || { echo "missing $expected in: $inputs" >&2; exit 1; }
 done
 [[ " $inputs " != *" rust/crates/tb-test-only/ "* ]] || { echo "dev dependency leaked into: $inputs" >&2; exit 1; }
 
+printf '[package]\nname = "tb-bot"\n' > "$checkout/rust/bin/tb-bot/Cargo.toml"
+: > "$checkout/rust/bin/tb-bot/src/main.rs"
+tampered="$(required_inputs binary tb-bot | LC_ALL=C sort -u | tr '\n' ' ')"
+[[ "$tampered" == "$inputs" ]] || { echo "working tree changed the closure: $tampered" >&2; exit 1; }
+"${git_safe[@]}" -C "$checkout" checkout -q -- .
+
 printf 'const P: &str = "../{}";\n' > "$checkout/rust/crates/tb-error/src/lib.rs"
+commit_fixture bounded
 [[ "$(required_inputs binary tb-bot 2>/dev/null | tr '\n' ' ')" == *"rust/crates/tb-error/"* ]] || { echo "bounded template not kept" >&2; exit 1; }
 printf 'const P: &str = "../../../{root}";\n' > "$checkout/rust/crates/tb-error/src/lib.rs"
+commit_fixture unbounded
 if (required_inputs binary tb-bot >/dev/null 2>&1); then
   echo "unbounded reference was accepted" >&2
   exit 1

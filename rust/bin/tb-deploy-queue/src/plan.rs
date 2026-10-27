@@ -111,6 +111,8 @@ const SERVICE_PATHS: [(&str, &[&str]); 6] = [
     ("ops/social-ai/", &[BOT, DASHBOARD]),
 ];
 
+const STANDALONE_STT: &str = "standalone tb-stt-server (~/.local/bin/tb-stt-server, deadlock-stt-server.service; only the release copy started by tb-social-media is updated)";
+
 const UNAPPLIED_PATHS: [&str; 10] = [
     "ops/systemd/discord-hub.conf",
     "ops/systemd/deadlock-twitch-bot-rust.service",
@@ -362,6 +364,9 @@ pub fn compute(inputs: &Inputs) -> Result<Plan> {
             continue;
         }
         deploy_paths.push(path.clone());
+    }
+    if built_binaries.iter().any(|name| name == "tb-stt-server") {
+        unapplied_paths.push(STANDALONE_STT.to_string());
     }
     Ok(Plan {
         parent: inputs.parent.to_string(),

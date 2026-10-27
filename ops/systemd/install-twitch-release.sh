@@ -221,10 +221,19 @@ normalize_reference() {
   fi
 }
 
+tracked_file() {
+  "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:$1" 2>/dev/null
+}
+
+tracked_content() {
+  "${git_safe[@]}" -C "$checkout" show "$git_sha:$1"
+}
+
 declare -A workspace_crate_dir=()
 load_workspace_map() {
-  local entries name path
-  entries="$(sed -nE 's/^[[:space:]]*([A-Za-z0-9_-]+)[[:space:]]*=[[:space:]]*\{.*path[[:space:]]*=[[:space:]]*"([^"]+)".*/\1 \2/p' "$checkout/rust/Cargo.toml")" || carry_reject "Arbeitsbereich nicht lesbar"
+  local manifest entries name path
+  manifest="$(tracked_content rust/Cargo.toml)" || carry_reject "Arbeitsbereich nicht lesbar"
+  entries="$(sed -nE 's/^[[:space:]]*([A-Za-z0-9_-]+)[[:space:]]*=[[:space:]]*\{.*path[[:space:]]*=[[:space:]]*"([^"]+)".*/\1 \2/p' <<< "$manifest")"
   while read -r name path; do
     [[ -n "$name" ]] || continue
     workspace_crate_dir[$name]="rust/${path%/}/"
@@ -258,12 +267,13 @@ manifest_dependencies() {
       sub(/"$/, "", value)
       print "path " value
     }
-  ' "$1"
+  '
 }
 
 crate_dependency_dirs() {
-  local crate="$1" entries kind value resolved
-  entries="$(manifest_dependencies "$checkout/${crate%/}/Cargo.toml")" || return 1
+  local crate="$1" manifest entries kind value resolved
+  manifest="$(tracked_content "${crate%/}/Cargo.toml")" || return 1
+  entries="$(manifest_dependencies <<< "$manifest")" || return 1
   while read -r kind value; do
     case "$kind" in
       name)
@@ -273,7 +283,7 @@ crate_dependency_dirs() {
         ;;
       path)
         resolved=$(normalize_reference "${crate%/}" "$value") || continue
-        if [[ "$resolved" != UNBOUNDED && -f "$checkout/${resolved%/}/Cargo.toml" ]]; then
+        if [[ "$resolved" != UNBOUNDED ]] && tracked_file "${resolved%/}/Cargo.toml"; then
           printf '%s/\n' "${resolved%/}"
         fi
         ;;
@@ -283,15 +293,16 @@ crate_dependency_dirs() {
 
 crate_file_references() {
   local crate="$1" matches status=0 line file reference file_dir base resolved
-  matches="$(grep -rIoE --include='*.rs' --exclude-dir=target --exclude-dir=node_modules '"[^"\\]*\.\./[^"\\]*"' "$checkout/${crate%/}")" || status=$?
+  matches="$("${git_safe[@]}" -C "$checkout" grep -I -o -E -e '"[^"\\]*\.\./[^"\\]*"' "$git_sha" -- "${crate%/}/*.rs")" || status=$?
   (( status <= 1 )) || return 1
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
+    line="${line#"$git_sha":}"
     file="${line%%:*}"
     reference="${line#*:}"
     reference="${reference#\"}"
     reference="${reference%\"}"
-    file_dir="$(dirname -- "${file#"$checkout"/}")"
+    file_dir="$(dirname -- "$file")"
     for base in "$file_dir" "${crate%/}"; do
       resolved=$(normalize_reference "$base" "$reference") || continue
       printf '%s\n' "$resolved"
@@ -312,7 +323,7 @@ binary_required_inputs() {
     unset 'pending[-1]'
     [[ -z "${seen[$crate]:-}" ]] || continue
     seen[$crate]=1
-    [[ -f "$checkout/${crate%/}/Cargo.toml" ]] || carry_reject "$name: Paket $crate fehlt"
+    tracked_file "${crate%/}/Cargo.toml" || carry_reject "$name: Paket $crate fehlt in $git_sha"
     printf '%s\n' "$crate"
     dependencies="$(crate_dependency_dirs "$crate")" || carry_reject "$name: Abhängigkeiten von $crate nicht lesbar"
     references="$(crate_file_references "$crate")" || carry_reject "$name: Dateiverweise von $crate nicht lesbar"
@@ -325,33 +336,6 @@ binary_required_inputs() {
       [[ "$reference" != UNBOUNDED ]] || carry_reject "$name: $crate liest Dateien über einen offenen Pfad"
       printf '%s\n' "$reference"
     done <<< "$references"
-  done
-}
-
-required_inputs() {
-  local name="$1" root crate dependency reference name_key path
-  local -A workspace_paths=() seen=()
-  local -a pending=()
-  root="${binary_package_dir[$name]:-}"
-  [[ -n "$root" ]] || carry_reject "$name hat kein bekanntes Paket"
-  while read -r name_key path; do
-    workspace_paths[$name_key]="rust/${path%/}/"
-  done < <(workspace_dependency_map)
-  pending=("$root/")
-  while (( ${#pending[@]} > 0 )); do
-    crate="${pending[-1]}"
-    unset 'pending[-1]'
-    [[ -z "${seen[$crate]:-}" ]] || continue
-    seen[$crate]=1
-    [[ -f "$checkout/${crate%/}/Cargo.toml" ]] || carry_reject "$name: Paket $crate fehlt"
-    printf '%s\n' "$crate"
-    while read -r dependency; do
-      [[ -n "${seen[$dependency]:-}" ]] || pending+=("$dependency")
-    done < <(crate_dependency_dirs "$crate" workspace_paths)
-    while read -r reference; do
-      [[ "$reference" != UNBOUNDED ]] || carry_reject "$name: $crate liest Dateien über einen offenen Pfad"
-      printf '%s\n' "$reference"
-    done < <(crate_file_references "$crate")
   done
 }
 
