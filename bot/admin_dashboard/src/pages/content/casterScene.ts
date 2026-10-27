@@ -1,5 +1,6 @@
 import type {
   CasterBuiltinEventLogo,
+  CasterChat,
   CasterCountdown,
   CasterEvent,
   CasterEventLogo,
@@ -51,6 +52,16 @@ export function normalizedCountdown(countdown: CasterCountdown | undefined): Cas
   return { title: countdown?.title ?? 'STREAM STARTET IN', target: countdown?.target ?? null };
 }
 
+export const DEFAULT_CHAT_CHANNEL = 'dach_lock';
+
+export function normalizedChat(chat: CasterChat | undefined): CasterChat {
+  return {
+    enabled: chat?.enabled ?? false,
+    channel: chat?.channel || DEFAULT_CHAT_CHANNEL,
+    position: chat?.position === 'left' ? 'left' : 'right',
+  };
+}
+
 function publicTeam(team: CasterSceneTeam | null | undefined) {
   if (!team) return null;
   return {
@@ -73,6 +84,7 @@ export function previewPayload(scene: CasterScene) {
     sidesSwapped: scene.sidesSwapped,
     event: { logoUrl: eventLogoUrl(scene.event.logo), showBrand: scene.event.showBrand, brandUrl: BRAND_URL },
     countdown: { title: scene.countdown.title, target: scene.countdown.target ?? null },
+    chat: { enabled: scene.chat.enabled, channel: scene.chat.channel.trim().replace(/^@/, '').toLowerCase(), position: scene.chat.position },
   };
 }
 

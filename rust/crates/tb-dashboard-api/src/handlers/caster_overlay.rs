@@ -30,6 +30,8 @@ const MAX_TEAM_PLAYERS: usize = 12;
 const MAX_TEAM_SHORT: usize = 8;
 const MAX_COUNTDOWN_TITLE: usize = 60;
 const BRAND_URL: &str = "/twitch/caster-overlay/builtin/dachlock.png";
+const DEFAULT_CHAT_CHANNEL: &str = "dach_lock";
+const MAX_CHAT_CHANNEL: usize = 25;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -190,6 +192,37 @@ impl Default for Countdown {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatPosition {
+    Left,
+    #[default]
+    Right,
+}
+
+fn default_chat_channel() -> String {
+    DEFAULT_CHAT_CHANNEL.to_owned()
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ChatSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_chat_channel")]
+    pub channel: String,
+    #[serde(default)]
+    pub position: ChatPosition,
+}
+impl Default for ChatSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            channel: default_chat_channel(),
+            position: ChatPosition::default(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Scene {
     pub roster: Vec<Caster>,
@@ -205,6 +238,8 @@ pub struct Scene {
     pub countdown: Countdown,
     #[serde(default, rename = "sidesSwapped")]
     pub sides_swapped: bool,
+    #[serde(default)]
+    pub chat: ChatSettings,
 }
 
 #[derive(Deserialize)]
@@ -271,6 +306,22 @@ fn normalize_event_and_countdown(scene: &mut Scene) {
     if scene.countdown.title.is_empty() {
         scene.countdown.title = default_countdown_title();
     }
+    scene.chat.channel = scene
+        .chat
+        .channel
+        .trim()
+        .trim_start_matches('@')
+        .to_ascii_lowercase();
+    if scene.chat.channel.is_empty() {
+        scene.chat.channel = default_chat_channel();
+    }
+}
+
+fn chat_channel_valid(channel: &str) -> bool {
+    channel.len() <= MAX_CHAT_CHANNEL
+        && channel
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 fn valid_text(value: &str, max: usize) -> bool {
@@ -292,14 +343,16 @@ fn event_and_countdown_valid(scene: &Scene) -> bool {
         EventLogo::Asset { asset_id } => caster_overlay_assets::is_asset_id(asset_id),
         EventLogo::None | EventLogo::Builtin { .. } => true,
     };
-    logo_valid && valid_text(&scene.countdown.title, MAX_COUNTDOWN_TITLE)
+    logo_valid
+        && valid_text(&scene.countdown.title, MAX_COUNTDOWN_TITLE)
+        && chat_channel_valid(&scene.chat.channel)
 }
 
 fn validate(scene: &mut Scene) -> Result<(), ApiError> {
     normalize_scene(scene);
     let invalid = || {
         ApiError::bad_request_with_body(json!({
-            "message":"Ungültige Caster-Szene. Erlaubt sind Solo/Duo/Trio, höchstens 100 Personen, sichere HTTPS-Kameraquellen, maximal zwölf Spieler je Team, Teamkürzel bis acht Zeichen und ein Countdown-Titel bis 60 Zeichen."
+            "message":"Ungültige Caster-Szene. Erlaubt sind Solo/Duo/Trio, höchstens 100 Personen, sichere HTTPS-Kameraquellen, maximal zwölf Spieler je Team, Teamkürzel bis acht Zeichen, ein Countdown-Titel bis 60 Zeichen und ein gültiger Twitch-Kanal für den Chat."
         }))
     };
     if scene.roster.len() > MAX_CASTERS {
@@ -466,6 +519,11 @@ pub async fn public_handler(State(pool): State<PgPool>) -> Result<impl IntoRespo
                 "brandUrl":BRAND_URL,
             },
             "countdown":scene.countdown,
+            "chat":{
+                "enabled":scene.chat.enabled,
+                "channel":scene.chat.channel,
+                "position":scene.chat.position,
+            },
         })),
     ))
 }
@@ -498,7 +556,7 @@ fn overlay_page(html: &'static str) -> impl IntoResponse {
             (header::X_FRAME_OPTIONS, "SAMEORIGIN"),
             (
                 header::CONTENT_SECURITY_POLICY,
-                "default-src 'none'; img-src 'self'; frame-src 'self' https:; media-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self' ws: wss:; base-uri 'none'; frame-ancestors 'self' https://admin.deutsche-deadlock-community.de",
+                "default-src 'none'; img-src 'self' https://static-cdn.jtvnw.net; frame-src 'self' https:; media-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self' ws: wss: wss://irc-ws.chat.twitch.tv; base-uri 'none'; frame-ancestors 'self' https://admin.deutsche-deadlock-community.de",
             ),
         ],
         Html(html),
@@ -1171,6 +1229,7 @@ mod tests {
             event: EventSettings::default(),
             countdown: Countdown::default(),
             sides_swapped: false,
+            chat: ChatSettings::default(),
         }
     }
     #[test]

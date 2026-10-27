@@ -5,6 +5,7 @@ import {
   uploadCasterAsset,
   type CasterAsset,
   type CasterAssetKind,
+  type CasterChat,
   type CasterContextTeam,
   type CasterEventLogo,
   type CasterScene,
@@ -364,6 +365,47 @@ export function CasterEventEditor({ scene, edit, busy, notify }: Omit<TeamsProps
           ))}
         </div>
         <p className="text-xs text-white/45">Ohne Startzeit zeigt der Countdown 00:00. Die Zeit läuft erst nach „Live übernehmen“ im Stream.</p>
+      </div>
+    </div>
+  );
+}
+
+export function CasterChatEditor({ scene, edit, busy }: { scene: CasterScene; edit: Edit; busy: boolean }) {
+  const update = (change: Partial<CasterChat>) => edit((value) => ({ ...value, chat: { ...value.chat, ...change } }));
+  return (
+    <div className="grid gap-4 rounded-xl border border-white/10 bg-black/25 p-4 sm:grid-cols-[auto_1fr_auto] sm:items-end">
+      <label className="flex min-h-11 items-center gap-3 text-sm text-white/80">
+        <input
+          type="checkbox"
+          className="h-5 w-5 accent-primary"
+          checked={scene.chat.enabled}
+          disabled={busy}
+          onChange={(event) => update({ enabled: event.target.checked })}
+        />
+        Chat in der Szene anzeigen
+      </label>
+      <label className="block text-sm text-white/65">
+        Twitch-Kanal
+        <input
+          className={`${input} mt-1`}
+          value={scene.chat.channel}
+          maxLength={25}
+          disabled={busy}
+          onChange={(event) => update({ channel: event.target.value })}
+        />
+      </label>
+      <div className="flex gap-2" role="group" aria-label="Position des Chats">
+        {(['left', 'right'] as const).map((position) => (
+          <button
+            key={position}
+            className={`${button} ${scene.chat.position === position ? 'border-primary text-white' : 'text-white/70'}`}
+            aria-pressed={scene.chat.position === position}
+            disabled={busy}
+            onClick={() => update({ position })}
+          >
+            {position === 'left' ? 'Links' : 'Rechts'}
+          </button>
+        ))}
       </div>
     </div>
   );

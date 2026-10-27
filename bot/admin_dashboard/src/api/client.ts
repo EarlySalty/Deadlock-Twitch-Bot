@@ -1463,6 +1463,12 @@ export interface CasterCountdown {
   title: string;
   target?: string | null;
 }
+export type CasterChatPosition = 'left' | 'right';
+export interface CasterChat {
+  enabled: boolean;
+  channel: string;
+  position: CasterChatPosition;
+}
 export interface CasterScene {
   roster: CasterPerson[];
   slots: Array<string | null>;
@@ -1471,6 +1477,7 @@ export interface CasterScene {
   event: CasterEvent;
   countdown: CasterCountdown;
   sidesSwapped: boolean;
+  chat: CasterChat;
 }
 export type CasterAssetKind = 'team_logo' | 'event_logo' | 'brand';
 export interface CasterAsset {

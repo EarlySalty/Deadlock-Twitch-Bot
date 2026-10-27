@@ -17,8 +17,9 @@ import {
   type CasterScene,
   type CreatedCasterCamera,
 } from '@/api/client';
-import { CasterEventEditor, CasterTeamsEditor } from './CasterSceneSettings';
+import { CasterChatEditor, CasterEventEditor, CasterTeamsEditor } from './CasterSceneSettings';
 import {
+  normalizedChat,
   normalizedCountdown,
   normalizedEvent,
   overlayPages,
@@ -52,6 +53,7 @@ function normalizedScene(scene: CasterScene): CasterScene {
     matchContext: scene.matchContext ?? {},
     event: normalizedEvent(scene.event),
     countdown: normalizedCountdown(scene.countdown),
+    chat: normalizedChat(scene.chat),
     sidesSwapped: scene.sidesSwapped ?? false,
     roster: (scene.roster ?? []).map((person) => ({
       ...person,
@@ -461,6 +463,14 @@ export default function CasterOverlayPage() {
               <p className="mt-1 text-sm text-white/60">Gilt für alle Overlay-Seiten.</p>
             </div>
             <CasterEventEditor scene={scene} edit={edit} busy={busy} notify={notify} />
+          </section>
+
+          <section className="panel-card space-y-4 rounded-2xl p-5">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Live-Chat</h2>
+              <p className="mt-1 text-sm text-white/60">Zeigt den Twitch-Chat live in der Caster-Szene. Gelöschte Nachrichten, Timeouts und Bans verschwinden sofort.</p>
+            </div>
+            <CasterChatEditor scene={scene} edit={edit} busy={busy} />
           </section>
 
           <section className="panel-card space-y-4 rounded-2xl p-5">
