@@ -22,7 +22,9 @@ export const LANGUAGES: Language[] = ['de', 'en'];
 
 export const DEFAULT_LANGUAGE: Language = 'de';
 
-export const LANGUAGE_STORAGE_KEY = 'dashboard.language';
+export const LANGUAGE_STORAGE_KEY = 'dashboard.language.v2';
+
+export const LEGACY_LANGUAGE_STORAGE_KEY = 'dashboard.language';
 
 /** Fuer toLocaleString & Co., damit Datum und Zahlen mitwandern. */
 export const LOCALES: Record<Language, string> = {
@@ -801,14 +803,19 @@ export function isLanguage(value: unknown): value is Language {
   return value === 'de' || value === 'en';
 }
 
-function readPersistedLanguage(): Language | null {
+function readStorage(key: string): string | null {
   if (typeof window === 'undefined') return null;
   try {
-    const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-    return isLanguage(stored) ? stored : null;
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }
+}
+
+function readPersistedLanguage(): Language | null {
+  const stored = readStorage(LANGUAGE_STORAGE_KEY);
+  if (isLanguage(stored)) return stored;
+  return readStorage(LEGACY_LANGUAGE_STORAGE_KEY) === null ? null : 'de';
 }
 
 export function readStoredLanguage(): Language {
@@ -817,8 +824,10 @@ export function readStoredLanguage(): Language {
 
 export function browserLanguage(): Language {
   if (typeof window === 'undefined' || !window.navigator) return DEFAULT_LANGUAGE;
-  const primary = window.navigator.languages?.[0] ?? window.navigator.language ?? '';
-  return primary.toLowerCase().startsWith('de') ? 'de' : 'en';
+  const preferred = window.navigator.languages?.length
+    ? window.navigator.languages
+    : [window.navigator.language ?? ''];
+  return preferred.some((locale) => locale.toLowerCase().startsWith('de')) ? 'de' : 'en';
 }
 
 export function isEnglishDashboardHost(): boolean {

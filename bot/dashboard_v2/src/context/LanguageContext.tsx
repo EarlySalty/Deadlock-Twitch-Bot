@@ -44,10 +44,9 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.lang = language;
+    storeLanguage(language);
     const url = new URL(window.location.href);
-    const queryLanguage = url.searchParams.get('lang');
-    if (isLanguage(queryLanguage)) {
-      storeLanguage(queryLanguage);
+    if (isLanguage(url.searchParams.get('lang'))) {
       url.searchParams.delete('lang');
       window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     }
