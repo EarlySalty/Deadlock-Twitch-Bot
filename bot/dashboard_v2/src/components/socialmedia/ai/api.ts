@@ -193,7 +193,7 @@ function decodePlatforms(value: unknown): string[] {
 function decodeProposal(value: unknown): AiRevisionProposal | null {
   if (value === null) return null;
   const proposal = record(value);
-  return {summary:text(proposal.summary),impact:text(proposal.impact),reanalyze:flag(proposal.reanalyze),requires_confirmation:flag(proposal.requires_confirmation),estimated_provider_cost_usd:optionalNumber(proposal.estimated_provider_cost_usd)};
+  return {summary:text(proposal.summary),impact:typeof proposal.impact === 'string' ? proposal.impact : invalidResponse(),reanalyze:flag(proposal.reanalyze),requires_confirmation:flag(proposal.requires_confirmation),estimated_provider_cost_usd:optionalNumber(proposal.estimated_provider_cost_usd)};
 }
 
 export function decodeAiConsent(value: unknown): AiConsent {
