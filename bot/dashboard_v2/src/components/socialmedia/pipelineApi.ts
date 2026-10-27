@@ -63,6 +63,7 @@ export interface PipelineSource {
   auto_post: boolean;
   source_created_at: string;
   game_id: string | null;
+  game_name: string | null;
   source_metadata: unknown;
   view_count: number | null;
   selected_at: string | null;
@@ -134,6 +135,7 @@ function poolSource(clip: PoolClip): PipelineSource {
     auto_post: true,
     source_created_at: clip.source_created_at,
     game_id: clip.game_id,
+    game_name: 'Deadlock',
     source_metadata: clip.source_metadata,
     view_count: clip.view_count ?? null,
     selected_at: clip.selected_at,

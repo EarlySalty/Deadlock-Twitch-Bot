@@ -11,7 +11,7 @@ import { ClipReviewDetail } from './autopilot/publish-review/PublishReviewPanel'
 import { scheduleQueueApi, type QueueJob, type ReviewDecision } from './autopilot/schedule-queue/api';
 import { ReviewJobActions } from './autopilot/schedule-queue/ReviewJobActions';
 import './autopilot/schedule-queue/schedule-queue.css';
-import { QUEUE_FILTERS, draftPlatforms, draftSentAt, filterSources, legacyUncertainPlatforms, onlyDrafts, partialResult, publishedPlatforms, sourceStage, type EligibilityFilter, type QueueStage } from './queuePresentation';
+import { QUEUE_FILTERS, draftPlatforms, draftSentAt, categoryOptions, DEFAULT_CATEGORY, filterSources, legacyUncertainPlatforms, onlyDrafts, partialResult, publishedPlatforms, sourceStage, type CategoryFilter, type CategoryOption, type QueueStage } from './queuePresentation';
 import { clipDuration, clipThumbnail, insideWindow, localTimestamp, sourceMetadata } from './autopilot/import-pool/presentation';
 import type { PoolPreferences } from './autopilot/import-pool/types';
 import { HOLD_REASONS } from './reviewReasons';
@@ -27,13 +27,6 @@ const STAGE_TONES: Record<Exclude<QueueStage, 'all'>, string> = {
   failed: 'danger',
   archive: 'neutral',
 };
-const ELIGIBILITY_FILTERS: Array<{ id: EligibilityFilter; label: string }> = [
-  { id: 'all', label: 'Alle Quellen' },
-  { id: 'automatic', label: 'Deadlock automatisch' },
-  { id: 'manual', label: 'Eigene Uploads' },
-  { id: 'legacy_non_deadlock_visible', label: 'Andere Spiele' },
-];
-
 export type DetailMode = 'ai' | 'layout' | 'enrichment';
 
 type Translate = (text: string, params?: Record<string, string | number>) => string;
@@ -64,6 +57,12 @@ function selectable(source: PipelineSource, preferences: PoolPreferences): boole
   return insideWindow(source.source_created_at, preferences);
 }
 
+function categoryLabel(option: CategoryOption, t: Translate): string {
+  if (option.id === 'all') return t('Alle Kategorien');
+  if (option.id === 'manual') return t('Eigene Uploads');
+  return option.gameName ?? t('Unbekanntes Spiel');
+}
+
 function eligibilityNote(source: PipelineSource, t: Translate): string | null {
   if (source.eligibility === 'manual') return t('Eigener Upload');
   if (source.eligibility === 'legacy_non_deadlock_visible') return t('Anderes Spiel, wird nicht automatisch gepostet');
@@ -74,7 +73,7 @@ export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, b
   const { t, locale } = useLanguage();
   const [detail, setDetail] = useState<{ source: PipelineSource; mode: DetailMode } | null>(null);
   const openDetail = onOpenDetail ?? (owner ? (source: PipelineSource, mode: DetailMode) => setDetail({ source, mode }) : undefined);
-  const [eligibility, setEligibility] = useState<EligibilityFilter>('all');
+  const [category, setCategory] = useState<CategoryFilter>(DEFAULT_CATEGORY);
   const [stage, setStage] = useState<QueueStage>(initialStage);
   const [appliedStage, setAppliedStage] = useState<QueueStage>(initialStage);
   const [search, setSearch] = useState('');
@@ -95,8 +94,8 @@ export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, b
   });
   const queueJobs = useMemo(() => new Map((queue.data?.jobs ?? []).map((job) => [job.id, job])), [queue.data]);
   const filtered = useMemo(
-    () => filterSources(page.sources, { eligibility, stage, search, platform }, (source) => sourceMetadata(source).title),
-    [page.sources, eligibility, stage, search, platform],
+    () => filterSources(page.sources, { category, stage, search, platform }, (source) => sourceMetadata(source).title),
+    [page.sources, category, stage, search, platform],
   );
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const current = Math.min(pageIndex, pages - 1);
@@ -104,10 +103,7 @@ export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, b
   const allowed = visible.filter((source) => selectable(source, page.preferences));
   const toSelect = allowed.filter((source) => source.selected_at === null).map((source) => source.clip_id);
   const toClear = allowed.filter((source) => source.selected_at !== null).map((source) => source.clip_id);
-  const counts: Record<EligibilityFilter, number> = {
-    all: page.counts.automatic + page.counts.manual + page.counts.legacy_non_deadlock_visible,
-    ...page.counts,
-  };
+  const categories = useMemo(() => categoryOptions(page.sources), [page.sources]);
 
   function reset<T>(apply: (value: T) => void) {
     return (value: T) => {
@@ -136,9 +132,9 @@ export function PipelineClips({ page, selectionLocked, onSelect, onBulkSelect, b
             aria-label={t('Titel oder Clip-ID suchen')}
             onChange={(event) => reset(setSearch)(event.target.value)}
           />
-          <select className="studio-select" value={eligibility} aria-label={t('Quelle')} onChange={(event) => reset(setEligibility)(event.target.value as EligibilityFilter)}>
-            {ELIGIBILITY_FILTERS.map((item) => (
-              <option key={item.id} value={item.id}>{`${t(item.label)} (${counts[item.id].toLocaleString(locale)})`}</option>
+          <select className="studio-select" value={category} aria-label={t('Kategorie')} onChange={(event) => reset(setCategory)(event.target.value as CategoryFilter)}>
+            {categories.map((item) => (
+              <option key={item.id} value={item.id}>{`${categoryLabel(item, t)} (${item.count.toLocaleString(locale)})`}</option>
             ))}
           </select>
           <select className="studio-select" value={platform} aria-label={t('Plattform')} onChange={(event) => reset(setPlatform)(event.target.value as SocialPlatform | 'all')}>

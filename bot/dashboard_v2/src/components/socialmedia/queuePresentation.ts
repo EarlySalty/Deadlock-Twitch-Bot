@@ -1,6 +1,6 @@
 import type { ClipListResponseMitPosting, SocialClipMitPosting } from '@/api/socialMedia';
 import type { SocialPlatform } from '@/types/socialMedia';
-import type { PipelineSource, SourceEligibility } from './pipelineApi';
+import type { PipelineSource } from './pipelineApi';
 
 export type QueueStage = 'all' | 'new' | 'preparing' | 'review' | 'planned' | 'posted' | 'failed' | 'archive';
 export const QUEUE_FILTERS: Array<{ id: QueueStage; label: string }> = [
@@ -201,16 +201,53 @@ export function sourceMatchesStage(source: PipelineSource, stage: QueueStage): b
   return stage === 'all' || sourceStage(source) === stage;
 }
 
-export type EligibilityFilter = SourceEligibility | 'all';
+export type CategoryFilter = 'all' | 'deadlock' | 'manual' | `game:${string}`;
+export const DEFAULT_CATEGORY: CategoryFilter = 'deadlock';
+
+export interface CategoryOption {
+  id: CategoryFilter;
+  gameName: string | null;
+  count: number;
+}
+
+export function sourceCategory(source: PipelineSource): Exclude<CategoryFilter, 'all'> {
+  if (source.eligibility === 'manual') return 'manual';
+  if (source.eligibility === 'automatic') return 'deadlock';
+  return `game:${source.game_id ?? ''}`;
+}
+
+export function categoryOptions(sources: PipelineSource[]): CategoryOption[] {
+  const games = new Map<CategoryFilter, CategoryOption>();
+  let deadlock = 0;
+  let manual = 0;
+  for (const source of sources) {
+    const category = sourceCategory(source);
+    if (category === 'deadlock') deadlock += 1;
+    else if (category === 'manual') manual += 1;
+    else {
+      const option = games.get(category) ?? { id: category, gameName: null, count: 0 };
+      option.count += 1;
+      option.gameName = option.gameName ?? source.game_name;
+      games.set(category, option);
+    }
+  }
+  const others = [...games.values()].sort((a, b) => b.count - a.count || (a.gameName ?? '').localeCompare(b.gameName ?? ''));
+  return [
+    { id: 'deadlock', gameName: 'Deadlock', count: deadlock },
+    ...others,
+    ...(manual > 0 ? [{ id: 'manual' as const, gameName: null, count: manual }] : []),
+    { id: 'all', gameName: null, count: sources.length },
+  ];
+}
 
 export function filterSources(
   sources: PipelineSource[],
-  filter: { eligibility: EligibilityFilter; stage: QueueStage; search: string; platform: SocialPlatform | 'all' },
+  filter: { category: CategoryFilter; stage: QueueStage; search: string; platform: SocialPlatform | 'all' },
   title: (source: PipelineSource) => string,
 ) {
   const needle = filter.search.trim().toLocaleLowerCase();
   return sources.filter((source) =>
-    (filter.eligibility === 'all' || source.eligibility === filter.eligibility)
+    (filter.category === 'all' || sourceCategory(source) === filter.category)
     && sourceMatchesStage(source, filter.stage)
     && (filter.platform === 'all' || sourcePlatforms(source).includes(filter.platform))
     && (!needle || `${title(source)} ${source.clip_id}`.toLocaleLowerCase().includes(needle)));

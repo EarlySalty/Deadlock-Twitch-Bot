@@ -353,6 +353,7 @@ pub struct PipelineSource {
     pub auto_post: bool,
     pub source_created_at: DateTime<Utc>,
     pub game_id: Option<String>,
+    pub game_name: Option<String>,
     pub source_metadata: Value,
     pub view_count: Option<i32>,
     pub selected_at: Option<DateTime<Utc>>,
@@ -398,7 +399,8 @@ pub struct PipelinePage {
 
 const PIPELINE_SOURCES: &str = "WITH sources AS (
     SELECT p.clip_id, p.clip_db_id, COALESCE(c.source_kind, 'twitch') AS source_kind, 'automatic'::text AS eligibility,
-        TRUE AS pooled, p.source_created_at, p.game_id, p.source_metadata, c.view_count, p.selected_at,
+        TRUE AS pooled, p.source_created_at, p.game_id,
+        COALESCE(NULLIF(c.game_name, ''), 'Deadlock') AS game_name, p.source_metadata, c.view_count, p.selected_at,
         p.processed_at, p.published_at, p.legacy_reserved, c.discarded_at,
         c.youtube_video_id, c.tiktok_video_id, c.instagram_media_id
     FROM social_clip_pool p LEFT JOIN twitch_clips_social_media c ON c.id = p.clip_db_id
@@ -408,6 +410,7 @@ const PIPELINE_SOURCES: &str = "WITH sources AS (
         CASE WHEN c.source_kind = 'manual_upload' THEN 'manual' WHEN c.category_key = 'deadlock' THEN 'automatic'
             ELSE 'legacy_non_deadlock_visible' END,
         FALSE, c.created_at, c.game_id,
+        COALESCE(NULLIF(c.game_name, ''), CASE WHEN c.category_key = 'deadlock' THEN 'Deadlock' END),
         jsonb_build_object('clip_url', c.clip_url, 'clip_title', c.clip_title, 'thumbnail_url', c.clip_thumbnail_url,
             'duration_seconds', c.duration_seconds, 'streamer_login', c.streamer_login),
         c.view_count, NULL::timestamptz, NULL::timestamptz, NULL::timestamptz, c.pool_legacy_reserved, c.discarded_at,
@@ -519,6 +522,7 @@ fn source_from_row(row: &PgRow) -> Result<PipelineSource, PoolError> {
         auto_post: pooled && eligibility == SourceEligibility::Automatic,
         source_created_at: row.try_get("source_created_at")?,
         game_id: row.try_get("game_id")?,
+        game_name: row.try_get("game_name")?,
         source_metadata: row.try_get("source_metadata")?,
         view_count: row.try_get("view_count")?,
         selected_at: row.try_get("selected_at")?,
