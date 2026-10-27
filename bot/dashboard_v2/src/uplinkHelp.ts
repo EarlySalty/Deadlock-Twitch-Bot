@@ -1,3 +1,5 @@
+import { DEFAULT_LANGUAGE, type Language } from './i18n/dictionary';
+
 export const UPLINK_HELP_PAGES = [
   { file: 'was-ist.html', label: 'Was ist Uplink' },
   { file: 'obs.html', label: 'OBS einrichten' },
@@ -16,8 +18,8 @@ function basisPfad(): string {
   return import.meta.env?.BASE_URL ?? '/';
 }
 
-export function uplinkHelpUrl(file: string): string {
-  return `${basisPfad()}uplink/${file}`;
+export function uplinkHelpUrl(file: string, language: Language = DEFAULT_LANGUAGE): string {
+  return `${basisPfad()}uplink/${language === 'en' ? 'en/' : ''}${file}`;
 }
 
 /**
@@ -26,10 +28,10 @@ export function uplinkHelpUrl(file: string): string {
  * auf einen Nachbarpfad der Seite, den es nicht gibt. Beim Einbetten werden sie
  * deshalb ueber uplinkHelpUrl auf ihre echte Adresse gezogen.
  */
-function absoluteLinks(fragment: string): string {
+function absoluteLinks(fragment: string, language: Language): string {
   return fragment.replace(
-    /href="(?!https?:|\/|#)([^"]+\.html)"/g,
-    (_treffer, datei: string) => `href="${uplinkHelpUrl(datei)}"`,
+    /href="(?!https?:|\/|#)([^"]+\.html(?:[?#][^"]*)?)"/g,
+    (_treffer, datei: string) => `href="${uplinkHelpUrl(datei, language)}"`,
   );
 }
 
@@ -41,10 +43,10 @@ function absoluteLinks(fragment: string): string {
  * ein kaputtes Bild. Anders als bei den Links faellt das nicht auf, solange
  * niemand klickt, deshalb steht es hier und nicht nur in der Doku.
  */
-function absoluteBilder(fragment: string): string {
+function absoluteBilder(fragment: string, language: Language): string {
   return fragment.replace(
     /src="(?!https?:|data:|\/)([^"]+)"/g,
-    (_treffer, pfad: string) => `src="${uplinkHelpUrl(pfad)}"`,
+    (_treffer, pfad: string) => `src="${uplinkHelpUrl(pfad, language)}"`,
   );
 }
 
@@ -89,7 +91,7 @@ export function titelUeberschriftEntfernen(fragment: string): string {
   return fragment.replace(/<h1\b[^>]*>[\s\S]*?<\/h1>\s*/, '');
 }
 
-export function extractUplinkMain(html: string): string {
+export function extractUplinkMain(html: string, language: Language = DEFAULT_LANGUAGE): string {
   // Nicht gierig: sonst reicht der Treffer bis zum letzten </main> im Dokument
   // und zieht fremdes Markup in das dangerouslySetInnerHTML.
   const main = html.match(/<main class="uplink-doc" data-doc="[^"]+">[\s\S]*?<\/main>/);
@@ -103,21 +105,23 @@ export function extractUplinkMain(html: string): string {
     .replace(/^<main /, '<div ')
     .replace(/<\/main>$/, '</div>');
   return ueberschriftenTieferlegen(
-    titelUeberschriftEntfernen(absoluteBilder(absoluteLinks(nurStandaloneEntfernen(alsAbschnitt)))),
+    titelUeberschriftEntfernen(
+      absoluteBilder(absoluteLinks(nurStandaloneEntfernen(alsAbschnitt), language), language),
+    ),
   );
 }
 
-export async function fetchUplinkHelp(): Promise<UplinkHelpPage[]> {
+export async function fetchUplinkHelp(language: Language = DEFAULT_LANGUAGE): Promise<UplinkHelpPage[]> {
   // Bewusst kein Promise.all: eine einzelne 404 würde sonst alle drei Kacheln
   // kippen. Scheitern alle drei (Deploy ohne neues dist/), wirft die Funktion
   // weiterhin, und die Seite zeigt ihre Fehlerzeile.
   const ergebnisse: PromiseSettledResult<UplinkHelpPage>[] = await Promise.allSettled(
     UPLINK_HELP_PAGES.map(async (page): Promise<UplinkHelpPage> => {
-      const response = await fetch(uplinkHelpUrl(page.file), { credentials: 'same-origin' });
+      const response = await fetch(uplinkHelpUrl(page.file, language), { credentials: 'same-origin' });
       if (!response.ok) {
         throw new Error(`Uplink-Hilfe konnte nicht geladen werden: ${response.status}`);
       }
-      return { ...page, html: extractUplinkMain(await response.text()) };
+      return { ...page, html: extractUplinkMain(await response.text(), language) };
     }),
   );
   const geladen = ergebnisse
