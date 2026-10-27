@@ -756,6 +756,10 @@ fn build_authed_router_with_analysis_store(
             "/twitch/api/v2/streamer/command-names",
             get(command_name_settings::get_handler).post(command_name_settings::post_handler),
         )
+        .route(
+            "/twitch/api/v2/streamer/command-names/aliases",
+            post(command_name_settings::aliases_handler),
+        )
         // Streamer-Selbstbedienung: !clip-Command-Toggle. Default aktiviert
         // (bestehendes Verhalten), Spalte streamer_plans.clip_command_enabled.
         .route(

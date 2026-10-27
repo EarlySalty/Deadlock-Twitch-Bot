@@ -163,7 +163,7 @@ async fn target_stats_fixture(pool: &PgPool) {
     .execute(pool)
     .await
     .unwrap();
-    sqlx::raw_sql("CREATE TABLE streamer_plans(twitch_user_id TEXT PRIMARY KEY, stat_command_settings JSONB NOT NULL DEFAULT '{}', command_name_overrides JSONB NOT NULL DEFAULT '{}');
+    sqlx::raw_sql("CREATE TABLE streamer_plans(twitch_user_id TEXT PRIMARY KEY, stat_command_settings JSONB NOT NULL DEFAULT '{}', command_name_overrides JSONB NOT NULL DEFAULT '{}', command_name_aliases JSONB NOT NULL DEFAULT '{}');
         CREATE TABLE twitch_streamer_identities(twitch_user_id TEXT PRIMARY KEY, discord_user_id TEXT);
         INSERT INTO streamer_plans VALUES ('bc123', '{}'), ('other-id', '{\"wins\":false,\"rank\":false}');")
         .execute(pool).await.unwrap();

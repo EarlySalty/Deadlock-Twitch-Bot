@@ -5,6 +5,7 @@ export interface CommandNameSetting {
   custom_name: string | null;
   effective_name: string;
   effective_aliases: string[];
+  custom_aliases: string[];
   group: string;
   group_label: string;
   summary: string;
@@ -16,7 +17,16 @@ export interface CommandNameSaveResult {
   custom_name: string | null;
   effective_name: string;
   effective_aliases: string[];
+  custom_aliases: string[];
 }
+
+export interface CommandAliasSaveResult {
+  ok: boolean;
+  command: string;
+  custom_aliases: string[];
+}
+
+export const MAX_EXTRA_COMMAND_NAMES = 5;
 
 export class CommandNameApiError extends Error {
   status: number;
@@ -32,8 +42,8 @@ export class CommandNameApiError extends Error {
 
 const BASE = '/twitch/api/v2/streamer/command-names';
 
-async function fetchJson<T>(init: RequestInit = {}): Promise<T> {
-  const response = await fetch(BASE, { credentials: 'same-origin', ...init });
+async function fetchJson<T>(init: RequestInit = {}, path = ''): Promise<T> {
+  const response = await fetch(BASE + path, { credentials: 'same-origin', ...init });
   if (!response.ok) {
     let payload: { error?: string; message?: string } = {};
     try {
@@ -61,6 +71,15 @@ export function saveCommandName(command: string, name: string | null): Promise<C
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ command, name }),
   });
+}
+
+export function saveCommandAliases(command: string, aliases: string[]): Promise<CommandAliasSaveResult> {
+  return fetchJson({
+    method: 'POST',
+    keepalive: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command, aliases }),
+  }, '/aliases');
 }
 
 export function validCommandNameInput(value: string): boolean {
