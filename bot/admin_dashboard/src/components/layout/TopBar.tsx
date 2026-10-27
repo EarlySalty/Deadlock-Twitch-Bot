@@ -28,6 +28,8 @@ const BREADCRUMB_LABELS: Record<string, string> = {
   'social-media-recordings': 'Nutzungsaufnahmen',
   usage: 'Verbrauch & Kosten',
   limits: 'Verarbeitungsgrenzen',
+  skills: 'Skill-Versionen',
+  observers: 'Modellvergleich',
   roadmap: 'Roadmap',
   'caster-overlay': 'Caster-Overlay',
   changelog: 'Changelog',

@@ -144,7 +144,7 @@ export function SocialAiObserversPage() {
             ? <p className="social-ai-notice">Es ist noch kein Gemini-Modell zum Vergleichen eingestellt.</p>
             : <p className="text-sm text-text-secondary">{query.data.variants} Modelleinstellungen schauen den Clip nacheinander. Zur Auswahl stehen nur Clips mit Einwilligung zur externen KI-Verarbeitung.</p>}
           <div className="flex flex-wrap items-end gap-3">
-            <label className="min-w-0 flex-1">Clip auswählen
+            <label className="min-w-0 flex-1 basis-64">Clip auswählen
               <select className="admin-input mt-1" value={clip} disabled={busy} onChange={event => setClip(event.target.value)}>
                 <option value="">Bitte wählen</option>
                 {query.data.clips.map(item => <option key={item.clip_db_id} value={item.clip_db_id}>
