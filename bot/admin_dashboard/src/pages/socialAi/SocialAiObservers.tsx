@@ -18,6 +18,7 @@ const FAILURES: Record<string, string> = {
   timeout: 'Zeitüberschreitung',
   ui: 'Gemini-Oberfläche hat nicht reagiert',
   configuration: 'Konfiguration ungültig',
+  consent: 'Einwilligung zur externen KI-Verarbeitung fehlt',
 };
 
 function variantName(item: { model_item: string; thinking_item: string }) {
@@ -97,7 +98,9 @@ function ComparisonCard({ comparison, disabled, onRate }: { comparison: Observer
       </div>
       {comparison.clip_url && <a className="admin-button admin-button-secondary" href={comparison.clip_url} target="_blank" rel="noreferrer"><ExternalLink size={16} aria-hidden="true" /> Clip ansehen</a>}
     </div>
-    {comparison.trials.length === 0
+    {comparison.status === 'failed'
+      ? <p className="social-ai-notice">{comparison.failure_code === 'configuration' ? 'Beim Start war kein Modell zum Vergleichen eingestellt.' : FAILURES[comparison.failure_code ?? ''] ?? 'Unbekannter Fehler'}</p>
+      : comparison.trials.length === 0
       ? <p className="text-text-secondary">Der Vergleich wird gerade vorbereitet.</p>
       : <div className="social-ai-trials">{comparison.trials.map(trial => <TrialCard key={trial.id} trial={trial} disabled={disabled} onRate={(rating, note) => onRate(trial.id, rating, note)} />)}</div>}
   </section>;
@@ -117,12 +120,12 @@ export function SocialAiObserversPage() {
   const start = useMutation({
     mutationFn: (id: number) => startComparison(id),
     retry: false,
-    onSuccess: data => { client.setQueryData(observerKeys.report, data); setClip(''); setNotice('Vergleich gestartet. Die Modelle schauen den Clip nacheinander, das dauert pro Modell einige Minuten.'); },
+    onSuccess: async data => { await client.cancelQueries({ queryKey: observerKeys.report }); client.setQueryData(observerKeys.report, data); setClip(''); setNotice('Vergleich gestartet. Die Modelle schauen den Clip nacheinander, das dauert pro Modell einige Minuten.'); },
   });
   const rate = useMutation({
     mutationFn: (change: { id: number; rating: number; note: string }) => rateTrial(change.id, change.rating, change.note),
     retry: false,
-    onSuccess: data => { client.setQueryData(observerKeys.report, data); setNotice('Bewertung gespeichert.'); },
+    onSuccess: async data => { await client.cancelQueries({ queryKey: observerKeys.report }); client.setQueryData(observerKeys.report, data); setNotice('Bewertung gespeichert.'); },
   });
   const busy = start.isPending || rate.isPending;
   const clipId = Number(clip);
@@ -137,6 +140,9 @@ export function SocialAiObserversPage() {
       {query.data && <>
         <section className="panel-card rounded-2xl p-5 space-y-3">
           <h2 className="text-xl font-semibold">Neuer Vergleich</h2>
+          {query.data.variants === 0
+            ? <p className="social-ai-notice">Es ist noch kein Gemini-Modell zum Vergleichen eingestellt.</p>
+            : <p className="text-sm text-text-secondary">{query.data.variants} Modelleinstellungen schauen den Clip nacheinander. Zur Auswahl stehen nur Clips mit Einwilligung zur externen KI-Verarbeitung.</p>}
           <div className="flex flex-wrap items-end gap-3">
             <label className="min-w-0 flex-1">Clip auswählen
               <select className="admin-input mt-1" value={clip} disabled={busy} onChange={event => setClip(event.target.value)}>
@@ -146,7 +152,7 @@ export function SocialAiObserversPage() {
                 </option>)}
               </select>
             </label>
-            <button type="button" className="admin-button" disabled={busy || !Number.isSafeInteger(clipId) || clipId <= 0} onClick={() => { setNotice(''); start.mutate(clipId); }}>
+            <button type="button" className="admin-button" disabled={busy || query.data.variants === 0 || !Number.isSafeInteger(clipId) || clipId <= 0} onClick={() => { setNotice(''); start.mutate(clipId); }}>
               <Play size={16} aria-hidden="true" /> Vergleich starten
             </button>
           </div>

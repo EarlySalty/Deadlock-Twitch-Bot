@@ -41,13 +41,13 @@ export type ObserverScore = {
   avg_rating: number | null;
   avg_elapsed_ms: number | null;
 };
-export type ObserverReport = { clips: ObserverClip[]; comparisons: ObserverComparison[]; scoreboard: ObserverScore[] };
+export type ObserverReport = { variants: number; clips: ObserverClip[]; comparisons: ObserverComparison[]; scoreboard: ObserverScore[] };
 
 export const observerKeys = { report: ['social-ai', 'observer-compare'] as const };
 
 function requireReport(value: unknown): ObserverReport {
   const data = value as Partial<ObserverReport> | null;
-  if (!data || !Array.isArray(data.clips) || !Array.isArray(data.comparisons) || !Array.isArray(data.scoreboard)
+  if (!data || typeof data.variants !== 'number' || !Array.isArray(data.clips) || !Array.isArray(data.comparisons) || !Array.isArray(data.scoreboard)
     || !data.comparisons.every(comparison => Array.isArray(comparison?.trials))) {
     throw new Error('Der Modellvergleich konnte nicht bestätigt werden. Bitte lade den Stand neu.');
   }

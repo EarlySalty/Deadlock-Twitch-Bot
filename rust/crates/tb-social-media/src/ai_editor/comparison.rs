@@ -7,6 +7,8 @@ use super::{observation, source, EditorRuntime};
 
 const IDLE: Duration = Duration::from_secs(15);
 const RATE_LIMIT_PAUSE: Duration = Duration::from_secs(900);
+const FINISH_ATTEMPTS: u32 = 5;
+const CONSENT_FAILURE: &str = "consent";
 
 struct Trial {
     id: i64,
@@ -26,11 +28,9 @@ pub async fn run_observer_comparisons(pool: PgPool, runtime: EditorRuntime) {
         return;
     };
     let variants = runtime.limits.observer_variants.clone();
-    if variants.is_empty() {
-        return;
-    }
-    if let Err(error) = recover(&pool).await {
+    while let Err(error) = recover(&pool).await {
         tracing::warn!(%error, "observer comparison recovery failed");
+        tokio::time::sleep(IDLE).await;
     }
     loop {
         match step(&pool, &runtime, &base, &variants).await {
@@ -53,13 +53,13 @@ async fn step(
     if expand(pool, base, variants).await? {
         return Ok(Some(Duration::ZERO));
     }
-    let Some(trial) = claim(pool).await? else {
+    let Some(trial) = claim(pool, lease_ms(base)).await? else {
         return Ok(None);
     };
     let outcome = execute(pool, runtime, base, &trial).await;
     let limited = outcome.result.as_ref().err().map(String::as_str)
         == Some(&ObserverError::RateLimited.to_string());
-    finish(pool, trial.id, &outcome).await?;
+    finish_with_retry(pool, trial.id, &outcome).await?;
     Ok(Some(if limited {
         RATE_LIMIT_PAUSE
     } else {
@@ -77,6 +77,10 @@ async fn recover(pool: &PgPool) -> Result<(), sqlx::Error> {
     .map(|_| ())
 }
 
+fn lease_ms(base: &VideoObserverConfig) -> i64 {
+    i64::try_from(base.total_deadline_ms.saturating_mul(2)).unwrap_or(i64::MAX)
+}
+
 async fn expand(
     pool: &PgPool,
     base: &VideoObserverConfig,
@@ -92,6 +96,17 @@ async fn expand(
     let Some(id) = id else {
         return Ok(false);
     };
+    if variants.is_empty() {
+        sqlx::query(
+            "UPDATE public.social_ai_observer_comparisons SET status = 'failed', \
+             failure_code = 'configuration' WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Ok(true);
+    }
     for (position, variant) in variants.iter().enumerate() {
         sqlx::query(
             "INSERT INTO public.social_ai_observer_trials \
@@ -118,17 +133,20 @@ async fn expand(
     Ok(true)
 }
 
-async fn claim(pool: &PgPool) -> Result<Option<Trial>, sqlx::Error> {
+async fn claim(pool: &PgPool, lease_ms: i64) -> Result<Option<Trial>, sqlx::Error> {
     let row = sqlx::query(
         "WITH next AS ( \
              SELECT t.id FROM public.social_ai_observer_trials t \
-             WHERE t.status = 'queued' ORDER BY t.comparison_id, t.position \
+             WHERE t.status = 'queued' OR (t.status = 'running' \
+                   AND t.started_at < NOW() - make_interval(secs => $1::float8 / 1000)) \
+             ORDER BY t.comparison_id, t.position \
              LIMIT 1 FOR UPDATE SKIP LOCKED) \
          UPDATE public.social_ai_observer_trials t SET status = 'running', started_at = NOW() \
          FROM next, public.social_ai_observer_comparisons c \
          WHERE t.id = next.id AND c.id = t.comparison_id \
          RETURNING t.id, c.clip_db_id, c.twitch_user_id, t.model_item, t.thinking_item, t.active_label",
     )
+    .bind(lease_ms)
     .fetch_optional(pool)
     .await?;
     row.map(|row| {
@@ -153,6 +171,16 @@ async fn execute(
     trial: &Trial,
 ) -> TrialOutcome {
     let started = Instant::now();
+    if tb_llm::social_editor::consent_allowed(pool, &trial.owner)
+        .await
+        .is_err()
+    {
+        return TrialOutcome {
+            result: Err(CONSENT_FAILURE.to_string()),
+            sha256: None,
+            elapsed_ms: elapsed(started),
+        };
+    }
     let identity = match identify(pool, runtime, trial).await {
         Ok(identity) => identity,
         Err(()) => {
@@ -189,6 +217,25 @@ async fn identify(
 
 fn elapsed(started: Instant) -> i64 {
     i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX)
+}
+
+async fn finish_with_retry(
+    pool: &PgPool,
+    id: i64,
+    outcome: &TrialOutcome,
+) -> Result<(), sqlx::Error> {
+    let mut attempt = 1;
+    loop {
+        match finish(pool, id, outcome).await {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt >= FINISH_ATTEMPTS => return Err(error),
+            Err(error) => {
+                tracing::warn!(%error, trial = id, attempt, "observer comparison finish failed");
+                attempt += 1;
+                tokio::time::sleep(IDLE).await;
+            }
+        }
+    }
 }
 
 async fn finish(pool: &PgPool, id: i64, outcome: &TrialOutcome) -> Result<(), sqlx::Error> {
