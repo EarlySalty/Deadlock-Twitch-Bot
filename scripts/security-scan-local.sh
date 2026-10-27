@@ -41,6 +41,18 @@ pass() {
   say "OK: $*"
 }
 
+quiet() {
+  local log status
+  log=$(mktemp)
+  "$@" >"$log" 2>&1
+  status=$?
+  if [ "$status" -ne 0 ] || [ "$STRICT" -eq 1 ]; then
+    cat "$log"
+  fi
+  rm -f "$log"
+  return "$status"
+}
+
 soft_fail() {
   if [ "$STRICT" -eq 1 ]; then
     block "$*"
@@ -78,6 +90,10 @@ CHANGED_FILES=""
 SCAN_REF="HEAD"
 if [ ! -t 0 ]; then
   STDIN_DATA=$(cat)
+  if [ -n "$STDIN_DATA" ] && ! printf '%s\n' "$STDIN_DATA" | awk '$2 != "" && $2 !~ /^0+$/ { found = 1 } END { exit !found }'; then
+    say "Nur Branch-Löschung, kein Scan nötig."
+    exit 0
+  fi
   CHANGED_FILES=$(
     printf '%s\n' "$STDIN_DATA" |
     while read -r _local_ref local_sha _remote_ref remote_sha; do
@@ -149,7 +165,7 @@ paths = [
 targetRules = ["generic-api-key"]
 EOF
   gitleaks_args=(detect --source "$SCAN_DIR" --no-git --no-banner --redact --exit-code 1 --config "$gitleaks_cfg")
-  if gitleaks "${gitleaks_args[@]}"; then
+  if quiet gitleaks "${gitleaks_args[@]}"; then
     pass "gitleaks"
   else
     block "gitleaks"
@@ -158,14 +174,14 @@ EOF
 fi
 
 if [ -n "$CARGO_DIR" ] && need cargo && need cargo-audit; then
-  if (
-    cd "$CARGO_DIR"
+  if quiet bash -c '
+    cd "$1"
     if [ -f .cargo/audit.toml ]; then
       cargo audit
     else
       cargo audit --ignore RUSTSEC-2023-0071
     fi
-  ); then
+  ' _ "$CARGO_DIR"; then
     pass "cargo-audit"
   else
     block "cargo-audit"
@@ -177,7 +193,7 @@ if [ -n "$CARGO_DIR" ] && need cargo && need cargo-deny; then
   if [ -n "$DENY_CONFIG" ]; then
     deny_args=(--config "$DENY_CONFIG" "${deny_args[@]}")
   fi
-  if (cd "$CARGO_DIR" && cargo deny "${deny_args[@]}"); then
+  if quiet cargo deny --manifest-path "$CARGO_DIR/Cargo.toml" "${deny_args[@]}"; then
     pass "cargo-deny"
   else
     block "cargo-deny"
@@ -189,7 +205,7 @@ if need osv-scanner; then
   if [ -f osv-scanner.toml ]; then
     osv_args+=(--config "$ROOT/osv-scanner.toml")
   fi
-  if osv-scanner "${osv_args[@]}" "$ROOT"; then
+  if quiet osv-scanner "${osv_args[@]}" "$ROOT"; then
     pass "osv-scanner"
   else
     soft_fail "osv-scanner hat Treffer oder ist fehlgeschlagen"
@@ -201,12 +217,8 @@ if need trivy; then
   if [ -n "$TRIVY_IGNORE" ]; then
     trivy_args+=(--ignorefile "$TRIVY_IGNORE")
   fi
-  if [ "$STRICT" -eq 1 ]; then
-    trivy_args+=(--exit-code 1)
-  else
-    trivy_args+=(--exit-code 0)
-  fi
-  if trivy "${trivy_args[@]}" "$SCAN_DIR"; then
+  trivy_args+=(--exit-code 1)
+  if quiet trivy "${trivy_args[@]}" "$SCAN_DIR"; then
     pass "trivy"
   else
     soft_fail "trivy"
