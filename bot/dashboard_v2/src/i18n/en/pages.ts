@@ -4,6 +4,7 @@ export const PAGES_EN: Record<string, string> = {
   "Aus. Der Bot bittet neue Zuschauer nicht um einen Follow.": "Off. The bot does not ask new viewers to follow.",
   "Eigene Nachricht": "Custom message",
   "Nachricht speichern": "Save message",
+  "Zu lang für den Twitch-Chat, sobald die Namen eingesetzt sind.": "Too long for Twitch chat once the names are filled in.",
   "Die Nachricht ist zu lang.": "The message is too long.",
   "{user} wird durch den Namen ersetzt. Ohne {user} setzt der Bot den Namen an den Anfang. Leer lassen für den Standardtext.": "{user} is replaced with the name. Without {user} the bot puts the name at the start. Leave empty for the default text.",
   "Vorschau:": "Preview:",

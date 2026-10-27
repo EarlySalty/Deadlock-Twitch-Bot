@@ -12,6 +12,8 @@ pub const FOLLOW_HINT_PLACEHOLDER: &str = "{user}";
 pub const FOLLOW_HINT_DEFAULT_MESSAGE: &str =
     "@{user} Schön, dass du zum ersten Mal im Chat bist! Wenn dir der Stream gefällt, lass doch gern einen Follow da 💜";
 pub const FOLLOW_HINT_MAX_CHARS: usize = 300;
+pub const TWITCH_LOGIN_MAX_CHARS: usize = 25;
+pub const TWITCH_CHAT_MAX_CHARS: usize = 500;
 
 const CHANNEL_COOLDOWN: Duration = Duration::from_secs(90);
 
@@ -28,6 +30,10 @@ pub fn normalize_follow_hint_message(raw: &str) -> Result<Option<String>, Follow
     if collapsed.chars().count() > FOLLOW_HINT_MAX_CHARS {
         return Err(FollowHintMessageError::TooLong);
     }
+    let longest_login = "x".repeat(TWITCH_LOGIN_MAX_CHARS);
+    if !fits_twitch_chat(&render_follow_hint(Some(&collapsed), &longest_login)) {
+        return Err(FollowHintMessageError::TooLong);
+    }
     Ok(Some(collapsed))
 }
 
@@ -41,6 +47,10 @@ pub fn render_follow_hint(template: Option<&str>, chatter_login: &str) -> String
     } else {
         format!("@{chatter_login} {template}")
     }
+}
+
+pub fn fits_twitch_chat(message: &str) -> bool {
+    message.chars().count() <= TWITCH_CHAT_MAX_CHARS
 }
 
 fn is_candidate(event: &ChatMessageEvent) -> bool {
@@ -76,15 +86,18 @@ impl FollowHint {
     }
 
     async fn settings(&self, event: &ChatMessageEvent, channel_login: &str) -> FollowHintSettings {
+        if event.broadcaster_user_id.trim().is_empty() {
+            return FollowHintSettings {
+                enabled: false,
+                message: None,
+            };
+        }
         let row: Result<Option<(i32, Option<String>)>, sqlx::Error> = sqlx::query_as(
             "SELECT COALESCE(follow_hint_enabled, 0), follow_hint_message
                FROM streamer_plans
-              WHERE twitch_user_id = $2
-                 OR LOWER(COALESCE(twitch_login, '')) = LOWER($1)
-              ORDER BY (twitch_user_id = $2) DESC
+              WHERE twitch_user_id = $1
               LIMIT 1",
         )
-        .bind(&event.broadcaster_user_login)
         .bind(&event.broadcaster_user_id)
         .fetch_optional(&self.pool)
         .await;
@@ -118,6 +131,14 @@ impl FollowHint {
         if !settings.enabled {
             return false;
         }
+        let message = render_follow_hint(settings.message.as_deref(), &event.chatter_user_login);
+        if !fits_twitch_chat(&message) {
+            warn!(
+                channel = channel_login,
+                "follow hint skipped: rendered message too long"
+            );
+            return false;
+        }
         let Some(previous) = self.reserve(channel_login) else {
             info!(channel = channel_login, chatter = %event.chatter_user_login, "follow hint skipped: channel cooldown");
             return false;
@@ -144,7 +165,6 @@ impl FollowHint {
                 return false;
             }
         }
-        let message = render_follow_hint(settings.message.as_deref(), &event.chatter_user_login);
         match self
             .api
             .send_message(&event.broadcaster_user_id, &message)
@@ -220,5 +240,21 @@ mod tests {
             normalize_follow_hint_message(&"x".repeat(FOLLOW_HINT_MAX_CHARS + 1)),
             Err(FollowHintMessageError::TooLong)
         );
+        assert_eq!(
+            normalize_follow_hint_message(&vec!["@{user}"; 25].join(" ")),
+            Err(FollowHintMessageError::TooLong)
+        );
+        let emoji = "💜".repeat(FOLLOW_HINT_MAX_CHARS - 10);
+        assert_eq!(
+            normalize_follow_hint_message(&emoji),
+            Ok(Some(emoji.clone()))
+        );
+        let accepted = normalize_follow_hint_message(&format!("{} {{user}}", "y".repeat(270)))
+            .expect("fits")
+            .expect("non-empty");
+        assert!(fits_twitch_chat(&render_follow_hint(
+            Some(&accepted),
+            &"z".repeat(TWITCH_LOGIN_MAX_CHARS)
+        )));
     }
 }

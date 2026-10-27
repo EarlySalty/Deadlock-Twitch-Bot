@@ -1,6 +1,6 @@
 import { useT } from '../../context/LanguageContext';
 import { useEffect, useId, useState } from 'react';
-import { fetchFollowHintSettings, previewFollowHint, saveFollowHintSettings, type FollowHintSettings } from '@/api/followHint';
+import { countChars, fetchFollowHintSettings, followHintTooLong, normalizeFollowHint, previewFollowHint, saveFollowHintSettings, type FollowHintSettings } from '@/api/followHint';
 import { CommandRow } from './ui';
 
 export function FollowHintSection() {
@@ -38,8 +38,9 @@ export function FollowHintSection() {
   }
 
   const maxChars = settings?.max_chars ?? 300;
-  const tooLong = draft.trim().length > maxChars;
-  const dirty = settings !== null && draft.trim() !== settings.message.trim();
+  const normalizedDraft = normalizeFollowHint(draft);
+  const tooLong = followHintTooLong(draft, maxChars);
+  const dirty = settings !== null && normalizedDraft !== normalizeFollowHint(settings.message);
   const description = loading
     ? t('Status wird geladen …')
     : !settings
@@ -72,8 +73,9 @@ export function FollowHintSection() {
             placeholder={settings.default_message}
             aria-describedby={`${messageId}-hint`}
             aria-invalid={tooLong}
+            disabled={busy}
             onChange={event => setDraft(event.target.value)}
-            className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-60"
           />
           <div className="mt-1 flex flex-wrap items-center gap-3">
             <button
@@ -84,7 +86,10 @@ export function FollowHintSection() {
             >
               {t('Nachricht speichern')}
             </button>
-            <span className={`text-xs ${tooLong ? 'text-danger' : 'text-text-secondary'}`}>{draft.trim().length} / {maxChars}</span>
+            <span className={`text-xs ${tooLong ? 'text-danger' : 'text-text-secondary'}`}>{countChars(normalizedDraft)} / {maxChars}</span>
+            {tooLong && countChars(normalizedDraft) <= maxChars && (
+              <span className="text-xs text-danger">{t('Zu lang für den Twitch-Chat, sobald die Namen eingesetzt sind.')}</span>
+            )}
           </div>
           <p id={`${messageId}-hint`} className="mt-1 text-xs text-text-secondary">
             {t('{user} wird durch den Namen ersetzt. Ohne {user} setzt der Bot den Namen an den Anfang. Leer lassen für den Standardtext.')}

@@ -34,6 +34,24 @@ export function saveFollowHintSettings(enabled: boolean, message: string): Promi
   });
 }
 
+const TWITCH_LOGIN_MAX_CHARS = 25;
+const TWITCH_CHAT_MAX_CHARS = 500;
+
+export function normalizeFollowHint(raw: string): string {
+  return raw.split(/\s+/).filter(Boolean).join(' ');
+}
+
+export function countChars(text: string): number {
+  return Array.from(text).length;
+}
+
+export function followHintTooLong(raw: string, maxChars: number): boolean {
+  const normalized = normalizeFollowHint(raw);
+  if (!normalized) return false;
+  if (countChars(normalized) > maxChars) return true;
+  return countChars(previewFollowHint(normalized, normalized, 'x'.repeat(TWITCH_LOGIN_MAX_CHARS))) > TWITCH_CHAT_MAX_CHARS;
+}
+
 export function previewFollowHint(template: string, fallback: string, login: string): string {
   const text = template.trim() || fallback;
   return text.includes('{user}') ? text.split('{user}').join(login) : `@${login} ${text}`;
