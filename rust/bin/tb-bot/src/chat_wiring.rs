@@ -2792,7 +2792,7 @@ impl DiscordLinkPort for DbDiscordLink {
     }
 
     async fn discord_invite(&self, broadcaster_id: &str) -> Result<Option<String>, String> {
-        tb_db::guild_membership::scoped_invite(&self.pool, broadcaster_id)
+        tb_db::guild_membership::scoped_invite_for_id(&self.pool, broadcaster_id)
             .await
             .map(|invite| invite.map(|(url, _)| url))
             .map_err(|error| error.to_string())
@@ -2806,7 +2806,7 @@ struct DbScopedInviteUrl {
 #[async_trait::async_trait]
 impl InviteQuestionInviteUrlPort for DbScopedInviteUrl {
     async fn invite_url(&self, channel_login: &str) -> Result<Option<String>, String> {
-        tb_db::guild_membership::scoped_invite(&self.pool, channel_login)
+        tb_db::guild_membership::scoped_invite_for_login(&self.pool, channel_login)
             .await
             .map(|invite| invite.map(|(url, _)| url))
             .map_err(|error| error.to_string())
@@ -2825,7 +2825,7 @@ impl InvitePort for DbInvitePort {
         broadcaster_id: &str,
         chatter_login: &str,
     ) -> Result<Option<String>, String> {
-        let invite_url = tb_db::guild_membership::scoped_invite(&self.pool, broadcaster_id)
+        let invite_url = tb_db::guild_membership::scoped_invite_for_id(&self.pool, broadcaster_id)
             .await
             .map_err(|error| error.to_string())?
             .map(|(url, _)| url);
@@ -2907,7 +2907,7 @@ impl InviteResolver for DbInviteResolver {
     }
 
     async fn resolve_invite(&self, channel_login: &str) -> (String, bool) {
-        match tb_db::guild_membership::scoped_invite(&self.pool, channel_login).await {
+        match tb_db::guild_membership::scoped_invite_for_login(&self.pool, channel_login).await {
             Ok(Some((url, true))) => (url, true),
             Ok(Some((url, false))) => {
                 match self.create_and_store_streamer_invite(channel_login).await {

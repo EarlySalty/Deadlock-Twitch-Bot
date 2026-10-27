@@ -5,7 +5,7 @@
 //! (`handle_streamer_offline`); die gesamte Auswahl-/Retry-Logik liegt
 //! testbar in `tb-raid`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -119,6 +119,7 @@ struct AssembledPartners {
     eligible: Vec<tb_raid::OnlineCandidate>,
     online_count: usize,
     filtered_out: usize,
+    out_of_scope_ids: HashSet<String>,
 }
 
 /// Quell-Zustand für den manuellen Raid — aus dem Helix-Stream (Vorrang)
@@ -364,7 +365,6 @@ impl OfflineRaidHandler {
             filtered_out = assembled.filtered_out,
             "Auto-Raid-Pipeline gestartet"
         );
-        let eligible = assembled.eligible;
 
         // 8. Pipeline (Auswahl → Readiness → Raid → Pending).
         let request = AutoRaidRequest {
@@ -372,9 +372,10 @@ impl OfflineRaidHandler {
             broadcaster_login: login.clone(),
             viewer_count,
             stream_duration_sec,
-            partners: eligible,
+            partners: assembled.eligible,
             category_id: self.resolve_category_id().await,
             language: self.raid_language(broadcaster_id).await,
+            out_of_scope_ids: assembled.out_of_scope_ids,
             offline_trigger_ts: Some(offline_trigger_ts),
             reason: "auto_raid_on_offline".to_string(),
             respect_soft_raid_blacklist: true,
@@ -502,6 +503,7 @@ impl OfflineRaidHandler {
             partners: assembled.eligible,
             category_id: self.resolve_category_id().await,
             language: self.raid_language(broadcaster_id).await,
+            out_of_scope_ids: assembled.out_of_scope_ids,
             offline_trigger_ts: None,
             reason: "manual_chat_command".to_string(),
             respect_soft_raid_blacklist: false,
@@ -561,6 +563,8 @@ impl OfflineRaidHandler {
             stream_duration_sec: source.stream_duration_sec(now),
             partners: Vec::new(),
             category_id: None,
+            language: None,
+            out_of_scope_ids: HashSet::new(),
             offline_trigger_ts: None,
             reason: "manual_chat_command".to_string(),
             respect_soft_raid_blacklist: false,
@@ -612,13 +616,14 @@ impl OfflineRaidHandler {
         broadcaster_id: &str,
         now: chrono::DateTime<Utc>,
     ) -> Option<AssembledPartners> {
-        let roster = match self.roster.load_roster(broadcaster_id).await {
-            Ok(roster) => roster,
+        let scope = match self.roster.load_scope(broadcaster_id).await {
+            Ok(scope) => scope,
             Err(error) => {
                 tracing::error!(%error, broadcaster_id, "Raid: Roster nicht ladbar");
                 return None;
             }
         };
+        let roster = scope.partners;
         let logins: Vec<String> = roster.iter().map(|p| p.twitch_login.clone()).collect();
         let streams_by_login = streams_by_login_from_helix_result(
             self.helix.get_streams_by_logins(&logins, None).await,
@@ -675,6 +680,7 @@ impl OfflineRaidHandler {
             eligible,
             online_count,
             filtered_out,
+            out_of_scope_ids: scope.out_of_scope_ids,
         })
     }
 

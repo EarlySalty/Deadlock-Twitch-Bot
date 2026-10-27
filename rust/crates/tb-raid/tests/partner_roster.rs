@@ -52,6 +52,7 @@ async fn shared_server_ignores_language_and_cross_server_needs_language_and_both
         .execute(&db.pool).await.unwrap();
     let store = PartnerRosterStore::new(db.pool.clone());
     assert_eq!(ids(&store, "100").await, ["200", "300"]);
+    assert_eq!(excluded(&store, "100").await, ["400", "500"]);
     let home = tb_db::guild_membership::community_guild_id().unwrap();
     sqlx::query("UPDATE discord_guilds SET cross_server_raids=false WHERE guild_id=$1")
         .bind(home)
@@ -77,12 +78,25 @@ async fn shared_server_ignores_language_and_cross_server_needs_language_and_both
         .await
         .unwrap();
     assert_eq!(ids(&store, "100").await, ["500"]);
+    assert_eq!(excluded(&store, "100").await, ["300"]);
     sqlx::query("UPDATE streamer_guilds SET active=false WHERE twitch_user_id='100'")
         .execute(&db.pool)
         .await
         .unwrap();
     assert!(ids(&store, "100").await.is_empty());
     assert_eq!(store.source_language("100").await.unwrap(), None);
+}
+
+async fn excluded(store: &PartnerRosterStore, source: &str) -> Vec<String> {
+    let mut ids: Vec<String> = store
+        .load_scope(source)
+        .await
+        .unwrap()
+        .out_of_scope_ids
+        .into_iter()
+        .collect();
+    ids.sort();
+    ids
 }
 
 async fn ids(store: &PartnerRosterStore, source: &str) -> Vec<String> {

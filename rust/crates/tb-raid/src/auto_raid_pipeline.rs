@@ -324,6 +324,7 @@ pub struct AutoRaidRequest {
     /// Kategorie-ID für den Sprach-Fallback (None → kein Fallback).
     pub category_id: Option<String>,
     pub language: Option<String>,
+    pub out_of_scope_ids: HashSet<String>,
     /// Unix-Zeitpunkt des Offline-Triggers (für Arrival-Latenz-Metriken).
     pub offline_trigger_ts: Option<f64>,
     /// History-Grund, z. B. `auto_raid_on_offline`.
@@ -513,7 +514,8 @@ impl AutoRaidPipeline {
             }
         };
 
-        let mut exclude_ids: HashSet<String> = [req.broadcaster_id.clone()].into();
+        let mut exclude_ids: HashSet<String> = req.out_of_scope_ids.clone();
+        exclude_ids.insert(req.broadcaster_id.clone());
         // Fallback-Streams werden lazy geholt und über Versuche gecacht
         // (Python `cached_de_streams`).
         let mut cached_fallback: Option<Vec<FairnessCandidate>> = None;

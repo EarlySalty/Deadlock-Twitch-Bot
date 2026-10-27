@@ -23,21 +23,43 @@ pub fn community_guild_id() -> Result<i64, sqlx::Error> {
         .map_err(|error| sqlx::Error::Protocol(error.to_string()))
 }
 
-pub async fn scoped_invite(
+pub async fn scoped_invite_for_id(
     pool: &PgPool,
-    streamer: &str,
+    twitch_user_id: &str,
+) -> Result<Option<(String, bool)>, sqlx::Error> {
+    let user_id: Option<String> = sqlx::query_scalar(
+        "SELECT twitch_user_id FROM twitch_streamer_identities WHERE twitch_user_id = $1",
+    )
+    .bind(twitch_user_id)
+    .fetch_optional(pool)
+    .await?;
+    match user_id {
+        Some(user_id) => scoped_invite_for_user(pool, user_id).await,
+        None => Ok(None),
+    }
+}
+
+pub async fn scoped_invite_for_login(
+    pool: &PgPool,
+    twitch_login: &str,
 ) -> Result<Option<(String, bool)>, sqlx::Error> {
     let user_id: Option<String> = sqlx::query_scalar(
         "SELECT twitch_user_id FROM twitch_streamer_identities
-         WHERE twitch_user_id = $1 OR lower(twitch_login) = lower($1)
-         ORDER BY (twitch_user_id = $1) DESC LIMIT 1",
+         WHERE lower(twitch_login) = lower($1) ORDER BY twitch_user_id LIMIT 1",
     )
-    .bind(streamer)
+    .bind(twitch_login)
     .fetch_optional(pool)
     .await?;
-    let Some(user_id) = user_id else {
-        return Ok(None);
-    };
+    match user_id {
+        Some(user_id) => scoped_invite_for_user(pool, user_id).await,
+        None => Ok(None),
+    }
+}
+
+async fn scoped_invite_for_user(
+    pool: &PgPool,
+    user_id: String,
+) -> Result<Option<(String, bool)>, sqlx::Error> {
     let Some(home) = home_guild_id(pool, &user_id, community_guild_id()?).await? else {
         return Ok(None);
     };

@@ -3,7 +3,7 @@ mod guilds;
 #[path = "../../../test-support/postgres.rs"]
 mod postgres;
 
-use tb_db::guild_membership::{home_guild_id, scoped_invite};
+use tb_db::guild_membership::{home_guild_id, scoped_invite_for_id, scoped_invite_for_login};
 
 #[tokio::test]
 async fn home_server_is_active_community_then_oldest_with_stable_ties() {
@@ -53,7 +53,7 @@ async fn invites_never_cross_home_server_or_fallback_globally() {
         INSERT INTO twitch_streamer_invites VALUES('streamer',5,'https://discord.gg/wrong',NULL);")
         .execute(&db.pool).await.unwrap();
     assert_eq!(
-        scoped_invite(&db.pool, "streamer").await.unwrap(),
+        scoped_invite_for_login(&db.pool, "streamer").await.unwrap(),
         Some(("https://discord.gg/community".into(), false))
     );
     let community = tb_db::guild_membership::community_guild_id().unwrap();
@@ -65,7 +65,7 @@ async fn invites_never_cross_home_server_or_fallback_globally() {
     .await
     .unwrap();
     assert_eq!(
-        scoped_invite(&db.pool, "1").await.unwrap(),
+        scoped_invite_for_id(&db.pool, "1").await.unwrap(),
         Some(("https://discord.gg/personal".into(), true))
     );
     sqlx::query("UPDATE streamer_guilds SET active=false WHERE guild_id=$1")
@@ -74,7 +74,7 @@ async fn invites_never_cross_home_server_or_fallback_globally() {
         .await
         .unwrap();
     assert_eq!(
-        scoped_invite(&db.pool, "streamer").await.unwrap(),
+        scoped_invite_for_login(&db.pool, "streamer").await.unwrap(),
         Some(("https://discord.gg/wrong".into(), true))
     );
     sqlx::query("DELETE FROM twitch_streamer_invites")
@@ -85,6 +85,37 @@ async fn invites_never_cross_home_server_or_fallback_globally() {
         .execute(&db.pool)
         .await
         .unwrap();
-    assert_eq!(scoped_invite(&db.pool, "streamer").await.unwrap(), None);
-    assert_eq!(scoped_invite(&db.pool, "unknown").await.unwrap(), None);
+    assert_eq!(
+        scoped_invite_for_login(&db.pool, "streamer").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        scoped_invite_for_login(&db.pool, "unknown").await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn numeric_login_and_id_lookups_stay_separate() {
+    let db = postgres::TestPostgres::start().await;
+    guilds::schema(&db.pool).await;
+    guilds::member(&db.pool, "12345", "alpha").await;
+    guilds::member(&db.pool, "67890", "12345").await;
+    sqlx::raw_sql("CREATE TABLE twitch_streamer_invites(streamer_login text, guild_id bigint, invite_url text, twitch_user_id text);")
+        .execute(&db.pool).await.unwrap();
+    let community = tb_db::guild_membership::community_guild_id().unwrap();
+    sqlx::query("INSERT INTO twitch_streamer_invites VALUES('alpha',$1,'https://discord.gg/alpha','12345'),('12345',$1,'https://discord.gg/numeric','67890')")
+        .bind(community)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        scoped_invite_for_login(&db.pool, "12345").await.unwrap(),
+        Some(("https://discord.gg/numeric".into(), true))
+    );
+    assert_eq!(
+        scoped_invite_for_id(&db.pool, "12345").await.unwrap(),
+        Some(("https://discord.gg/alpha".into(), true))
+    );
+    assert_eq!(scoped_invite_for_id(&db.pool, "alpha").await.unwrap(), None);
 }

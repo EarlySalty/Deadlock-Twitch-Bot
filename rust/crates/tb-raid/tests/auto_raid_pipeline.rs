@@ -409,6 +409,7 @@ fn build_with_enricher(
 fn request(partners: Vec<OnlineCandidate>) -> AutoRaidRequest {
     AutoRaidRequest {
         language: Some("de".to_string()),
+        out_of_scope_ids: Default::default(),
         broadcaster_id: "100".to_string(),
         broadcaster_login: "quelle".to_string(),
         viewer_count: 42,
@@ -1266,6 +1267,59 @@ async fn fallback_filtert_nicht_partner_weiter_gegen_weiche_blacklist() {
         "der Kategorie-Fallback filtert weiche Blacklist-Eintraege unveraendert"
     );
     assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["600"]);
+}
+
+#[tokio::test]
+async fn category_fallback_and_boost_skip_out_of_scope_partners() {
+    let pool = pool_or_skip!("r1_fallback_scope");
+    seed_source_token(&pool, "100").await;
+    let h = build(
+        &pool,
+        HashMap::new(),
+        vec![
+            fairness("300", "closed_server"),
+            fairness("400", "open_streamer"),
+        ],
+    );
+    let mut req = request(Vec::new());
+    req.out_of_scope_ids = ["300".to_string()].into();
+    assert!(matches!(
+        h.pipeline.run(&req).await,
+        AutoRaidPipelineOutcome::Started { .. }
+    ));
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["400"]);
+    let h = build(
+        &pool,
+        HashMap::new(),
+        vec![fairness("300", "closed_server")],
+    );
+    assert_eq!(
+        h.pipeline.run(&req).await,
+        AutoRaidPipelineOutcome::NoTarget
+    );
+    assert!(h.api.calls.lock().unwrap().is_empty());
+    sqlx::query(
+        "INSERT INTO twitch_partner_outreach (streamer_login, status, contacted_at)
+         VALUES ('closed_server', 'sent', (NOW() - INTERVAL '2 hours')::text)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    seed_score(&pool, "200", 0.9, 1).await;
+    let h = build(
+        &pool,
+        HashMap::new(),
+        vec![fairness("300", "closed_server")],
+    );
+    req.partners = vec![partner("200", "partner")];
+    assert_eq!(
+        h.pipeline.run(&req).await,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "partner".to_string(),
+            is_partner_raid: true,
+        }
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["200"]);
 }
 
 #[tokio::test]

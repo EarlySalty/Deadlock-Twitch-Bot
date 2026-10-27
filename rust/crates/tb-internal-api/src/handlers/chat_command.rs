@@ -63,7 +63,7 @@ pub async fn handler(
 }
 
 async fn get_invite_url(pool: &PgPool, channel_login: &str) -> Result<Option<String>, ApiError> {
-    tb_db::guild_membership::scoped_invite(pool, channel_login)
+    tb_db::guild_membership::scoped_invite_for_login(pool, channel_login)
         .await
         .map(|invite| invite.map(|(url, _)| url))
         .map_err(|error| {
