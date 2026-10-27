@@ -37,6 +37,7 @@ members = [
     "bin/tb-stt-server",
     "bin/tb-discord-hub",
     "bin/tb-claude-relay",
+    "bin/tb-deploy-queue",
 ]
 
 [workspace.package]

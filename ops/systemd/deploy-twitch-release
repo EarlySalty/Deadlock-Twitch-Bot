@@ -10,11 +10,13 @@ Aufruf:
   deploy-twitch-release <40-stelliger-git-sha> [quell-checkout]
   deploy-twitch-release <40-stelliger-git-sha> [quell-checkout] --restart <dienst> [--restart <dienst> ...]
   deploy-twitch-release <40-stelliger-git-sha> [quell-checkout] --install-stt-models [--restart <dienst> ...]
+  deploy-twitch-release <40-stelliger-git-sha> [quell-checkout] --restart none
 
 Nach einem abgebrochenen Deploy kann der eingefrorene Buildpfad erneut als Quelle dienen.
 STT-Modelle werden nur mit --install-stt-models aus dem geprüften Release installiert.
 Ohne --restart werden Dashboard, Bot, Coaching-Watch und Discord-Hub neu gestartet.
 Mit --restart werden nur die explizit genannten Twitch-Dienste neu gestartet.
+Mit --restart none wird kein Dienst neu gestartet.
 
 Erlaubte Restart-Ziele:
   twitch-dashboard
@@ -23,6 +25,7 @@ Erlaubte Restart-Ziele:
   coaching-watch
   discord-hub
   all
+  none
 EOF
 }
 
@@ -83,8 +86,13 @@ pruefen() {
       result=1
     fi
     if [[ -z "$current_sha" || "$release_sha" != "$current_sha" ]]; then
-      printf 'FEHLER: %s: Release-SHA stimmt nicht mit current überein.\n' "$unit" >&2
-      result=1
+      if [[ -n "$current_sha" && -n "$release_sha" && "$deleted" == nein ]] &&
+         cmp --silent -- "$exe" "/opt/deadlock/twitch/releases/$current_sha/${exe#/opt/deadlock/twitch/releases/"$release_sha"/}"; then
+        printf 'Hinweis: %s läuft unverändert aus Release %s; die Binary ist identisch mit current.\n' "$unit" "$release_sha"
+      else
+        printf 'FEHLER: %s: Release-SHA stimmt nicht mit current überein.\n' "$unit" >&2
+        result=1
+      fi
     fi
     if [[ "$state" != active || ! "$restarts" =~ ^[0-9]+$ ]]; then
       printf 'FEHLER: %s: ActiveState oder NRestarts ungültig.\n' "$unit" >&2
@@ -144,6 +152,7 @@ fi
 
 src=""
 restart_explicit=0
+restart_none=0
 install_stt_models=0
 declare -a restart_targets=()
 declare -A restart_seen=()
@@ -163,6 +172,10 @@ add_restart_target() {
       ;;
     discord-hub|twitch-discord-hub|deadlock-twitch-discord-hub-rust|deadlock-twitch-discord-hub-rust.service)
       canonical="discord-hub"
+      ;;
+    none)
+      restart_none=1
+      return
       ;;
     all)
       add_restart_target twitch-dashboard
@@ -254,7 +267,11 @@ done
 if [[ $restart_explicit -eq 0 ]]; then
   add_restart_target all
 fi
-if [[ ${#restart_targets[@]} -eq 0 ]]; then
+if [[ $restart_none -eq 1 && ${#restart_targets[@]} -gt 0 ]]; then
+  echo "--restart none lässt sich nicht mit anderen Restart-Zielen kombinieren." >&2
+  exit 1
+fi
+if [[ $restart_none -eq 0 && ${#restart_targets[@]} -eq 0 ]]; then
   echo "Mindestens ein Restart-Ziel ist erforderlich." >&2
   exit 1
 fi
@@ -820,5 +837,8 @@ done
 
 printf 'Twitch-Deploy fertig: %s\n' "$sha"
 printf 'Neu gestartet:'
+if [[ ${#restart_targets[@]} -eq 0 ]]; then
+  printf ' keiner'
+fi
 printf ' %s' "${restart_targets[@]}"
 printf '\n'

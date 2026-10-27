@@ -101,4 +101,28 @@ next_sha=$(git -C "$test_root/source" rev-parse HEAD)
 [[ $(cat "$HOME/repos/twitch-release-$next_sha/website/dist/index.html") == "$next_sha" ]]
 [[ $("$HOME/repos/twitch-release-$next_sha/rust/target/release/tb-bot" --build-revision) == "$next_sha" ]]
 [[ $(stat -c %y "$HOME/repos/twitch-release-build/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs") == "$old_mtime" ]]
+parent_release="$test_root/releases/$sha"
+mkdir -p "$parent_release/rust/target/release" "$parent_release/website/dist"
+cp "$HOME/repos/twitch-release-$sha/rust/target/release/tb-bot" "$parent_release/rust/target/release/tb-bot"
+printf 'parent website\n' >"$parent_release/website/dist/index.html"
+printf 'parent %s\nbuild-package tb-dashboard\nbuild-package tb-stream-audit-bin\nbuild-package tb-config\nbuild-package tb-llm\nbuild-package tb-discord-hub\nbuild-package tb-stt-server\nbuild-package tb-category-collector\ncarry-binary tb-bot rust/bin/tb-bot\ncarry-frontend website website\n' "$sha" >"$test_root/plan"
+printf 'third revision\n' >>"$test_root/source/rust/bin/tb-dashboard/src/bin/input"
+git -C "$test_root/source" -c user.name=Test -c user.email=test@localhost commit -qam third-revision
+third_sha=$(git -C "$test_root/source" rev-parse HEAD)
+TWITCH_RELEASE_ROOT="$test_root/releases" "$script" "$third_sha" --plan "$test_root/plan" >/dev/null 2>&1
+third="$HOME/repos/twitch-release-$third_sha"
+[[ $("$third/rust/target/release/tb-bot" --build-revision) == "$sha" ]]
+[[ $("$third/rust/target/release/tb-dashboard" --build-revision) == "$third_sha" ]]
+[[ $(cat "$third/website/dist/index.html") == 'parent website' ]]
+[[ $(cat "$third/bot/admin_dashboard/dist/index.html") == "$third_sha" ]]
+grep -qx "binary tb-bot $sha $sha rust/bin/tb-bot" "$third/rust/target/release/carried.list"
+grep -qx "dist website $sha $sha website" "$third/rust/target/release/carried.list"
+[[ $(tail -n 1 "$HOME/cargo-calls") != *'-p tb-bot '* ]]
+[[ -z $(git -C "$third" status --porcelain) ]]
+rm -rf -- "$third"
+calls=$(wc -l <"$HOME/cargo-calls")
+printf 'carry-binary tb-dashboard rust/bin/tb-dashboard\n' >>"$test_root/plan"
+if TWITCH_RELEASE_ROOT="$test_root/releases" "$script" "$third_sha" --plan "$test_root/plan" >"$test_root/conflict.log" 2>&1; then exit 1; fi
+grep -q 'zugleich gebaut und übernommen: tb-dashboard' "$test_root/conflict.log"
+[[ $(wc -l <"$HOME/cargo-calls") == "$calls" ]]
 printf 'Release build contract checks passed.\n'

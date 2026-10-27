@@ -19,8 +19,16 @@ stamp_binary() {
   [[ $(readelf --string-dump=.twitch_build "$artifact" | awk '/\[/{print $NF}') == "$revision" ]] || fail 'Die Herkunftsmarke im Release-Artefakt stimmt nicht überein.'
 }
 
-[[ $# -eq 1 && $1 =~ ^[0-9a-f]{40}$ ]] || fail 'Aufruf: ops/twitch-release-build <40-stelliger Git-SHA>'
+usage='Aufruf: ops/twitch-release-build <40-stelliger Git-SHA> [--plan <plan-datei>]'
+[[ $# -ge 1 && $1 =~ ^[0-9a-f]{40}$ ]] || fail "$usage"
 sha=$1
+plan=""
+if [[ $# -eq 3 && $2 == --plan ]]; then
+  plan=$(realpath -e -- "$3") || fail 'Die Plan-Datei fehlt.'
+elif [[ $# -ne 1 ]]; then
+  fail "$usage"
+fi
+release_root=${TWITCH_RELEASE_ROOT:-/opt/deadlock/twitch/releases}
 repo=$(git -C "$(dirname "$(realpath "$0")")" rev-parse --show-toplevel)
 remote=$(git -C "$repo" remote get-url origin)
 build="$HOME/repos/twitch-release-build"
@@ -60,26 +68,96 @@ fi
 if [[ -f "$build/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs" ]]; then
   binaries+=(clip_context_learn)
 fi
+declare -A binary_package=(
+  [tb-bot]=tb-bot [tb-dashboard]=tb-dashboard [clip_context_learn]=tb-dashboard
+  [tb-stream-audit]=tb-stream-audit-bin [tb-config-check]=tb-config [tb-llm-usage-recover]=tb-llm
+  [tb-discord-hub]=tb-discord-hub [tb-stt-server]=tb-stt-server [tb-category-collector]=tb-category-collector
+  [tb-twitch-watchdog]=tb-category-collector [tb-category-storage]=tb-category-collector
+)
+declare -A release_dist=(
+  [bot/dashboard_v2]=bot/analytics/dashboard_v2/dist [bot/admin_dashboard]=bot/admin_dashboard/dist [website]=website/dist
+)
+frontends=(bot/dashboard_v2 bot/admin_dashboard website)
+declare -A build_package=() carry_binary=() carry_frontend=()
+parent=""
+if [[ -n $plan ]]; then
+  while read -r kind name rest; do
+    case "$kind" in
+      '') ;;
+      parent) [[ $name =~ ^[0-9a-f]{40}$ && -z $parent ]] || fail 'Ungültiger Parent im Plan.'; parent=$name ;;
+      build-package) [[ " ${packages[*]} " == *" $name "* ]] || fail "Unbekanntes Paket im Plan: $name"; build_package[$name]=1 ;;
+      carry-binary) [[ -n ${binary_package[$name]:-} && -n $rest ]] || fail "Ungültige Übernahme im Plan: $name"; carry_binary[$name]=$rest ;;
+      carry-frontend) [[ -n ${release_dist[$name]:-} && -n $rest ]] || fail "Ungültige Frontend-Übernahme im Plan: $name"; carry_frontend[$name]=$rest ;;
+      *) fail "Unbekannte Planzeile: $kind" ;;
+    esac
+  done <"$plan"
+  if (( ${#carry_binary[@]} + ${#carry_frontend[@]} > 0 )); then
+    [[ -n $parent && -d "$release_root/$parent" && ! -L "$release_root/$parent" ]] || fail 'Das Parent-Release für Übernahmen fehlt.'
+  fi
+else
+  for package in "${packages[@]}"; do
+    build_package[$package]=1
+  done
+fi
+for binary in "${binaries[@]}"; do
+  if [[ -z ${carry_binary[$binary]:-} && -z ${build_package[${binary_package[$binary]}]:-} ]]; then
+    fail "Release-Artefakt ist weder gebaut noch übernommen: $binary"
+  fi
+  if [[ -n ${carry_binary[$binary]:-} && -n ${build_package[${binary_package[$binary]}]:-} ]]; then
+    fail "Release-Artefakt ist zugleich gebaut und übernommen: $binary"
+  fi
+done
 args=()
 for package in "${packages[@]}"; do
-  args+=(-p "$package")
+  if [[ -n ${build_package[$package]:-} ]]; then
+    args+=(-p "$package")
+  fi
 done
-(
-  cd "$build/rust"
-  CARGO_SLOT_DEPLOY=1 cargo-slot build --release --locked --timings --jobs 12 --target-dir "$build/rust/target" "${args[@]}"
-)
+started=$SECONDS
+if (( ${#args[@]} > 0 )); then
+  (
+    cd "$build/rust"
+    CARGO_SLOT_DEPLOY=1 cargo-slot build --release --locked --timings --jobs 12 --target-dir "$build/rust/target" "${args[@]}"
+  )
+fi
+printf 'build-step cargo seconds=%s packages=%s\n' "$((SECONDS - started))" "${#args[@]}"
 for binary in "${binaries[@]}"; do
-  artifact="$build/rust/target/release/$binary"
+  if [[ -n ${carry_binary[$binary]:-} ]]; then
+    artifact="$release_root/$parent/rust/target/release/$binary"
+  else
+    artifact="$build/rust/target/release/$binary"
+  fi
   [[ -f "$artifact" && -x "$artifact" ]] || fail "Release-Artefakt fehlt: $binary"
 done
-frontends=(bot/dashboard_v2 bot/admin_dashboard website)
+lock_marker() {
+  printf '%s/node_modules/.twitch-release-lock.sha256' "$1"
+}
+install_frontend_modules() {
+  local directory=$1 marker lock_hash=""
+  marker=$(lock_marker "$directory")
+  if [[ -f "$directory/package-lock.json" ]]; then
+    lock_hash=$(sha256sum "$directory/package-lock.json" | awk '{print $1}')
+    if [[ -f $marker && $(cat "$marker") == "$lock_hash" ]]; then
+      printf 'build-step npm-ci skipped=%s\n' "${directory#"$build"/}"
+      return
+    fi
+  fi
+  (cd "$directory" && npm ci --no-audit --no-fund)
+  if [[ -n $lock_hash && -d "$directory/node_modules" ]]; then
+    printf '%s\n' "$lock_hash" >"$marker"
+  fi
+}
 for frontend in "${frontends[@]}"; do
-  (
-    cd "$build/$frontend"
-    npm ci --no-audit --no-fund
-    npm run build
-  )
+  if [[ -n ${carry_frontend[$frontend]:-} ]]; then
+    [[ -f "$release_root/$parent/${release_dist[$frontend]}/index.html" ]] || fail "Frontend-Artefakt im Parent fehlt: $frontend"
+    printf 'build-step frontend carried=%s\n' "$frontend"
+    continue
+  fi
+  started=$SECONDS
+  install_frontend_modules "$build/$frontend"
+  (cd "$build/$frontend" && npm run build)
   [[ -f "$build/$frontend/dist/index.html" ]] || fail "Frontend-Artefakt fehlt: $frontend"
+  printf 'build-step frontend built=%s seconds=%s\n' "$frontend" "$((SECONDS - started))"
 done
 [[ $(git -C "$build" rev-parse HEAD) == "$sha" && -z $(git -C "$build" status --porcelain --untracked-files=all) ]] || fail 'Der Build hat den Quellstand verändert.'
 temporary=$(mktemp -d "$HOME/repos/.twitch-release-$sha.XXXXXX")
@@ -93,14 +171,46 @@ if [[ -n $(git -C "$temporary" status --porcelain --untracked-files=all) ]]; the
   revision+=-dirty
 fi
 [[ $revision == "$sha" ]] || fail 'Der Staging-Quellstand ist nicht sauber oder stimmt nicht mit dem angeforderten SHA überein.'
+parent_origin() {
+  local artifact=$1 provenance="$release_root/$parent/PROVENANCE" origin=""
+  if [[ -f $provenance ]]; then
+    origin=$(awk -v path="$artifact" '$1 == path {print $2}' "$provenance")
+  fi
+  printf '%s\n' "${origin:-$parent}"
+}
+carried="$temporary/rust/target/release/carried.list"
+: >"$carried"
 for binary in "${binaries[@]}"; do
   artifact="$temporary/rust/target/release/$binary"
-  cp -L -- "$build/rust/target/release/$binary" "$artifact"
-  stamp_binary "$artifact" "$revision"
+  if [[ -n ${carry_binary[$binary]:-} ]]; then
+    cp -L -- "$release_root/$parent/rust/target/release/$binary" "$artifact"
+    origin=$("$artifact" --build-revision)
+    [[ $origin =~ ^[0-9a-f]{40}$ ]] || fail "Übernommenes Artefakt hat keine gültige Herkunft: $binary"
+    [[ $(readelf --string-dump=.twitch_build "$artifact" | awk '/\[/{print $NF}') == "$origin" ]] || fail "Herkunftsmarke des übernommenen Artefakts stimmt nicht: $binary"
+    git -C "$temporary" merge-base --is-ancestor "$origin" "$sha" || fail "Herkunft des übernommenen Artefakts liegt nicht in der Historie: $binary"
+    printf 'binary %s %s %s %s\n' "$binary" "$origin" "$parent" "${carry_binary[$binary]}" >>"$carried"
+    printf 'artifact carried binary=%s origin=%s\n' "$binary" "$origin"
+  else
+    cp -L -- "$build/rust/target/release/$binary" "$artifact"
+    stamp_binary "$artifact" "$revision"
+    printf 'artifact built binary=%s\n' "$binary"
+  fi
 done
 for frontend in "${frontends[@]}"; do
-  cp -RL -- "$build/$frontend/dist" "$temporary/$frontend/dist"
+  if [[ -n ${carry_frontend[$frontend]:-} ]]; then
+    cp -RL -- "$release_root/$parent/${release_dist[$frontend]}" "$temporary/$frontend/dist"
+    origin=$(parent_origin "${release_dist[$frontend]}")
+    git -C "$temporary" merge-base --is-ancestor "$origin" "$sha" || fail "Herkunft des übernommenen Frontends liegt nicht in der Historie: $frontend"
+    printf 'dist %s %s %s %s\n' "$frontend" "$origin" "$parent" "${carry_frontend[$frontend]}" >>"$carried"
+    printf 'artifact carried frontend=%s origin=%s\n' "$frontend" "$origin"
+  else
+    cp -RL -- "$build/$frontend/dist" "$temporary/$frontend/dist"
+    printf 'artifact built frontend=%s\n' "$frontend"
+  fi
 done
+if [[ ! -s $carried ]]; then
+  rm -- "$carried"
+fi
 [[ -z $(git -C "$temporary" status --porcelain --untracked-files=all) ]] || fail 'Der Staging-Clone ist nicht sauber.'
 mv -T -- "$temporary" "$staging"
 trap - EXIT

@@ -1,0 +1,19 @@
+database_url = "postgres://nathanael@localhost/deploy_queue?host=/var/run/postgresql"
+quiet_minutes = 10
+max_wait_minutes = 30
+poll_seconds = 15
+idle_wait_minutes = 60
+compaction_timeout_minutes = 20
+pruefen_wait_seconds = 180
+repo_dir = "/home/nathanael/.local/share/deploy-queue/repo"
+remote = "git@github.com:EarlySalty/Deadlock-Twitch-Bot.git"
+log_dir = "/home/nathanael/.local/state/deploy-queue/runs"
+release_root = "/opt/deadlock/twitch/releases"
+current_link = "/opt/deadlock/twitch/current"
+deploy_wrapper = "/usr/local/bin/deploy-twitch-release"
+cargo = "/home/nathanael/.cargo/bin/cargo"
+child_path = "/home/nathanael/.local/bin:/home/nathanael/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+[t3]
+base_url = "http://127.0.0.1:3773"
+bearer_file = "/home/nathanael/.config/claude-t3/bearer"

@@ -1,0 +1,13 @@
+[Unit]
+Description=Twitch bot deploy queue
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/deploy-queue daemon
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

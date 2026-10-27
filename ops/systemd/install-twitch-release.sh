@@ -143,8 +143,148 @@ for relative in "${generated[@]}"; do
   fi
 done
 
+release_root=/opt/deadlock/twitch/releases
+declare -A artifact_origin=()
+write_provenance() {
+  local stage_root="$1" binary path
+  {
+    for binary in "${binaries_expected[@]}"; do
+      path="rust/target/release/$binary"
+      if [[ -n "${artifact_origin[$path]:-}" ]]; then
+        printf '%s %s carried\n' "$path" "${artifact_origin[$path]}"
+      else
+        printf '%s %s built\n' "$path" "$git_sha"
+      fi
+    done
+    for path in "${dist_release_path[@]}"; do
+      if [[ -n "${artifact_origin[$path]:-}" ]]; then
+        printf '%s %s carried\n' "$path" "${artifact_origin[$path]}"
+      else
+        printf '%s %s built\n' "$path" "$git_sha"
+      fi
+    done
+  } | LC_ALL=C sort > "$stage_root/PROVENANCE"
+  chmod 0644 "$stage_root/PROVENANCE"
+}
+declare -A dist_release_path=(
+  [bot/dashboard_v2]=bot/analytics/dashboard_v2/dist [bot/admin_dashboard]=bot/admin_dashboard/dist [website]=website/dist
+)
+
+carry_reject() {
+  echo "Übernommenes Artefakt abgelehnt: $1" >&2
+  exit 1
+}
+
+workspace_members() {
+  "${git_safe[@]}" -C "$checkout" ls-tree -r --name-only "$git_sha" -- rust/crates rust/bin \
+    | awk -F/ 'NF == 4 && $4 == "Cargo.toml" {print $1 "/" $2 "/" $3 "/"}'
+}
+
+verify_unchanged_sources() {
+  local kind="$1" name="$2" origin="$3" inputs="$4" changed member input inside
+  local -a members=() input_list=()
+  mapfile -t members < <(workspace_members)
+  read -r -a input_list <<< "$inputs"
+  (( ${#input_list[@]} > 0 )) || carry_reject "$name ohne Eingaben"
+  for input in "${input_list[@]}"; do
+    [[ "$input" =~ ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$ && "$input" != *..* ]] || carry_reject "$name mit ungültiger Eingabe $input"
+  done
+  while IFS= read -r -d '' changed; do
+    for input in "${input_list[@]}"; do
+      if [[ "$changed" == "${input%/}" || "$changed" == "${input%/}/"* ]]; then
+        carry_reject "$name: Eingabe $changed hat sich seit $origin geändert"
+      fi
+    done
+    if [[ "$kind" == binary && "$changed" == rust/* && "$changed" != rust/scripts/* && "$changed" != rust/docs/* && "$changed" != *.md ]]; then
+      inside=0
+      for member in "${members[@]}"; do
+        if [[ "$changed" == "$member"* ]]; then
+          inside=1
+          break
+        fi
+      done
+      [[ $inside -eq 1 ]] || carry_reject "$name: arbeitsbereichsweite Datei $changed hat sich seit $origin geändert"
+    fi
+  done < <("${git_safe[@]}" -C "$checkout" diff --no-renames -z --name-only "$origin" "$git_sha" --)
+}
+
+trusted_parent() {
+  local parent="$1" directory="$release_root/$1"
+  [[ -d "$directory" && ! -L "$directory" && "$(stat -c '%U:%G' -- "$directory")" == root:root ]] || carry_reject "Parent-Release $parent fehlt oder ist nicht root-eigen"
+  [[ -z "$(find "$directory" -maxdepth 0 -perm /022 -print -quit)" ]] || carry_reject "Parent-Release $parent ist beschreibbar"
+}
+
+parent_origin() {
+  local parent="$1" artifact="$2" provenance="$release_root/$1/PROVENANCE" origin=""
+  if [[ -f "$provenance" && ! -L "$provenance" ]]; then
+    origin="$(awk -v path="$artifact" '$1 == path {print $2}' "$provenance")"
+  fi
+  printf '%s\n' "${origin:-$parent}"
+}
+
+verify_carried_entry() {
+  local kind="$1" name="$2" origin="$3" parent="$4" inputs="$5" artifact parent_path
+  [[ "$origin" =~ ^[0-9a-f]{40}$ && "$parent" =~ ^[0-9a-f]{40}$ ]] || carry_reject "$name mit ungültiger Herkunft"
+  "${git_safe[@]}" -C "$checkout" merge-base --is-ancestor "$origin" "$git_sha" || carry_reject "$name: $origin ist kein Vorfahr von $git_sha"
+  "${git_safe[@]}" -C "$checkout" merge-base --is-ancestor "$parent" "$git_sha" || carry_reject "$name: Parent $parent ist kein Vorfahr von $git_sha"
+  trusted_parent "$parent"
+  case "$kind" in
+    binary)
+      [[ " ${binaries_expected[*]} " == *" $name "* ]] || carry_reject "$name ist kein Release-Binary"
+      artifact="rust/target/release/$name"
+      parent_path="$artifact"
+      cmp --silent -- "$checkout/$artifact" "$release_root/$parent/$parent_path" || carry_reject "$name weicht vom Parent-Release ab"
+      ;;
+    dist)
+      [[ -n "${dist_release_path[$name]:-}" ]] || carry_reject "$name ist kein Release-Frontend"
+      artifact="$name/dist"
+      if [[ "$name" == bot/dashboard_v2 ]]; then
+        artifact="$dashboard_source"
+      fi
+      parent_path="${dist_release_path[$name]}"
+      diff -r --no-dereference -- "$checkout/$artifact" "$release_root/$parent/$parent_path" >/dev/null || carry_reject "$name weicht vom Parent-Release ab"
+      ;;
+    *) carry_reject "unbekannte Art $kind" ;;
+  esac
+  [[ "$(parent_origin "$parent" "$parent_path")" == "$origin" ]] || carry_reject "$name: Herkunft $origin passt nicht zum Parent-Release"
+  verify_unchanged_sources "$kind" "$name" "$origin" "$inputs"
+  artifact_origin[$parent_path]="$origin"
+}
+
+expected_binaries() {
+  binaries_expected=(tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover tb-discord-hub)
+  if [[ "$social_ai_expected" == 1 ]]; then binaries_expected+=(tb-stt-server); fi
+  if [[ "$collector_expected" == 1 ]]; then binaries_expected+=(tb-category-collector); fi
+  if [[ "$clip_context_expected" == 1 ]]; then binaries_expected+=(clip_context_learn); fi
+  if [[ "$watchdog_expected" == 1 ]]; then binaries_expected+=(tb-twitch-watchdog); fi
+  if [[ "$storage_expected" == 1 ]]; then binaries_expected+=(tb-category-storage); fi
+}
+declare -a binaries_expected=()
+expected_binaries
+
+carried_list="$checkout/rust/target/release/carried.list"
+if [[ -e "$carried_list" || -L "$carried_list" ]]; then
+  [[ -f "$carried_list" && ! -L "$carried_list" ]] || carry_reject "carried.list ist keine reguläre Datei"
+  while read -r carry_kind carry_name carry_origin carry_parent carry_inputs; do
+    [[ -n "$carry_kind" ]] || continue
+    verify_carried_entry "$carry_kind" "$carry_name" "$carry_origin" "$carry_parent" "$carry_inputs"
+    printf 'Übernommen geprüft: %s %s Herkunft %s\n' "$carry_kind" "$carry_name" "$carry_origin"
+  done < "$carried_list"
+fi
+
+load_release_provenance() {
+  local provenance="$1/PROVENANCE" path origin state
+  [[ -f "$provenance" ]] || return 0
+  while read -r path origin state; do
+    [[ "$origin" =~ ^[0-9a-f]{40}$ ]] || carry_reject "PROVENANCE enthält eine ungültige Herkunft"
+    if [[ "$state" == carried ]]; then
+      artifact_origin[$path]="$origin"
+    fi
+  done < "$provenance"
+}
+
 check_binary_revisions() {
-  local source_root="$1" binary embedded_revision
+  local source_root="$1" binary embedded_revision expected_revision
   local binaries=(tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover tb-discord-hub)
   if [[ "$social_ai_expected" == 1 ]]; then binaries+=(tb-stt-server); fi
   if [[ "$collector_expected" == 1 ]]; then binaries+=(tb-category-collector); fi
@@ -152,8 +292,9 @@ check_binary_revisions() {
   if [[ "$watchdog_expected" == 1 ]]; then binaries+=(tb-twitch-watchdog); fi
   if [[ "$storage_expected" == 1 ]]; then binaries+=(tb-category-storage); fi
   for binary in "${binaries[@]}"; do
+    expected_revision="${artifact_origin[rust/target/release/$binary]:-$git_sha}"
     embedded_revision="$(readelf --string-dump=.twitch_build "$source_root/rust/target/release/$binary" 2>/dev/null | awk '/\[/{print $NF}')" || embedded_revision=""
-    if [[ "$embedded_revision" != "$git_sha" ]]; then
+    if [[ "$embedded_revision" != "$expected_revision" ]]; then
       echo "Build-Herkunft stimmt nicht: $binary muss aus dem sauberen Commit $git_sha neu gebaut werden." >&2
       exit 1
     fi
@@ -298,6 +439,8 @@ if [[ ! -e "$release" ]]; then
   cp -a "$checkout/bot/admin_dashboard/dist/." "$stage/bot/admin_dashboard/dist/"
   cp -a "$checkout/website/dist/." "$stage/website/dist/"
 
+  write_provenance "$stage"
+
   chown -R root:root "$stage"
   chmod -R go-w "$stage"
   chmod 0755 "$stage"
@@ -329,6 +472,8 @@ fi
   cd "$release"
   sha256sum --check --strict SHA256SUMS >/dev/null
 )
+artifact_origin=()
+load_release_provenance "$release"
 check_required_sources "$release"
 check_binary_revisions "$release"
 

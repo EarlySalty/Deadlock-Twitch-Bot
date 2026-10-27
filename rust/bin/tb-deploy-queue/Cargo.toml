@@ -1,0 +1,23 @@
+[package]
+name = "tb-deploy-queue"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "deploy-queue"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+chrono.workspace = true
+futures-util.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio = { workspace = true, features = ["time", "process"] }
+tokio-tungstenite = "0.30"
+toml = { version = "1.1.6", default-features = false, features = ["serde", "parse"] }
+uuid.workspace = true
+whoami.workspace = true
