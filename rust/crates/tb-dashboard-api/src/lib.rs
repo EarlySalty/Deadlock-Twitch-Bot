@@ -778,6 +778,11 @@ fn build_authed_router_with_analysis_store(
             get(greeting_settings::get_handler).post(greeting_settings::post_handler),
         )
         .route(
+            "/twitch/api/v2/streamer/follow-hint-settings",
+            get(handlers::follow_hint_settings::get_handler)
+                .post(handlers::follow_hint_settings::post_handler),
+        )
+        .route(
             "/twitch/api/v2/streamer/dono-goal",
             get(handlers::dono_goal::get_handler).post(handlers::dono_goal::post_handler),
         )

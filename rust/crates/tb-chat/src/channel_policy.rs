@@ -226,6 +226,14 @@ impl ChatApi for ChannelPolicyChatApi {
         self.inner.resolve_user_id(login).await
     }
 
+    async fn user_follows(
+        &self,
+        broadcaster_id: &str,
+        user_id: &str,
+    ) -> Result<Option<bool>, String> {
+        self.inner.user_follows(broadcaster_id, user_id).await
+    }
+
     async fn bot_user_id(&self) -> String {
         self.inner.bot_user_id().await
     }

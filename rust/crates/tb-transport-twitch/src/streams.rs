@@ -71,6 +71,12 @@ struct FollowersResponse {
     total: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct FollowerEntriesResponse {
+    #[serde(default)]
+    data: Vec<serde_json::Value>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FollowersTotalFetch {
     pub total: Option<i64>,
@@ -517,6 +523,30 @@ impl HelixClient {
             http_status: Some(200),
             error_code: None,
         })
+    }
+
+    pub async fn user_follows_channel(
+        &self,
+        broadcaster_id: &str,
+        user_id: &str,
+        moderator_token: &str,
+    ) -> Result<Option<bool>, HelixError> {
+        let broadcaster_id = broadcaster_id.trim();
+        let user_id = user_id.trim();
+        if broadcaster_id.is_empty() || user_id.is_empty() {
+            return Ok(None);
+        }
+        let resp = self
+            .get_with_user_token("/channels/followers", moderator_token)
+            .query(&[("broadcaster_id", broadcaster_id), ("user_id", user_id)])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            tracing::debug!(status = %resp.status(), "follower lookup unavailable");
+            return Ok(None);
+        }
+        let body: FollowerEntriesResponse = resp.json().await?;
+        Ok(Some(!body.data.is_empty()))
     }
 
     /// Die jüngsten Archiv-VODs eines Kanals (`type=archive`) mit den Feldern,

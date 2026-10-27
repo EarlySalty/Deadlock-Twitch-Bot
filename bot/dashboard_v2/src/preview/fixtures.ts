@@ -964,6 +964,12 @@ const STREAMER_SETTINGS_FIXTURES: Record<string, unknown> = {
   },
   '/twitch/api/v2/streamer/sub-reminder-settings': { enabled: true, available: true },
   '/twitch/api/v2/streamer/greeting-settings': { greeting_reply_enabled: true },
+  '/twitch/api/v2/streamer/follow-hint-settings': {
+    enabled: true,
+    message: '',
+    default_message: '@{user} Schön, dass du zum ersten Mal im Chat bist! Wenn dir der Stream gefällt, lass doch gern einen Follow da 💜',
+    max_chars: 300,
+  },
   '/twitch/api/v2/streamer/silent-settings': { silent_ban: false, silent_raid: true },
   '/twitch/api/v2/streamer/stat-command-settings': {
     commands: {

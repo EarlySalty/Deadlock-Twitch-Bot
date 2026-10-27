@@ -1228,6 +1228,7 @@ pub async fn build_runtime(
         brain_chat: brain_chat_port,
         // _fun_thanks_reply_enabled ist in Python default false (bot.py Z. 190).
         fun: Arc::new(FunResponses::new(Arc::clone(&api), false)),
+        follow_hint: Arc::new(tb_chat::FollowHint::new(Arc::clone(&api), pool.clone())),
         standard_replies: Arc::new(tb_chat::StandardReplies::new(
             Arc::clone(&api),
             pool.clone(),
@@ -3640,6 +3641,10 @@ mod chat_notification_tests {
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             brain_chat: None,
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
+            follow_hint: Arc::new(tb_chat::FollowHint::new(
+                Arc::clone(&api_trait),
+                pool.clone(),
+            )),
             standard_replies: Arc::new(tb_chat::StandardReplies::new(
                 Arc::clone(&api_trait),
                 pool.clone(),
