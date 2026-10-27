@@ -122,7 +122,7 @@ test('compiled dashboard preserves nested entity identity across language change
             constructor(...args) { super(...(args.length ? args : ['2026-10-14T08:00:00Z'])); }
             static now() { return 1791964800000; }
           };
-          localStorage.setItem('dashboard.language', 'de');
+          localStorage.setItem('dashboard.language.v2', 'de');
           window.identityRequests = [];
           const original = fetch.bind(window);
           window.fetch = (input, init) => {

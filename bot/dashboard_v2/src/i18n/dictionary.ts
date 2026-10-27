@@ -815,6 +815,7 @@ function readStorage(key: string): string | null {
 function readPersistedLanguage(): Language | null {
   const stored = readStorage(LANGUAGE_STORAGE_KEY);
   if (isLanguage(stored)) return stored;
+  if (isEnglishDashboardHost()) return null;
   return readStorage(LEGACY_LANGUAGE_STORAGE_KEY) === null ? null : 'de';
 }
 

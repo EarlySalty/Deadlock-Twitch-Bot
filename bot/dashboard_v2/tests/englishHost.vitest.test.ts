@@ -64,6 +64,12 @@ describe('dashboard language resolution', () => {
     expect(readInitialLanguage()).toBe('de');
   });
 
+  it('keeps the English host default for a legacy saved choice', () => {
+    const values = browser('dead-lock.de');
+    values.set(LEGACY_LANGUAGE_STORAGE_KEY, 'de');
+    expect(readInitialLanguage()).toBe('en');
+  });
+
   it('accepts a main-domain query hint before saved German', () => {
     browser('deutsche-deadlock-community.de', '?lang=en', 'de');
     expect(readInitialLanguage()).toBe('en');
