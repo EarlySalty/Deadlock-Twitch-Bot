@@ -6,7 +6,7 @@
 //! (=1 aktiv). Raid/Auth-Gates gelten nur fuer die Quelle; Ziele brauchen kein
 //! eigenes `raid_enabled`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use sqlx::PgPool;
 
@@ -47,9 +47,41 @@ pub struct PartnerRosterStore {
     pool: PgPool,
 }
 
+type CandidateScope = (String, bool, bool, Vec<(i64, bool)>);
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RaidRosterScope {
+    pub partners: Vec<PartnerRosterEntry>,
+    pub out_of_scope_ids: HashSet<String>,
+}
+
 impl PartnerRosterStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    pub async fn source_language(
+        &self,
+        source_user_id: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let community = tb_db::guild_membership::community_guild_id()?;
+        let Some(home) =
+            tb_db::guild_membership::home_guild_id(&self.pool, source_user_id, community).await?
+        else {
+            return Ok(None);
+        };
+        let language: Option<String> = sqlx::query_scalar(
+            "SELECT COALESCE(NULLIF(i.broadcaster_language, ''), g.language)
+             FROM twitch_streamer_identities i CROSS JOIN discord_guilds g
+             WHERE i.twitch_user_id=$1 AND g.guild_id=$2",
+        )
+        .bind(source_user_id)
+        .bind(home)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(language
+            .as_deref()
+            .and_then(tb_db::guild_membership::language_group))
     }
 
     /// Lädt alle aktiven Partner außer der Quelle. Zielkandidaten werden nur
@@ -58,22 +90,65 @@ impl PartnerRosterStore {
         &self,
         source_user_id: &str,
     ) -> Result<Vec<PartnerRosterEntry>, sqlx::Error> {
-        let rows: Vec<RosterRow> = sqlx::query_as!(
-            RosterRow,
-            r#"
-            SELECT DISTINCT
-                   s.twitch_login AS "twitch_login?",
-                   s.twitch_user_id AS "twitch_user_id?"
-              FROM twitch_streamers_partner_state s
-             WHERE s.is_partner_active = 1
-               AND s.twitch_user_id IS NOT NULL
-               AND s.twitch_login IS NOT NULL
-               AND s.twitch_user_id <> $1
-            "#,
-            source_user_id
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        Ok(self.load_scope(source_user_id).await?.partners)
+    }
+
+    pub async fn load_scope(&self, source_user_id: &str) -> Result<RaidRosterScope, sqlx::Error> {
+        let community = tb_db::guild_membership::community_guild_id()?;
+        let Some(home) =
+            tb_db::guild_membership::home_guild_id(&self.pool, source_user_id, community).await?
+        else {
+            return Ok(RaidRosterScope::default());
+        };
+        let source_language = self.source_language(source_user_id).await?;
+        let source_guilds: Vec<(i64, bool)> = sqlx::query_as(
+            "SELECT sg.guild_id, g.cross_server_raids FROM streamer_guilds sg JOIN discord_guilds g USING(guild_id)
+             WHERE sg.twitch_user_id=$1 AND sg.active AND g.status='active' AND g.removed_at IS NULL")
+            .bind(source_user_id).fetch_all(&self.pool).await?;
+        let candidates: Vec<(String, String, String, i64, bool, bool)> = sqlx::query_as(
+            "SELECT DISTINCT i.twitch_login, i.twitch_user_id,
+                    COALESCE(NULLIF(i.broadcaster_language, ''), home.language), sg.guild_id, g.cross_server_raids,
+                    EXISTS (SELECT 1 FROM twitch_streamers_partner_state ps
+                            WHERE ps.twitch_user_id=i.twitch_user_id AND ps.is_partner_active=1)
+             FROM twitch_streamer_identities i
+             JOIN partner_guild_active p USING(twitch_user_id)
+             CROSS JOIN LATERAL (
+                 SELECT hg.language FROM streamer_guilds hs JOIN discord_guilds hg USING(guild_id)
+                 WHERE hs.twitch_user_id=i.twitch_user_id AND hs.active AND hg.status='active' AND hg.removed_at IS NULL
+                 ORDER BY (hs.guild_id=$2) DESC, hs.joined_at, hs.guild_id LIMIT 1
+             ) home
+             JOIN streamer_guilds sg USING(twitch_user_id)
+             JOIN discord_guilds g USING(guild_id)
+             WHERE sg.active AND g.status='active' AND g.removed_at IS NULL
+               AND i.twitch_user_id <> $1 AND i.twitch_login IS NOT NULL")
+            .bind(source_user_id).bind(community).fetch_all(&self.pool).await?;
+        let mut grouped: HashMap<String, CandidateScope> = HashMap::new();
+        for (login, id, language, guild, enabled, partner_active) in candidates {
+            let same_language = source_language.is_some()
+                && tb_db::guild_membership::language_group(&language) == source_language;
+            let entry = grouped
+                .entry(id)
+                .or_insert_with(|| (login, same_language, partner_active, Vec::new()));
+            entry.3.push((guild, enabled));
+        }
+        let mut rows = Vec::new();
+        let mut out_of_scope_ids = HashSet::new();
+        for (id, (login, same_language, partner_active, guilds)) in grouped {
+            if !tb_db::guild_membership::raid_scope_allows(
+                &source_guilds,
+                home,
+                &guilds,
+                same_language,
+            ) {
+                out_of_scope_ids.insert(id);
+            } else if partner_active {
+                rows.push(RosterRow {
+                    twitch_login: Some(login),
+                    twitch_user_id: Some(id),
+                });
+            }
+        }
+        rows.sort_by(|a, b| a.twitch_user_id.cmp(&b.twitch_user_id));
 
         let mut partners = Vec::new();
         for row in rows {
@@ -88,7 +163,10 @@ impl PartnerRosterStore {
                 raid_enabled: true,
             });
         }
-        Ok(partners)
+        Ok(RaidRosterScope {
+            partners,
+            out_of_scope_ids,
+        })
     }
 }
 

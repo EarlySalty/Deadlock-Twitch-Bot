@@ -482,24 +482,90 @@ impl DiscordRest {
         .await
     }
 
+    async fn dm_optout_block(
+        &self,
+        ctx: &Ctx,
+        idem: &str,
+        user_id: u64,
+    ) -> Option<OutboundResponse> {
+        let unavailable = || {
+            respond(
+                503,
+                error_body(
+                    &ctx.rid,
+                    Some(idem),
+                    "dm_gate_unavailable",
+                    "DM opt-out status unavailable",
+                ),
+            )
+        };
+        let Some(pool) = &self.dm_optout_pool else {
+            tracing::warn!(
+                user_id,
+                "DM-Opt-out nicht prüfbar: keine Datenbank, DM blockiert"
+            );
+            return Some(unavailable());
+        };
+        let Ok(db_user_id) = i64::try_from(user_id) else {
+            return Some(bad_request(&ctx.rid, "user_id out of range"));
+        };
+        let opted_out = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM core.dm_optout WHERE user_id = $1)",
+        )
+        .bind(db_user_id)
+        .fetch_one(pool)
+        .await;
+        match opted_out {
+            Ok(false) => None,
+            Ok(true) => {
+                tracing::info!(
+                    user_id,
+                    "Bot-DM übersprungen: Nutzer hat Bot-Nachrichten abbestellt"
+                );
+                Some(respond(
+                    403,
+                    error_body(
+                        &ctx.rid,
+                        Some(idem),
+                        "dm_opted_out",
+                        &format!("user {user_id} opted out of bot DMs"),
+                    ),
+                ))
+            }
+            Err(err) => {
+                tracing::warn!(%err, user_id, "DM-Opt-out-Abfrage fehlgeschlagen, DM blockiert");
+                Some(unavailable())
+            }
+        }
+    }
+
     pub(super) async fn send_dm(&self, ctx: &Ctx, req: &InboundRequest) -> OutboundResponse {
         let (payload, idem) = match begin_action(ctx, req) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let parsed = (|| -> Result<(u64, String), String> {
+        let parsed = (|| -> Result<(u64, String, payload::DmPurpose), String> {
             Ok((
                 payload::positive_int(&payload, "user_id")?,
                 payload::required_content(&payload)?,
+                payload::dm_purpose(&payload)?,
             ))
         })();
-        let (user_id, content) = match parsed {
+        let (user_id, content, purpose) = match parsed {
             Ok(v) => v,
             Err(msg) => return bad_request(&ctx.rid, &msg),
         };
+        if purpose == payload::DmPurpose::Proactive {
+            if let Some(blocked) = self.dm_optout_block(ctx, &idem, user_id).await {
+                return blocked;
+            }
+        }
         let mut op = Map::new();
         op.insert("user_id".into(), json!(user_id));
         op.insert("content".into(), json!(content));
+        if purpose != payload::DmPurpose::Proactive {
+            op.insert("dm_purpose".into(), json!(purpose.as_str()));
+        }
         let hash = payload_hash(&op);
         let rid = ctx.rid.clone();
         let guild_id = ctx.guild_id;

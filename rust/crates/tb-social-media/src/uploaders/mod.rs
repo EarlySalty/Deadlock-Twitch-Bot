@@ -26,6 +26,8 @@ pub enum UploadError {
     Request(String),
     #[error("api error: {0}")]
     Api(String),
+    #[error("publish unconfirmed: {0}")]
+    PublishUnconfirmed(String),
     /// Tageskontingent der Plattform erschoepft. Kein Fehler im Code, sondern
     /// ein Grund, den Rest auf morgen zu verschieben — deshalb eine eigene
     /// Variante statt eines Api-Fehlers, den der Aufrufer nur am Text erkennt.
@@ -98,10 +100,6 @@ pub trait UploadCheckpoint: Send + Sync {
 pub trait PlatformUploader: Send + Sync {
     /// Plattformname (tiktok/youtube/instagram).
     fn platform_name(&self) -> &str;
-
-    fn tiktok_post_options(&self) -> Option<&tiktok::TikTokPostOptions> {
-        None
-    }
 
     /// Prüft, ob das Video die Plattform-Anforderungen erfüllt.
     fn validate_video(&self, video_path: &str) -> Result<(), UploadError>;

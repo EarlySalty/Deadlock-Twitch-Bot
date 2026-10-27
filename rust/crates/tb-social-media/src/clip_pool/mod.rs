@@ -6,8 +6,10 @@ mod worker;
 pub use filter::{bounds, eligible, ImportWindow, DEADLOCK_GAME_ID};
 pub use imports::{get_import, latest_import, resume_import, start_import, ImportJob};
 pub use repository::{
-    is_managed, legacy_automatic_allowed, list, register_recent, save_preferences, set_selected,
-    PoolClip, PoolPage, PoolPreferences,
+    is_managed, legacy_automatic_allowed, list, pipeline_sources, register_recent,
+    save_preferences, set_selected, EligibilityCounts, LegacyPublication, PipelinePage,
+    PipelineSource, PoolClip, PoolPage, PoolPreferences, SourceDestination, SourceEligibility,
+    SourceJob, SourceVersion,
 };
 pub use worker::ClipImportWorker;
 

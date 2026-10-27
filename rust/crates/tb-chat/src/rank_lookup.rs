@@ -1,6 +1,3 @@
-//! Rank lookup: verified local Steam link first; public Deadlock API second.
-//! Steam-name search is only a labelled candidate, never a persisted identity link.
-//! API contract: https://api.deadlock-api.com/openapi.json (2026-09-17).
 use crate::{command_target::CommandTarget, stats};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
@@ -18,7 +15,6 @@ const UNAVAILABLE: &str =
     "Die Spielstatistik kann ich gerade nicht abrufen. Versuch es gleich nochmal.";
 const SEARCH_LIMIT: usize = 100;
 
-/// Explicit prefix avoids confusing a numeric Twitch login with a Steam ID.
 pub(crate) fn parse_steam_id(args: &str) -> Result<Option<u32>, ()> {
     let args = args.trim();
     if !args
@@ -200,15 +196,12 @@ impl RankLookup {
         }
         let revision = link.as_ref().map(|l| l.revision);
         let text = match link.as_ref().filter(|l| l.steam_id64.is_some()) {
-            Some(link) => {
-                let Some(id) = link.account_id() else {
-                    return UNAVAILABLE.into();
-                };
-                self.account_reply(id, &target.name, false).await
-            }
-            None => self.legacy_reply(pool, target, explicit).await,
+            Some(link) => match link.account_id() {
+                Some(id) => self.connected_reply(id, &target.name).await,
+                None => return UNAVAILABLE.into(),
+            },
+            None => self.discord_reply(pool, target, explicit).await,
         };
-        // Recheck all sources, including legacy/name fallback, after network I/O.
         match crate::player_links::load(pool, &target.user_id).await {
             Ok(Some(current)) if !current.lookup_enabled => {
                 crate::player_links::DISCONNECTED_REPLY.into()
@@ -219,8 +212,6 @@ impl RankLookup {
         }
     }
 
-    /// Zentrale Discord-Steam-Verknüpfung laut Steam-Bot:
-    /// `Some((Deadlock-Account-ID, verified))`, `None` ohne Verknüpfung.
     pub(crate) async fn linked_account(
         &self,
         discord_id: &str,
@@ -229,7 +220,18 @@ impl RankLookup {
         central_link(&info)
     }
 
-    async fn legacy_reply(&self, pool: &PgPool, target: &CommandTarget, explicit: bool) -> String {
+    async fn connected_reply(&self, account_id: u32, name: &str) -> String {
+        let steam_id = (STEAM64_BASE + u64::from(account_id)).to_string();
+        let subject = chat_label(name);
+        let (bot, api) = tokio::join!(
+            stats::fetch_rank_refreshed(&self.steam_rank_url, stats::RankKey::Steam(&steam_id)),
+            self.public_rank(account_id, &subject),
+        );
+        let bot = bot.ok().and_then(|info| BotRank::from_info(&info));
+        newest_rank_reply(name, bot, api)
+    }
+
+    async fn discord_reply(&self, pool: &PgPool, target: &CommandTarget, explicit: bool) -> String {
         let discord_id = match stats::resolve_discord_id(pool, &target.user_id).await {
             Ok(id) => id,
             Err(_) => return UNAVAILABLE.into(),
@@ -241,40 +243,34 @@ impl RankLookup {
                 stats::rank_reply(&target.name, None)
             };
         };
-        let primary = stats::fetch_rank_at(&self.steam_rank_url, &discord_id, false).await;
-        if let Ok(info) = &primary {
-            if info.linked
-                && info.verified
-                && info.is_steam_friend
-                && info
-                    .rank_name
-                    .as_ref()
-                    .is_some_and(|name| !name.trim().is_empty())
-            {
-                return stats::rank_reply(&target.name, Some(info));
-            }
-            if !info.linked && !explicit {
-                return stats::rank_reply(&target.name, Some(info));
-            }
-        }
-        // Never search for a different person when a real link exists, or when
-        // a lookup failure prevents proving whether a link exists.
-        let link_check = match primary.as_ref() {
-            Ok(info) => central_link(info),
-            Err(_) => Err(stats::StatsError),
+        let Ok(info) =
+            stats::fetch_rank_refreshed(&self.steam_rank_url, stats::RankKey::Discord(&discord_id))
+                .await
+        else {
+            return UNAVAILABLE.into();
         };
-        match link_check {
-            Ok(Some((id, true))) => self.account_reply(id, &target.name, false).await,
+        if !info.linked {
+            return if explicit {
+                self.name_reply(&target.login).await
+            } else {
+                stats::rank_reply(&target.name, Some(&info))
+            };
+        }
+        let bot = BotRank::from_info(&info);
+        match central_link(&info) {
+            Ok(Some((id, true))) => {
+                let api = self.public_rank(id, &chat_label(&target.name)).await;
+                newest_rank_reply(&target.name, bot, api)
+            }
             Ok(Some((_, false))) => format!(
                 "{} hat Steam verknüpft, aber die Steam-Verknüpfung ist noch nicht bestätigt.",
                 target.name
             ),
-            Ok(None) => match primary {
-                Ok(info) if !info.linked && explicit => self.name_reply(&target.login).await,
-                Ok(info) => stats::rank_reply(&target.name, Some(&info)),
-                Err(_) => UNAVAILABLE.into(),
+            Ok(None) => stats::rank_reply(&target.name, Some(&info)),
+            Err(_) => match bot {
+                Some(bot) => bot.reply(&target.name),
+                None => UNAVAILABLE.into(),
             },
-            Err(_) => UNAVAILABLE.into(),
         }
     }
 
@@ -321,14 +317,21 @@ impl RankLookup {
         } else {
             chat_label(name)
         };
+        match self.public_rank(account_id, &subject).await {
+            Ok(rank) => rank.reply(&subject),
+            Err(text) => text,
+        }
+    }
+
+    async fn public_rank(&self, account_id: u32, subject: &str) -> Result<ApiRank, String> {
         let rank = match self.get::<PublicRank>(&format!("/players/{account_id}/rank"), &[]).await {
             Ok(rank) => rank,
-            Err(ApiError::Protected) => return format!("{subject}: Die Deadlock API gibt für diesen Account keine öffentlichen Rangdaten frei."),
-            Err(ApiError::NotFound) => return format!("{subject}: Keine öffentlichen Rangdaten gefunden."),
-            Err(error) => return api_error_reply(error),
+            Err(ApiError::Protected) => return Err(format!("{subject}: Die Deadlock API gibt für diesen Account keine öffentlichen Rangdaten frei.")),
+            Err(ApiError::NotFound) => return Err(format!("{subject}: Keine öffentlichen Rangdaten gefunden.")),
+            Err(error) => return Err(api_error_reply(error)),
         };
         if rank.badge == 0 && rank.rank == 0 && rank.subrank == 0 {
-            return format!("{subject}: Kein Rang aus einem aktuellen Ranked-Match verfügbar (Deadlock API). Das bedeutet nicht automatisch, dass der Account noch nie gerankt war.");
+            return Err(format!("{subject}: Kein Rang aus einem aktuellen Ranked-Match verfügbar (Deadlock API). Das bedeutet nicht automatisch, dass der Account noch nie gerankt war."));
         }
         if rank.rank == 0
             || !(1..=6).contains(&rank.subrank)
@@ -338,27 +341,98 @@ impl RankLookup {
                 .and_then(|tier| tier.checked_add(rank.subrank))
                 != Some(rank.badge)
         {
-            return UNAVAILABLE.into();
+            return Err(UNAVAILABLE.into());
         }
         let ranks = self
             .get::<Vec<RankAsset>>("/assets/ranks", &[])
             .await
             .unwrap_or_default();
-        let rank_name = ranks
+        let name = ranks
             .iter()
             .find(|asset| asset.tier == rank.rank && !asset.name.trim().is_empty())
             .map(|asset| chat_label(&asset.name))
             .unwrap_or_else(|| format!("Rangstufe {}", rank.rank));
-        let date = rank
+        let last_match = rank
             .last_match
             .as_ref()
             .and_then(|value| value.get("start_time"))
-            .and_then(Value::as_i64)
-            .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
-            .map(|date| format!(" vom {}", date.format("%d.%m.%Y")))
-            .unwrap_or_default();
-        format!("Rang von {subject}: {rank_name} {} (Deadlock API; letztes erfasstes Ranked-Match{date}).", rank.subrank)
+            .and_then(Value::as_i64);
+        Ok(ApiRank {
+            name,
+            subrank: rank.subrank,
+            last_match,
+        })
     }
+}
+
+struct ApiRank {
+    name: String,
+    subrank: u32,
+    last_match: Option<i64>,
+}
+
+impl ApiRank {
+    fn reply(&self, subject: &str) -> String {
+        let date = self
+            .last_match
+            .and_then(chat_date)
+            .map(|date| format!(" vom {date}"))
+            .unwrap_or_default();
+        format!(
+            "Rang von {subject}: {} {} (Deadlock API; letztes erfasstes Ranked-Match{date}).",
+            self.name, self.subrank
+        )
+    }
+}
+
+struct BotRank {
+    name: String,
+    subrank: Option<i64>,
+    updated_at: Option<i64>,
+}
+
+impl BotRank {
+    fn from_info(info: &stats::RankInfo) -> Option<Self> {
+        if !(info.linked && info.verified && info.is_steam_friend) {
+            return None;
+        }
+        let name = info.rank_name.as_deref().map(str::trim)?;
+        (!name.is_empty()).then(|| Self {
+            name: name.to_string(),
+            subrank: info.subrank,
+            updated_at: info.rank_updated_at,
+        })
+    }
+
+    fn reply(&self, name: &str) -> String {
+        let rank = match self.subrank {
+            Some(subrank @ 1..=6) => format!("{} {subrank}", self.name),
+            _ => self.name.clone(),
+        };
+        let source = match self.updated_at.and_then(chat_date) {
+            Some(date) => format!("Steam-Bot; Stand {date}"),
+            None => "Steam-Bot".to_string(),
+        };
+        format!("Rang von {name}: {rank} ({source}).")
+    }
+}
+
+fn api_is_newer(bot: Option<i64>, api: Option<i64>) -> bool {
+    matches!((bot, api), (Some(bot), Some(api)) if api > bot)
+}
+
+fn newest_rank_reply(name: &str, bot: Option<BotRank>, api: Result<ApiRank, String>) -> String {
+    let subject = chat_label(name);
+    match (bot, api) {
+        (Some(bot), Ok(api)) if api_is_newer(bot.updated_at, api.last_match) => api.reply(&subject),
+        (Some(bot), _) => bot.reply(name),
+        (None, Ok(api)) => api.reply(&subject),
+        (None, Err(text)) => text,
+    }
+}
+
+fn chat_date(timestamp: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp(timestamp, 0).map(|date| date.format("%d.%m.%Y").to_string())
 }
 
 fn api_error_reply(error: ApiError) -> String {
@@ -381,9 +455,6 @@ fn chat_label(value: &str) -> String {
         .join(" ")
 }
 
-/// Zentrale Discord-Steam-Verknüpfung aus der `/rank`-Antwort des Steam-Bots:
-/// `Some((Deadlock-Account-ID, verified))`, `None` ohne Verknüpfung. Fehler,
-/// wenn die Verknüpfung nicht bewiesen werden kann.
 fn central_link(info: &stats::RankInfo) -> Result<Option<(u32, bool)>, stats::StatsError> {
     if !info.linked {
         return Ok(None);

@@ -22,6 +22,36 @@ pub(crate) enum ViewSpec {
 
 pub(crate) type ParseResult<T> = Result<T, String>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DmPurpose {
+    Proactive,
+    Moderation,
+    Security,
+}
+
+impl DmPurpose {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            DmPurpose::Proactive => "proactive",
+            DmPurpose::Moderation => "moderation",
+            DmPurpose::Security => "security",
+        }
+    }
+}
+
+pub(crate) fn dm_purpose(payload: &Map<String, Value>) -> ParseResult<DmPurpose> {
+    match payload.get("dm_purpose") {
+        None | Some(Value::Null) => Ok(DmPurpose::Proactive),
+        Some(Value::String(raw)) => match raw.trim() {
+            "proactive" => Ok(DmPurpose::Proactive),
+            "moderation" => Ok(DmPurpose::Moderation),
+            "security" => Ok(DmPurpose::Security),
+            _ => Err("dm_purpose must be proactive, moderation or security".to_string()),
+        },
+        Some(_) => Err("dm_purpose must be a string".to_string()),
+    }
+}
+
 pub(crate) fn positive_int(payload: &Map<String, Value>, key: &str) -> ParseResult<u64> {
     let raw = payload.get(key);
     let value = match raw {

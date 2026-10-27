@@ -5,6 +5,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { Toast } from '@/components/shared/Toast';
 import { useConfigOverview, useRaidConfigMutation } from '@/hooks/useAdmin';
+import { GuildRaidsSection } from './GuildRaidsSection';
 
 function formatCount(value: number | undefined) {
   return typeof value === 'number' ? String(value) : '—';
@@ -159,6 +160,8 @@ export function RaidConfig() {
           </div>
         </div>
       </article>
+
+      <GuildRaidsSection />
 
       <Toast
         open={toast.open}

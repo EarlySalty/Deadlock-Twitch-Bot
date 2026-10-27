@@ -1,18 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   LANGUAGE_STORAGE_KEY,
+  LEGACY_LANGUAGE_STORAGE_KEY,
   readInitialLanguage,
   storeLanguage,
 } from '../src/i18n/dictionary';
 import { MAIN_DASHBOARD_ORIGIN, mainDomainOAuthUrl } from '../src/i18n/oauthLinks';
 
-function browser(host = 'dead-lock.de', search = '', saved: string | null = null, browserLocale = 'de-DE') {
+function browser(host = 'dead-lock.de', search = '', saved: string | null = null, browserLocale: string | string[] = 'de-DE') {
   const values = new Map<string, string>();
   if (saved !== null) values.set(LANGUAGE_STORAGE_KEY, saved);
   const location = new URL(`https://${host}/twitch/dashboard${search}`);
   vi.stubGlobal('window', {
     location,
-    navigator: { languages: [browserLocale] },
+    navigator: { languages: Array.isArray(browserLocale) ? browserLocale : [browserLocale] },
     localStorage: {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => values.set(key, value),
@@ -50,6 +51,23 @@ describe('dashboard language resolution', () => {
   it.each([['de-DE', 'de'], ['en-US', 'en']])('keeps main-domain browser selection for %s', (locale, expected) => {
     browser('deutsche-deadlock-community.de', '', null, locale);
     expect(readInitialLanguage()).toBe(expected);
+  });
+
+  it('detects German anywhere in the browser language list', () => {
+    browser('deutsche-deadlock-community.de', '', null, ['en-US', 'de-DE']);
+    expect(readInitialLanguage()).toBe('de');
+  });
+
+  it.each(['en', 'de'])('resets a legacy saved %s choice to German', (legacy) => {
+    const values = browser('deutsche-deadlock-community.de', '', null, 'en-US');
+    values.set(LEGACY_LANGUAGE_STORAGE_KEY, legacy);
+    expect(readInitialLanguage()).toBe('de');
+  });
+
+  it('keeps the English host default for a legacy saved choice', () => {
+    const values = browser('dead-lock.de');
+    values.set(LEGACY_LANGUAGE_STORAGE_KEY, 'de');
+    expect(readInitialLanguage()).toBe('en');
   });
 
   it('accepts a main-domain query hint before saved German', () => {

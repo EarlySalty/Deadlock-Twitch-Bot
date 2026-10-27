@@ -1,6 +1,7 @@
 //! Persistenzschicht des Twitch-Bots: sqlx-Pool, Migrationen, Row-Mapping.
 
 pub mod error;
+pub mod guild_membership;
 pub mod migrate;
 pub mod pool;
 pub mod retry;

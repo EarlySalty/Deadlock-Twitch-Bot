@@ -139,12 +139,34 @@ test('built publication panel preserves state and effects across language change
     return page;
   }
 
+  await t.test('notification switches and reminder hours save without a save button', async () => {
+    const page = await open();
+    try {
+      const preferenceCalls = async () => (await calls(page)).filter((call) => call.method === 'preferences');
+      assert.equal(await page.locator('.publish-preferences button[type="submit"]').count(), 0);
+      const dashboard = page.locator('.publish-preferences input[role="switch"]').first();
+      const before = await dashboard.isChecked();
+      await dashboard.evaluate((element) => element.click());
+      await page.waitForFunction(() => window.publishReviewFixture.calls.some((call) => call.method === 'preferences'));
+      await settled(page);
+      assert.equal((await preferenceCalls()).at(-1).payload.dashboard, !before);
+      assert.equal(await dashboard.isChecked(), !before);
+      await page.locator('.publish-preferences input[type="number"]').fill('36');
+      await page.locator('.publish-preferences input[type="number"]').press('Enter');
+      await page.waitForFunction(() => window.publishReviewFixture.calls.filter((call) => call.method === 'preferences').length === 2);
+      await settled(page);
+      assert.equal((await preferenceCalls()).at(-1).payload.reminder_hours, 36);
+      assert.equal(await page.locator('.publish-review').getAttribute('data-unsaved'), null);
+      await page.locator('.publish-preferences').scrollIntoViewIfNeeded();
+      await screenshot(page, 'preferences-autosave');
+    } finally { await page.close(); }
+  });
+
   await t.test('locale changes preserve dirty preferences, selected destinations and explicit pending choice without loads', async () => {
     const page = await open();
     try {
       const video = page.locator('.publish-video').first();
       await video.locator('[aria-label="YouTube"] input').evaluate((element) => element.click());
-      await page.locator('.publish-preferences summary').evaluate((element) => element.click());
       await page.locator('.publish-preferences input[type="number"]').fill('36');
       await page.evaluate(() => { window.originalPanel = document.querySelector('.publish-review'); window.originalVideo = document.querySelector('.publish-video'); });
       const initialCalls = await calls(page);
@@ -187,7 +209,7 @@ test('built publication panel preserves state and effects across language change
       assert.deepEqual((await calls(page)).filter((call) => call.method === 'transition'), [{ method: 'transition', owner: 'synthetic-owner', payload: { mode: 'full_auto', confirmed: true, pending: 'transfer_eligible' } }]);
       assert.equal(await page.locator('.publish-preferences input[type="number"]').inputValue(), '36');
       assert.equal(await video.locator('[aria-label="YouTube"] input').isChecked(), true);
-      await page.locator('.publish-preferences button[type="submit"]').evaluate((element) => element.click());
+      await page.locator('.publish-preferences input[type="number"]').press('Enter');
       await settled(page);
       assert.equal((await calls(page)).find((call) => call.method === 'preferences').payload.reminder_hours, 36);
       assert.equal(await page.locator('.publish-review').getAttribute('data-unsaved'), null);
@@ -233,49 +255,33 @@ test('built publication panel preserves state and effects across language change
     } finally { await page.close(); }
   });
 
-  await t.test('TikTok cancellation stays local and approval preserves raw caption, consent and account/hash options', async () => {
+  await t.test('TikTok is approved as a draft without per-version options', async () => {
     const page = await open();
     try {
       const video = page.locator('.publish-video').first();
-      const caption = 'Verbindung #Überraschung';
-      await page.locator('textarea').fill(caption);
       await video.locator('[aria-label="TikTok"] input').evaluate((element) => element.click());
-      await page.evaluate(() => window.publishReviewFixture.setTikTokCancelled(true));
-      await video.locator('.publish-primary').evaluate((element) => element.click());
-      await page.waitForFunction(() => document.querySelector('.publish-review > .publish-error'));
-      const cancelledCalls = await calls(page);
-      assert.equal(cancelledCalls.filter((call) => call.method === 'approve').length, 0);
-      for (const currentLanguage of ['en', 'de']) {
-        await language(page, currentLanguage);
-        assert.equal(await page.locator('.publish-review > .publish-error').textContent(), translate(currentLanguage, 'Bitte prüfe die TikTok-Einstellungen dieser Videoversion.'));
-        assert.equal(await page.locator('textarea').inputValue(), caption);
-        assert.equal(await video.locator('[aria-label="TikTok"] input').isChecked(), true);
-        for (const width of [390, 1440]) {
-          await page.setViewportSize({ width, height: 1000 });
-          await screenshot(page, `caption-${currentLanguage}-${width}`);
-        }
-      }
-      assert.deepEqual(await calls(page), cancelledCalls);
-      await page.evaluate(() => window.publishReviewFixture.setTikTokCancelled(false));
       await video.locator('[aria-label="YouTube"] input').evaluate((element) => element.click());
       await video.locator('.publish-primary').evaluate((element) => element.click());
       await page.waitForFunction(() => document.querySelector('.publish-message'));
       const approval = (await calls(page)).find((call) => call.method === 'approve');
       assert.deepEqual(approval, {
         method: 'approve', owner: 'synthetic-owner', payload: {
-          id: 101, decisions: [
-            { platform: 'tiktok', tiktok_options: { caption, privacy_level: 'SELF_ONLY', allow_comment: false, allow_duet: false, allow_stitch: false, commercial_content: false, brand_organic_toggle: false, brand_content_toggle: false, consent: true, creator_username: 'synthetic-creator', credential_id: 7, platform_user_id: 'synthetic-tiktok', approved_video_sha256: 'synthetic-hash', video_path: 'synthetic-video.mp4' } },
+          id: 2203, decisions: [
+            { platform: 'tiktok' },
             { platform: 'youtube' },
           ]
         }
       });
       assert.equal(await video.locator('[aria-label="YouTube"] input').isChecked(), false);
       assert.equal(await video.locator('[aria-label="TikTok"] input').isChecked(), false);
-      await video.locator('.publish-actions button').last().evaluate((element) => element.click());
       await settled(page);
-      assert.deepEqual((await calls(page)).find((call) => call.method === 'schedule'), { method: 'schedule', owner: 'synthetic-owner', payload: { id: 101, platforms: ['youtube', 'instagram', 'tiktok'] } });
+      assert.deepEqual((await calls(page)).find((call) => call.method === 'schedule'), { method: 'schedule', owner: 'synthetic-owner', payload: { id: 2203, platforms: ['youtube', 'instagram', 'tiktok'] } });
+      for (const width of [390, 1440]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await screenshot(page, `tiktok-draft-${width}`);
+      }
       await video.locator('header button').evaluate((element) => element.click());
-      assert.deepEqual(await page.evaluate(() => window.publishReviewFixture.callbacks), [{ method: 'configureTikTok', id: 101 }, { method: 'configureTikTok', id: 101 }, { method: 'open', id: 101 }]);
+      assert.deepEqual(await page.evaluate(() => window.publishReviewFixture.callbacks), [{ method: 'open', id: 2203 }]);
     } finally { await page.close(); }
   });
 
@@ -283,7 +289,6 @@ test('built publication panel preserves state and effects across language change
     const page = await open();
     try {
       await page.locator('.publish-video').first().locator('[aria-label="YouTube"] input').evaluate((element) => element.click());
-      await page.locator('.publish-preferences summary').evaluate((element) => element.click());
       await page.locator('.publish-preferences input[type="number"]').fill('48');
       await page.evaluate(() => { window.releasePause = window.publishReviewFixture.holdNext('pause'); });
       await page.locator('.publish-mode-row button').nth(1).evaluate((element) => element.click());
@@ -297,7 +302,6 @@ test('built publication panel preserves state and effects across language change
       assert.equal(await page.locator('.publish-video').first().locator('[aria-label="YouTube"] input').isChecked(), false);
       assert.equal(await page.locator('.publish-preferences input[type="number"]').inputValue(), '24');
       assert.equal(await page.locator('.publish-review').getAttribute('data-unsaved'), null);
-      await page.locator('.publish-preferences summary').evaluate((element) => element.click());
       for (const width of [390, 1440]) {
         await page.setViewportSize({ width, height: 1000 });
         for (const currentLanguage of ['de', 'en']) {

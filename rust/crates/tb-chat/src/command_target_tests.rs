@@ -163,7 +163,7 @@ async fn target_stats_fixture(pool: &PgPool) {
     .execute(pool)
     .await
     .unwrap();
-    sqlx::raw_sql("CREATE TABLE streamer_plans(twitch_user_id TEXT PRIMARY KEY, stat_command_settings JSONB NOT NULL DEFAULT '{}');
+    sqlx::raw_sql("CREATE TABLE streamer_plans(twitch_user_id TEXT PRIMARY KEY, stat_command_settings JSONB NOT NULL DEFAULT '{}', command_name_overrides JSONB NOT NULL DEFAULT '{}', command_name_aliases JSONB NOT NULL DEFAULT '{}');
         CREATE TABLE twitch_streamer_identities(twitch_user_id TEXT PRIMARY KEY, discord_user_id TEXT);
         INSERT INTO streamer_plans VALUES ('bc123', '{}'), ('other-id', '{\"wins\":false,\"rank\":false}');")
         .execute(pool).await.unwrap();
@@ -236,7 +236,7 @@ async fn target_rank_dispatch_uses_target_discord_id_and_keeps_reply_in_original
     );
     assert_eq!(
         api.last_message().await.unwrap(),
-        "@testuser Rang von other: Oracle 4"
+        "@testuser Rang von other: Oracle 4 (Steam-Bot)."
     );
     assert_eq!(api.sent.lock().await[0].0, "bc123");
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
@@ -272,7 +272,7 @@ async fn target_rank_me_uses_chatter_identity_not_broadcaster() {
     assert!(engine.handle(&make_event("!rank me", false, false)).await);
     assert_eq!(
         api.last_message().await.unwrap(),
-        "@testuser Rang von TestUser: Phantom 2"
+        "@testuser Rang von TestUser: Phantom 2 (Steam-Bot)."
     );
     assert!(api.lookup_calls.lock().await.is_empty());
 }

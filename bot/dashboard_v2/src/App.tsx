@@ -35,8 +35,10 @@ import {
   hasDemoRuntimeConfig,
   resolveEffectiveDemoMode,
 } from '@/runtimeConfig';
+import { livePathFromTourPath, onPublicTour } from '@/publicTour';
 import { AlertTriangle } from 'lucide-react';
 import { pageLoaders } from './pageLoaders';
+import { isStaleChunkError, reloadOnceForStaleChunk } from './staleChunk';
 import { navigationSnapshot, subscribeNavigation } from './navigation';
 import { useDashboardProfile } from './hooks/useDashboardProfile';
 
@@ -82,6 +84,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
+    if (isStaleChunkError(error) && reloadOnceForStaleChunk()) return;
     console.error('Dashboard Error:', error, info.componentStack);
   }
 
@@ -90,6 +93,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
       return (
         <ErrorFallback
           message={this.state.error?.message ?? null}
+          staleVersion={isStaleChunkError(this.state.error)}
           onRetry={() => window.location.reload()}
         />
       );
@@ -103,7 +107,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
  * benutzen kann. Der Provider liegt darueber, die Sprache gilt also auch im
  * Fehlerfall.
  */
-function ErrorFallback({ message, onRetry }: { message: string | null; onRetry: () => void }) {
+function ErrorFallback({ message, staleVersion, onRetry }: { message: string | null; staleVersion: boolean; onRetry: () => void }) {
   const t = useT();
   return (
     <div className="min-h-screen bg-bg flex items-center justify-center p-8">
@@ -111,7 +115,7 @@ function ErrorFallback({ message, onRetry }: { message: string | null; onRetry: 
         <AlertTriangle className="w-12 h-12 text-warning mx-auto mb-4" />
         <h2 className="text-xl font-bold text-white mb-2">{t('Dashboard-Fehler')}</h2>
         <p className="text-text-secondary mb-4">
-          {message || t('Ein unerwarteter Fehler ist aufgetreten.')}
+          {staleVersion ? t('Es gibt eine neue Version des Dashboards. Bitte lade die Seite neu.') : message || t('Ein unerwarteter Fehler ist aufgetreten.')}
         </p>
         <button
           onClick={onRetry}
@@ -317,7 +321,7 @@ function AnalyticsDashboard() {
             isDemoMode={isDemoMode}
           />
 
-          {isDemoMode && (
+          {isDemoMode && !onPublicTour() && (
             <div className="mb-4 rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3 text-sm text-warning/90">
               {t(
                 'Demo-Daten aus einem statischen Snapshot. Profilwechsel und Analysen laufen ausschließlich über den Demo-Namespace.',
@@ -423,7 +427,8 @@ function PricingRoute() {
 
 export default function App() {
   const location = useSyncExternalStore(subscribeNavigation, navigationSnapshot);
-  const path = normalizePathname(window.location.pathname);
+  const rawPath = normalizePathname(window.location.pathname);
+  const path = livePathFromTourPath(rawPath) ?? rawPath;
   if (path === '/twitch/guild-onboarding') {
     return <QueryClientProvider client={queryClient}><LanguageProvider><ErrorBoundary><GuildOnboardingPage /></ErrorBoundary></LanguageProvider></QueryClientProvider>;
   }
@@ -443,8 +448,9 @@ export default function App() {
     path === '/dashboard-v2' ||
     path === '/twitch/dashboard-v2';
   const isCategoryRoute =
-    path === '/twitch/kategorie' ||
-    (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category');
+    !onPublicTour() &&
+    (path === '/twitch/kategorie' ||
+      (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category'));
 
   const activeRoute =
     isInternalHomeRoute ? 'home'
@@ -476,7 +482,7 @@ export default function App() {
         <ErrorBoundary>
         <SessionBootstrap />
         <OnboardingProvider>
-        <Suspense fallback={<DashboardShell activeRoute={activeRoute} showSidebar={!isPricingRoute} demoMode={isAnalyticsRoute && resolveEffectiveDemoMode({ pathname: path, runtimeConfig: dashboardRuntimeConfig })}><RouteSkeleton /></DashboardShell>}>
+        <Suspense fallback={<DashboardShell activeRoute={activeRoute} showSidebar={!isPricingRoute} demoMode={isAnalyticsRoute && resolveEffectiveDemoMode({ pathname: window.location.pathname, runtimeConfig: dashboardRuntimeConfig })}><RouteSkeleton /></DashboardShell>}>
           {isCategoryRoute ? (
             <DashboardShell activeRoute="category"><CategoryCollector /></DashboardShell>
           ) : isSocialMediaManagerRoute ? (

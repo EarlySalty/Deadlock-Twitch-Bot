@@ -5,13 +5,14 @@
 //! (`handle_streamer_offline`); die gesamte Auswahl-/Retry-Logik liegt
 //! testbar in `tb-raid`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
 use tb_monitoring::sessions::tracker::FollowerCountSource;
 use tb_monitoring::{LiveStateStore, OfflineSourceState};
+use tb_raid::target_resolution::ResolvedTarget;
 use tb_raid::{
     build_online_candidates, classify_eligibility, AutoRaidPipeline, AutoRaidPipelineOutcome,
     AutoRaidRequest, DeadlockEvalInput, EligibilityBucket, ManualRaidSuppression,
@@ -118,6 +119,7 @@ struct AssembledPartners {
     eligible: Vec<tb_raid::OnlineCandidate>,
     online_count: usize,
     filtered_out: usize,
+    out_of_scope_ids: HashSet<String>,
 }
 
 /// Quell-Zustand für den manuellen Raid — aus dem Helix-Stream (Vorrang)
@@ -181,7 +183,8 @@ impl ManualSource {
 
 /// Antwort des manuellen Raids — Status-Strings sind der Vertrag des
 /// Python-Chat-Commands (`started`, `source_not_live`, `source_not_eligible`,
-/// `no_target`, `blocked`, `raid_failed`, `unavailable`).
+/// `no_target`, `target_not_live`, `target_is_self`, `blocked`, `raid_failed`,
+/// `unavailable`).
 #[derive(Debug, serde::Serialize)]
 pub struct ManualRaidResponse {
     pub status: String,
@@ -237,7 +240,7 @@ pub struct OfflineRaidHandler {
     /// Spielname in Original-Schreibweise (für die Kategorie-Suche).
     target_game: String,
     target_game_lower: String,
-    /// Lazy aufgelöste Helix-Kategorie-ID des Ziel-Spiels (für den DE-Fallback).
+    /// Lazy aufgelöste Helix-Kategorie-ID des Ziel-Spiels (für den Sprach-Fallback).
     category_id_cache: tokio::sync::Mutex<Option<String>>,
 }
 
@@ -362,7 +365,6 @@ impl OfflineRaidHandler {
             filtered_out = assembled.filtered_out,
             "Auto-Raid-Pipeline gestartet"
         );
-        let eligible = assembled.eligible;
 
         // 8. Pipeline (Auswahl → Readiness → Raid → Pending).
         let request = AutoRaidRequest {
@@ -370,11 +372,14 @@ impl OfflineRaidHandler {
             broadcaster_login: login.clone(),
             viewer_count,
             stream_duration_sec,
-            partners: eligible,
+            partners: assembled.eligible,
             category_id: self.resolve_category_id().await,
+            language: self.raid_language(broadcaster_id).await,
+            out_of_scope_ids: assembled.out_of_scope_ids,
             offline_trigger_ts: Some(offline_trigger_ts),
             reason: "auto_raid_on_offline".to_string(),
             respect_soft_raid_blacklist: true,
+            fixed_target: None,
         };
 
         // Letzte Prüfung direkt vor dem Raid: hat der Streamer zwischenzeitlich
@@ -416,6 +421,7 @@ impl OfflineRaidHandler {
         &self,
         broadcaster_id: &str,
         broadcaster_login: &str,
+        target_login: Option<&str>,
     ) -> ManualRaidResponse {
         let login = broadcaster_login.trim().to_lowercase();
         let now = Utc::now();
@@ -471,6 +477,12 @@ impl OfflineRaidHandler {
             return ManualRaidResponse::status_with_reason("source_not_eligible", reason);
         }
 
+        if let Some(target_login) = target_login {
+            return self
+                .start_targeted_raid(broadcaster_id, &login, &source, target_login, now)
+                .await;
+        }
+
         // 3. Kandidaten + Pipeline (wie Auto-Raid).
         let Some(assembled) = self.assemble_eligible_partners(broadcaster_id, now).await else {
             return ManualRaidResponse::error("unavailable", "candidate_assembly_failed");
@@ -490,11 +502,93 @@ impl OfflineRaidHandler {
             stream_duration_sec: source.stream_duration_sec(now),
             partners: assembled.eligible,
             category_id: self.resolve_category_id().await,
+            language: self.raid_language(broadcaster_id).await,
+            out_of_scope_ids: assembled.out_of_scope_ids,
             offline_trigger_ts: None,
             reason: "manual_chat_command".to_string(),
             respect_soft_raid_blacklist: false,
+            fixed_target: None,
         };
-        match self.pipeline.run(&request).await {
+        self.run_manual_pipeline(broadcaster_id, &login, &request)
+            .await
+    }
+
+    async fn start_targeted_raid(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+        source: &ManualSource,
+        target_login: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> ManualRaidResponse {
+        let target_login = target_login.trim().to_lowercase();
+        if target_login == login {
+            return ManualRaidResponse::status("target_is_self");
+        }
+        let stream = match self
+            .helix
+            .get_streams_by_logins(std::slice::from_ref(&target_login), None)
+            .await
+        {
+            Ok(streams) => streams
+                .into_iter()
+                .find(|s| s.user_login.trim().to_lowercase() == target_login),
+            Err(error) => {
+                tracing::warn!(%error, target = %target_login, "Manual-Raid: Ziel-Stream nicht abrufbar");
+                return ManualRaidResponse::error("unavailable", "target_lookup_failed");
+            }
+        };
+        let Some(stream) = stream else {
+            return ManualRaidResponse::status("target_not_live");
+        };
+        if stream.user_id == broadcaster_id {
+            return ManualRaidResponse::status("target_is_self");
+        }
+        let is_partner_raid = self
+            .roster
+            .load_roster(broadcaster_id)
+            .await
+            .map(|roster| roster.iter().any(|p| p.twitch_user_id == stream.user_id))
+            .unwrap_or(false);
+        tracing::info!(
+            streamer = %login,
+            target = %target_login,
+            viewers = source.viewer_count,
+            "Manual-Raid mit Wunschziel gestartet"
+        );
+        let request = AutoRaidRequest {
+            broadcaster_id: broadcaster_id.to_string(),
+            broadcaster_login: login.to_string(),
+            viewer_count: source.viewer_count,
+            stream_duration_sec: source.stream_duration_sec(now),
+            partners: Vec::new(),
+            category_id: None,
+            language: None,
+            out_of_scope_ids: HashSet::new(),
+            offline_trigger_ts: None,
+            reason: "manual_chat_command".to_string(),
+            respect_soft_raid_blacklist: false,
+            fixed_target: Some(ResolvedTarget {
+                user_id: stream.user_id.clone(),
+                user_login: stream.user_login.trim().to_lowercase(),
+                started_at: Some(stream.started_at.clone()).filter(|s| !s.is_empty()),
+                is_partner_raid,
+                is_outreach_boost: false,
+                candidates_count: 1,
+                target_stream_data: None,
+            }),
+        };
+        self.run_manual_pipeline(broadcaster_id, login, &request)
+            .await
+    }
+
+    async fn run_manual_pipeline(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+        request: &AutoRaidRequest,
+    ) -> ManualRaidResponse {
+        match self.pipeline.run(request).await {
             AutoRaidPipelineOutcome::Started { target_login, .. } => {
                 // Python `set_manual_suppression=True`: 180 s kein Auto-Raid.
                 self.suppression
@@ -522,13 +616,14 @@ impl OfflineRaidHandler {
         broadcaster_id: &str,
         now: chrono::DateTime<Utc>,
     ) -> Option<AssembledPartners> {
-        let roster = match self.roster.load_roster(broadcaster_id).await {
-            Ok(roster) => roster,
+        let scope = match self.roster.load_scope(broadcaster_id).await {
+            Ok(scope) => scope,
             Err(error) => {
                 tracing::error!(%error, broadcaster_id, "Raid: Roster nicht ladbar");
                 return None;
             }
         };
+        let roster = scope.partners;
         let logins: Vec<String> = roster.iter().map(|p| p.twitch_login.clone()).collect();
         let streams_by_login = streams_by_login_from_helix_result(
             self.helix.get_streams_by_logins(&logins, None).await,
@@ -585,7 +680,18 @@ impl OfflineRaidHandler {
             eligible,
             online_count,
             filtered_out,
+            out_of_scope_ids: scope.out_of_scope_ids,
         })
+    }
+
+    async fn raid_language(&self, broadcaster_id: &str) -> Option<String> {
+        match self.roster.source_language(broadcaster_id).await {
+            Ok(language) => language,
+            Err(error) => {
+                tracing::warn!(%error, broadcaster_id, "Raid language lookup failed; category fallback disabled");
+                None
+            }
+        }
     }
 
     /// Kategorie-ID des Ziel-Spiels, lazy aufgelöst und gecacht.

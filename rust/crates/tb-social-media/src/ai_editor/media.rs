@@ -282,53 +282,155 @@ pub async fn inspect_media(
     probe_path(&path, limits).await
 }
 
+pub const MAX_CONTACT_SHEET_FPS: u32 = 16;
+const CONTACT_SHEET_WINDOW_MS: u64 = 1000;
+const MAX_CONTACT_SHEET_WIDTH: u32 = 2576;
+const CONTACT_SHEET_QUALITIES: [u8; 5] = [4, 7, 11, 16, 23];
+
+pub fn contact_sheet_grid(fps: u32) -> (u32, u32) {
+    let fps = fps.clamp(1, MAX_CONTACT_SHEET_FPS);
+    let columns = (1..=fps).find(|side| side * side >= fps).unwrap_or(fps);
+    (columns, fps.div_ceil(columns))
+}
+
+fn contact_sheet_windows(duration_ms: u64, fps: u32) -> u64 {
+    let interval_ms = CONTACT_SHEET_WINDOW_MS.div_ceil(u64::from(fps.max(1)));
+    let full = duration_ms / CONTACT_SHEET_WINDOW_MS;
+    let tail = duration_ms % CONTACT_SHEET_WINDOW_MS;
+    (full + u64::from(tail >= interval_ms)).max(1)
+}
+
+fn contact_sheet_starts(duration_ms: u64, max_sheets: usize, fps: u32) -> Vec<u64> {
+    let seconds = contact_sheet_windows(duration_ms, fps);
+    let count = seconds.min(max_sheets as u64);
+    let last_start = duration_ms.saturating_sub(CONTACT_SHEET_WINDOW_MS);
+    (0..count)
+        .map(|index| {
+            if count == seconds {
+                index * CONTACT_SHEET_WINDOW_MS
+            } else {
+                let center =
+                    ((index as u128 * 2 + 1) * duration_ms as u128 / (count as u128 * 2)) as u64;
+                center
+                    .saturating_sub(CONTACT_SHEET_WINDOW_MS / 2)
+                    .min(last_start)
+            }
+        })
+        .collect()
+}
+
+fn contact_sheet_tile_width(fps: u32, frame_width: u32) -> u32 {
+    let (columns, _) = contact_sheet_grid(fps);
+    (frame_width.min(MAX_CONTACT_SHEET_WIDTH / columns) & !1).max(2)
+}
+
+fn contact_sheet_padding(window_ms: u64) -> String {
+    let pad_ms = CONTACT_SHEET_WINDOW_MS.saturating_sub(window_ms);
+    if pad_ms == 0 {
+        return String::new();
+    }
+    format!(
+        "tpad=stop_mode=clone:stop_duration={}.{:03},",
+        pad_ms / 1000,
+        pad_ms % 1000
+    )
+}
+
+fn contact_sheet_filter(fps: u32, frame_width: u32, start_ms: u64, window_ms: u64) -> String {
+    let (columns, rows) = contact_sheet_grid(fps);
+    let tile_width = contact_sheet_tile_width(fps, frame_width);
+    let font_size = (tile_width / 36).max(12);
+    format!(
+        "{}fps={fps},scale={tile_width}:-2,drawtext=text='%{{pts\\:hms\\:{}}}':x=4:y=(h-th)/2:fontsize={font_size}:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=3,tile={columns}x{rows}",
+        contact_sheet_padding(window_ms),
+        format_time(start_ms)
+    )
+}
+
+async fn write_contact_sheet(
+    path: &Path,
+    output: &Path,
+    start_ms: u64,
+    fps: u32,
+    limits: &ResourceLimits,
+    duration_ms: u64,
+) -> Result<(), EditorError> {
+    let window_ms = CONTACT_SHEET_WINDOW_MS.min(duration_ms.saturating_sub(start_ms).max(1));
+    let mut failure = EditorError::new(ErrorCode::ProcessFailed);
+    for quality in CONTACT_SHEET_QUALITIES {
+        let mut command = bounded_ffmpeg_command("ffmpeg", limits.max_frame_bytes);
+        command
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+            .args(["-filter_threads", &limits.encoder_threads.to_string()])
+            .args(["-threads", &limits.encoder_threads.to_string()])
+            .arg("-ss")
+            .arg(format_time(start_ms))
+            .arg("-t")
+            .arg(format_time(window_ms))
+            .arg("-i")
+            .arg(path)
+            .args(["-an", "-vf"])
+            .arg(contact_sheet_filter(
+                fps,
+                limits.frame_width,
+                start_ms,
+                window_ms,
+            ))
+            .args(["-frames:v", "1", "-q:v"])
+            .arg(quality.to_string())
+            .arg("-threads:v")
+            .arg(limits.encoder_threads.to_string())
+            .args(["-y"])
+            .arg(output);
+        match run_status(command, limits.process_deadline_ms).await {
+            Ok(()) => match check_output(output, limits.max_frame_bytes) {
+                Ok(()) => return Ok(()),
+                Err(error) => failure = error,
+            },
+            Err(error) if error.code == ErrorCode::ProcessDeadline => return Err(error),
+            Err(error) => failure = error,
+        }
+    }
+    Err(failure)
+}
+
+async fn has_jpeg_magic(output: &Path) -> Result<bool, EditorError> {
+    let mut image = tokio::fs::File::open(output)
+        .await
+        .map_err(|_| EditorError::new(ErrorCode::InvalidMedia))?;
+    let mut magic = [0; 2];
+    image
+        .read_exact(&mut magic)
+        .await
+        .map_err(|_| EditorError::new(ErrorCode::InvalidMedia))?;
+    Ok(magic == [0xff, 0xd8])
+}
+
 pub async fn extract_frames(
     source_root: &Path,
     input: &Path,
     workspace_root: &Path,
     limits: &ResourceLimits,
+    fps: u32,
 ) -> Result<FrameBatch, EditorError> {
     check_resources(limits)?;
+    if !(1..=MAX_CONTACT_SHEET_FPS).contains(&fps) {
+        return Err(EditorError::new(ErrorCode::InvalidLimits));
+    }
     let path = source_path(source_root, input, limits.max_source_bytes)?;
     let info = probe_path(&path, limits).await?;
     let owned = make_temp_directory(workspace_root)?;
-    let mut timestamps = Vec::with_capacity(limits.max_frames);
+    let starts = contact_sheet_starts(info.duration_ms, limits.max_frames, fps);
     tokio::time::timeout(
         Duration::from_millis(limits.total_frames_deadline_ms),
         async {
-            for index in 0..limits.max_frames {
-                let timestamp = ((index as u128 * 2 + 1) * info.duration_ms as u128
-                    / (limits.max_frames as u128 * 2)) as u64;
+            for (index, start_ms) in starts.iter().enumerate() {
                 let output = owned.0.join(format!("frame-{index:04}.jpg"));
-                let mut command = bounded_ffmpeg_command("ffmpeg", limits.max_frame_bytes);
-                command
-                    .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
-                    .args(["-filter_threads", &limits.encoder_threads.to_string()])
-                    .args(["-threads", &limits.encoder_threads.to_string()])
-                    .args(["-ss"])
-                    .arg(format_time(timestamp))
-                    .arg("-i")
-                    .arg(&path)
-                    .args(["-frames:v", "1", "-vf"])
-                    .arg(format!("scale={}:-2", limits.frame_width))
-                    .args(["-q:v", "4", "-threads:v"])
-                    .arg(limits.encoder_threads.to_string())
-                    .args(["-y"])
-                    .arg(&output);
-                run_status(command, limits.process_deadline_ms).await?;
-                check_output(&output, limits.max_frame_bytes)?;
-                let mut image = tokio::fs::File::open(&output)
-                    .await
-                    .map_err(|_| EditorError::new(ErrorCode::InvalidMedia))?;
-                let mut magic = [0; 2];
-                image
-                    .read_exact(&mut magic)
-                    .await
-                    .map_err(|_| EditorError::new(ErrorCode::InvalidMedia))?;
-                if magic != [0xff, 0xd8] {
+                write_contact_sheet(&path, &output, *start_ms, fps, limits, info.duration_ms)
+                    .await?;
+                if !has_jpeg_magic(&output).await? {
                     return Err(EditorError::new(ErrorCode::InvalidMedia));
                 }
-                timestamps.push(timestamp);
             }
             Ok(())
         },
@@ -337,7 +439,98 @@ pub async fn extract_frames(
     .map_err(|_| EditorError::new(ErrorCode::ProcessDeadline))??;
     Ok(FrameBatch {
         owned,
-        timestamps_ms: timestamps,
+        timestamps_ms: starts,
+    })
+}
+
+pub const AUDIO_LEVEL_STEP_MS: u64 = 250;
+const AUDIO_LEVEL_SAMPLE_RATE: u64 = 8000;
+const AUDIO_LEVEL_FLOOR_DBFS: f64 = -90.0;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AudioLevels {
+    pub step_ms: u64,
+    pub rms_dbfs: Vec<i16>,
+}
+
+impl AudioLevels {
+    pub fn capped(self, max_levels: usize) -> Self {
+        if max_levels == 0 || self.rms_dbfs.len() <= max_levels {
+            return self;
+        }
+        let factor = self.rms_dbfs.len().div_ceil(max_levels);
+        Self {
+            step_ms: self.step_ms.saturating_mul(factor as u64),
+            rms_dbfs: self
+                .rms_dbfs
+                .chunks(factor)
+                .filter_map(|chunk| chunk.iter().copied().max())
+                .collect(),
+        }
+    }
+}
+
+fn rms_dbfs(samples: &[u8]) -> Vec<i16> {
+    let step_bytes = (AUDIO_LEVEL_SAMPLE_RATE * AUDIO_LEVEL_STEP_MS / 1000 * 2) as usize;
+    samples
+        .chunks(step_bytes)
+        .map(|chunk| {
+            let values = chunk
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| f64::from(i16::from_le_bytes(*pair)) / 32768.0);
+            let (sum, count) = values.fold((0.0, 0usize), |(sum, count), value| {
+                (sum + value * value, count + 1)
+            });
+            let rms = if count == 0 {
+                0.0
+            } else {
+                (sum / count as f64).sqrt()
+            };
+            let level = if rms > 0.0 {
+                (20.0 * rms.log10()).max(AUDIO_LEVEL_FLOOR_DBFS)
+            } else {
+                AUDIO_LEVEL_FLOOR_DBFS
+            };
+            level.round() as i16
+        })
+        .collect()
+}
+
+pub async fn audio_levels(
+    source_root: &Path,
+    input: &Path,
+    workspace_root: &Path,
+    limits: &ResourceLimits,
+    filter: &str,
+) -> Result<AudioLevels, EditorError> {
+    check_resources(limits)?;
+    let path = source_path(source_root, input, limits.max_source_bytes)?;
+    let owned = make_temp_directory(workspace_root)?;
+    let output = owned.0.join("levels.pcm");
+    let mut command = bounded_ffmpeg_command("ffmpeg", limits.max_output_bytes);
+    command
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+        .args(["-threads", &limits.encoder_threads.to_string()])
+        .arg("-i")
+        .arg(&path)
+        .args(["-vn", "-ac", "1", "-ar"])
+        .arg(AUDIO_LEVEL_SAMPLE_RATE.to_string());
+    if !filter.trim().is_empty() {
+        command.arg("-af").arg(filter);
+    }
+    command
+        .args(["-f", "s16le", "-c:a", "pcm_s16le", "-y"])
+        .arg(&output);
+    run_status(command, limits.process_deadline_ms).await?;
+    check_output(&output, limits.max_output_bytes)?;
+    let samples = tokio::fs::read(&output)
+        .await
+        .map_err(|_| EditorError::new(ErrorCode::InvalidMedia))?;
+    Ok(AudioLevels {
+        step_ms: AUDIO_LEVEL_STEP_MS,
+        rms_dbfs: rms_dbfs(&samples),
     })
 }
 
@@ -351,11 +544,11 @@ fn cut_filter(plan: &ValidatedPlan, has_audio: bool) -> String {
         let start = format_time(interval.start_ms);
         let end = format_time(interval.end_ms);
         steps.push(format!(
-            "[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{index}]"
+            "[{index}:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{index}]"
         ));
         if has_audio {
             steps.push(format!(
-                "[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{index}]"
+                "[{index}:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{index}]"
             ));
         }
     }
@@ -404,16 +597,19 @@ pub async fn prepare_intervals(
         .args([
             "-filter_complex_threads",
             &limits.encoder_threads.to_string(),
-        ])
-        .args(["-threads", &limits.encoder_threads.to_string()])
-        .arg("-i")
-        .arg(&path)
-        .args([
-            "-filter_complex",
-            &cut_filter(plan, source_info.has_audio),
-            "-map",
-            "[vout]",
         ]);
+    for _ in plan.intervals() {
+        command
+            .args(["-threads", &limits.encoder_threads.to_string()])
+            .arg("-i")
+            .arg(&path);
+    }
+    command.args([
+        "-filter_complex",
+        &cut_filter(plan, source_info.has_audio),
+        "-map",
+        "[vout]",
+    ]);
     if source_info.has_audio {
         command.args(["-map", "[aout]"]);
     }
@@ -679,6 +875,69 @@ mod tests {
     }
 
     #[test]
+    fn contact_sheets_cover_one_second_each_and_scale_with_fps() {
+        assert_eq!(contact_sheet_grid(4), (2, 2));
+        assert_eq!(contact_sheet_grid(8), (3, 3));
+        assert_eq!(contact_sheet_tile_width(4, 640), 640);
+        assert_eq!(contact_sheet_tile_width(8, 640), 640);
+        assert_eq!(contact_sheet_tile_width(4, 960), 960);
+        assert_eq!(contact_sheet_tile_width(8, 960), 858);
+        assert_eq!(
+            contact_sheet_starts(3_500, 4, 4),
+            vec![0, 1_000, 2_000, 3_000]
+        );
+        assert_eq!(
+            contact_sheet_starts(60_000, 4, 4),
+            vec![7_000, 22_000, 37_000, 52_000]
+        );
+    }
+
+    #[test]
+    fn short_contact_sheet_windows_are_padded_to_a_full_second() {
+        assert_eq!(contact_sheet_padding(1_000), "");
+        assert_eq!(
+            contact_sheet_padding(5),
+            "tpad=stop_mode=clone:stop_duration=0.995,"
+        );
+        assert!(contact_sheet_filter(16, 640, 0, 20)
+            .starts_with("tpad=stop_mode=clone:stop_duration=0.980,fps=16,"));
+        assert!(contact_sheet_filter(4, 640, 0, 1_000).starts_with("fps=4,"));
+    }
+
+    #[test]
+    fn contact_sheets_skip_tail_windows_without_a_frame() {
+        assert_eq!(contact_sheet_starts(3_010, 10, 4), vec![0, 1_000, 2_000]);
+        assert_eq!(
+            contact_sheet_starts(3_250, 10, 4),
+            vec![0, 1_000, 2_000, 3_000]
+        );
+        assert_eq!(contact_sheet_starts(3_050, 10, 16), vec![0, 1_000, 2_000]);
+        assert_eq!(
+            contact_sheet_starts(3_063, 10, 16),
+            vec![0, 1_000, 2_000, 3_000]
+        );
+        assert_eq!(contact_sheet_starts(3_999, 10, 1), vec![0, 1_000, 2_000]);
+        assert_eq!(contact_sheet_starts(400, 10, 4), vec![0]);
+        assert_eq!(contact_sheet_starts(5, 10, 16), vec![0]);
+        for fps in 1..=MAX_CONTACT_SHEET_FPS {
+            let interval = CONTACT_SHEET_WINDOW_MS.div_ceil(u64::from(fps));
+            for duration in [1_000, 2_001, 4_499, 7_900, 12_345] {
+                let starts = contact_sheet_starts(duration, 100, fps);
+                let last = starts.last().copied().unwrap_or_default();
+                assert!(duration - last >= interval, "fps {fps} duration {duration}");
+            }
+        }
+    }
+
+    #[test]
+    fn audio_levels_report_dbfs_per_quarter_second() {
+        let step = (AUDIO_LEVEL_SAMPLE_RATE * AUDIO_LEVEL_STEP_MS / 1000) as usize;
+        let mut samples = vec![0u8; step * 2];
+        samples.extend(std::iter::repeat_n(16_384i16.to_le_bytes(), step).flatten());
+        assert_eq!(rms_dbfs(&samples), vec![-90, -6]);
+    }
+
+    #[test]
     fn rejects_file_limits_that_disable_the_kernel_ceiling() {
         let mut resources = limits();
         resources.max_output_bytes = u64::MAX;
@@ -691,6 +950,50 @@ mod tests {
         assert_eq!(
             check_resources(&resources).err().map(|error| error.code),
             Some(ErrorCode::InvalidLimits)
+        );
+    }
+
+    #[test]
+    fn hook_first_plan_reads_each_interval_from_its_own_input() {
+        let plan_limits = PlanLimits {
+            max_plan_bytes: 4096,
+            max_source_duration_ms: 60_010,
+            max_source_duration_drift_ms: 100,
+            max_output_duration_ms: 70_000,
+            max_intervals: 3,
+            max_highlights: 1,
+            max_review_reasons: 1,
+            max_text_bytes: 50,
+            max_subtitle_segments: 2,
+            max_subtitle_text_bytes: 50,
+            min_kept_percent: 0,
+        };
+        let plan = EditPlan {
+            schema_version: 1,
+            source_duration_ms: 60_010,
+            kept_intervals: vec![KeptInterval {
+                start_ms: 0,
+                end_ms: 60_010,
+                reason: "Main".into(),
+            }],
+            hook: Some(KeptInterval {
+                start_ms: 56_000,
+                end_ms: 59_130,
+                reason: "Hook".into(),
+            }),
+            observed_highlights: vec![],
+            significant_uncertainty: false,
+            review_reasons: vec![],
+            layout: LayoutIntent::ExistingStable,
+        };
+        let validated = validate_plan(plan, 60_010, &plan_limits).expect("hook-first plan");
+        assert_eq!(
+            cut_filter(&validated, true),
+            "[0:v]trim=start=56.000:end=59.130,setpts=PTS-STARTPTS[v0];\
+             [0:a]atrim=start=56.000:end=59.130,asetpts=PTS-STARTPTS[a0];\
+             [1:v]trim=start=0.000:end=60.010,setpts=PTS-STARTPTS[v1];\
+             [1:a]atrim=start=0.000:end=60.010,asetpts=PTS-STARTPTS[a1];\
+             [v0][a0][v1][a1]concat=n=2:v=1:a=1[vout][aout]"
         );
     }
 
@@ -808,6 +1111,52 @@ mod tests {
         assert!(!retained.exists());
     }
 
+    async fn synthetic_video(root: &Path, name: &str, seconds: &str) -> PathBuf {
+        let source = root.join(name);
+        let mut fixture = Command::new("ffmpeg");
+        fixture
+            .kill_on_drop(true)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=s=160x90:r=60",
+                "-t",
+                seconds,
+                "-c:v",
+                "libx264",
+                "-threads",
+                "1",
+                "-y",
+            ])
+            .arg(&source);
+        run_status(fixture, 15_000)
+            .await
+            .expect("create synthetic video");
+        source
+    }
+
+    #[tokio::test]
+    async fn short_windows_still_yield_a_contact_sheet() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let resources = limits();
+        for (name, seconds, fps, sheets) in [
+            ("tiny.mp4", "0.02", 16, 1),
+            ("tail.mp4", "2.3", 16, 3),
+            ("tail4.mp4", "1.3", 4, 2),
+        ] {
+            let source = synthetic_video(root.path(), name, seconds).await;
+            let frames = extract_frames(root.path(), &source, root.path(), &resources, fps)
+                .await
+                .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+            assert_eq!(frames.frames().len(), sheets, "{name}");
+        }
+    }
+
     #[tokio::test]
     async fn synthetic_audio_video_probe_frames_and_cuts() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -848,14 +1197,14 @@ mod tests {
             .expect("probe source");
         assert!(source_info.has_audio);
         assert_eq!((source_info.width, source_info.height), (160, 90));
-        let frames = extract_frames(root.path(), &source, root.path(), &resources)
+        let frames = extract_frames(root.path(), &source, root.path(), &resources, 4)
             .await
             .expect("extract across duration");
         let limited_frames = ResourceLimits {
             max_frame_bytes: 64,
             ..resources.clone()
         };
-        let frame_error = extract_frames(root.path(), &source, root.path(), &limited_frames)
+        let frame_error = extract_frames(root.path(), &source, root.path(), &limited_frames, 4)
             .await
             .expect_err("frame output must stay bounded");
         assert!(matches!(
@@ -894,6 +1243,7 @@ mod tests {
                     reason: "Reaction".into(),
                 },
             ],
+            hook: None,
             observed_highlights: vec![],
             significant_uncertainty: false,
             review_reasons: vec![],

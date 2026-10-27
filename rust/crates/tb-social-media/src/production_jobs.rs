@@ -37,6 +37,7 @@ impl ProductionMode {
 pub enum JobSource {
     Autopilot,
     Manual,
+    Test,
 }
 
 impl JobSource {
@@ -44,6 +45,7 @@ impl JobSource {
         match self {
             Self::Autopilot => "autopilot",
             Self::Manual => "manual",
+            Self::Test => "test",
         }
     }
 }
@@ -89,6 +91,7 @@ pub struct ProductionJob {
     pub max_attempts: i32,
     pub review_reasons: Value,
     pub metadata: Value,
+    pub policy_snapshot: Option<autopilot_settings::PipelinePolicy>,
     pub last_error: Option<String>,
     pub scheduled_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -99,7 +102,7 @@ pub struct ProductionJob {
 const SELECT: &str =
     "SELECT id, twitch_user_id, clip_id, source, requested_mode, mode, queue_order,
     status, stage, attempts, max_attempts, review_reasons::text, metadata::text, last_error,
-    scheduled_at, created_at, started_at, finished_at FROM social_production_jobs";
+    scheduled_at, created_at, started_at, finished_at, NULLIF(to_jsonb(social_production_jobs)->'policy_snapshot', 'null'::jsonb)::text AS policy_snapshot FROM social_production_jobs";
 
 fn from_row(row: sqlx::postgres::PgRow) -> Result<ProductionJob, JobError> {
     let source: String = row.try_get("source")?;
@@ -112,6 +115,7 @@ fn from_row(row: sqlx::postgres::PgRow) -> Result<ProductionJob, JobError> {
         source: match source.as_str() {
             "autopilot" => JobSource::Autopilot,
             "manual" => JobSource::Manual,
+            "test" => JobSource::Test,
             _ => return Err(JobError::Invalid("Unbekannte Auftragsquelle".into())),
         },
         requested_mode: requested
@@ -126,6 +130,10 @@ fn from_row(row: sqlx::postgres::PgRow) -> Result<ProductionJob, JobError> {
         max_attempts: row.try_get("max_attempts")?,
         review_reasons: json_column(&row, "review_reasons")?,
         metadata: json_column(&row, "metadata")?,
+        policy_snapshot: row
+            .try_get::<Option<String>, _>("policy_snapshot")?
+            .map(|raw| serde_json::from_str(&raw))
+            .transpose()?,
         last_error: row.try_get("last_error")?,
         scheduled_at: row.try_get("scheduled_at")?,
         created_at: row.try_get("created_at")?,
@@ -169,7 +177,7 @@ pub async fn list(
 pub async fn insert(pool: &PgPool, job: &NewProductionJob) -> Result<ProductionJob, JobError> {
     if job.max_attempts <= 0
         || (job.source == JobSource::Manual && job.requested_mode.is_none())
-        || (job.source == JobSource::Autopilot && job.requested_mode.is_some())
+        || (job.source != JobSource::Manual && job.requested_mode.is_some())
     {
         return Err(JobError::Invalid(
             "Ungültiger Modus oder Versuchslimit".into(),
@@ -201,18 +209,21 @@ async fn eligible_head_on(
     connection: &mut PgConnection,
 ) -> Result<Option<(i64, String)>, JobError> {
     let backlog = autopilot_schedule::review_backlog_sql("j.twitch_user_id");
+    let failures = autopilot_schedule::failure_backlog_sql("j.twitch_user_id");
     let limit = autopilot_schedule::REVIEW_LIMIT;
+    let scheduled = autopilot_schedule::has_schedule_sql("s");
+    let review = crate::autopilot_publish::EFFECTIVE_REVIEW;
     Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT j.id, j.twitch_user_id FROM social_production_jobs j WHERE j.status = 'queued'
          AND j.attempts < j.max_attempts
          AND COALESCE((j.metadata->>'retry_after')::timestamptz, '-infinity'::timestamptz) <= clock_timestamp()
-         AND (j.started_at IS NOT NULL OR j.source = 'manual' OR EXISTS (
+         AND (j.started_at IS NOT NULL OR j.source IN ('manual', 'test') OR EXISTS (
              SELECT 1 FROM social_media_autopilot_settings s WHERE s.twitch_user_id = j.twitch_user_id
-             AND s.enabled AND NOT s.paused AND jsonb_array_length(s.schedule_slots) > 0
+             AND s.enabled AND NOT s.paused AND {scheduled}
              AND (j.scheduled_at IS NULL OR (j.scheduled_at > clock_timestamp()
                  AND j.scheduled_at <= clock_timestamp() + make_interval(hours => s.lead_time_hours)
                      + CASE WHEN s.lead_time_hours = 0 THEN INTERVAL '1 minute' ELSE INTERVAL '0' END))
-             AND (s.publish_mode = 'full_auto' OR {backlog} < {limit})))
+             AND ({review} <> 'required' OR {backlog} < {limit}) AND {failures} < {limit}))
          ORDER BY j.queue_order, j.id LIMIT 1"
     )))
     .fetch_optional(connection)
@@ -262,11 +273,15 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
         .await?;
     if job.started_at.is_none() && job.source == JobSource::Autopilot {
         let reviews: i64 = autopilot_schedule::review_count_on(&mut tx, &owner).await?;
+        let failures: i64 = autopilot_schedule::failure_count_on(&mut tx, &owner).await?;
+        let scheduled = autopilot_schedule::has_schedule_on(&mut tx, &owner, &settings).await?;
         if !settings.enabled
             || settings.paused
-            || settings.schedule_slots.is_empty()
-            || (settings.publish_mode == autopilot_settings::PublishMode::Review
-                && reviews >= autopilot_schedule::REVIEW_LIMIT)
+            || !scheduled
+            || failures >= autopilot_schedule::REVIEW_LIMIT
+            || (reviews >= autopilot_schedule::REVIEW_LIMIT
+                && crate::autopilot_publish::review_mode_on(&mut tx, &owner).await?
+                    == crate::autopilot_publish::ReviewMode::Review)
             || job.scheduled_at.is_some_and(|slot| {
                 slot <= now || slot > autopilot_schedule::production_horizon(&settings, now)
             })
@@ -275,15 +290,26 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
             return Ok(None);
         }
     }
-    let mode = if job.started_at.is_some() {
-        job.mode.ok_or(JobError::State)?
+    let (mode, policy) = if job.started_at.is_some() {
+        (job.mode.ok_or(JobError::State)?, None)
     } else {
         match job.source {
-            JobSource::Manual => job.requested_mode.ok_or(JobError::State)?,
-            JobSource::Autopilot if settings.ai_editing_enabled => ProductionMode::Ai,
-            JobSource::Autopilot => ProductionMode::Static,
+            JobSource::Manual => (job.requested_mode.ok_or(JobError::State)?, None),
+            JobSource::Autopilot | JobSource::Test => {
+                automatic_mode(&mut tx, &owner, &settings).await?
+            }
         }
     };
+    if let Some(policy) = policy {
+        sqlx::query(
+            "UPDATE social_production_jobs SET policy_snapshot = $2::text::jsonb WHERE id = $1",
+        )
+        .bind(job.id)
+        .bind(serde_json::to_string(&policy)?)
+        .execute(&mut *tx)
+        .await?;
+        job.policy_snapshot = Some(policy);
+    }
     let first_start = job.started_at.is_none();
     sqlx::query(
         "UPDATE social_production_jobs SET mode = $2, status = 'running',
@@ -309,6 +335,34 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
     job.attempts += 1;
     tx.commit().await?;
     Ok(Some(job))
+}
+
+async fn automatic_mode(
+    tx: &mut PgConnection,
+    owner: &str,
+    settings: &autopilot_settings::AutopilotSettings,
+) -> Result<(ProductionMode, Option<autopilot_settings::PipelinePolicy>), JobError> {
+    let unified: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM social_pipeline_cutover WHERE twitch_user_id = $1 AND state = 'unified')",
+    )
+    .bind(owner)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !unified {
+        return Ok(if settings.ai_editing_enabled {
+            (ProductionMode::Ai, None)
+        } else {
+            (ProductionMode::Static, None)
+        });
+    }
+    let policy = autopilot_settings::load_policy_on(tx, owner).await?;
+    Ok(
+        if policy.pipeline_mode == autopilot_settings::PipelineMode::AiEdit {
+            (ProductionMode::Ai, Some(policy))
+        } else {
+            (ProductionMode::Static, None)
+        },
+    )
 }
 
 pub async fn update_progress(
@@ -357,7 +411,48 @@ pub async fn finish(
     if changed != 1 {
         return Err(JobError::State);
     }
+    if matches!(completion, JobCompletion::Review | JobCompletion::Failed) {
+        release_unfinished_slots_on(&mut tx, twitch_user_id, id).await?;
+    }
+    if matches!(completion, JobCompletion::Failed) {
+        release_pool_selection_on(&mut tx, twitch_user_id, id).await?;
+    }
     tx.commit().await?;
+    Ok(())
+}
+
+pub(crate) async fn release_unfinished_slots_on(
+    connection: &mut PgConnection,
+    twitch_user_id: &str,
+    id: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE social_produced_videos SET scheduled_at = NULL WHERE job_id = $1
+        AND twitch_user_id = $2 AND status IN ('rendering', 'failed', 'rejected', 'expired')",
+    )
+    .bind(id)
+    .bind(twitch_user_id)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+async fn release_pool_selection_on(
+    connection: &mut PgConnection,
+    twitch_user_id: &str,
+    id: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE social_clip_pool p SET selected_at = NULL
+        FROM social_production_jobs j
+        WHERE j.id = $2 AND j.twitch_user_id = $1
+        AND p.twitch_user_id = j.twitch_user_id AND p.clip_db_id = j.clip_id
+        AND NOT social_clip_video_holds(p.clip_db_id)",
+    )
+    .bind(twitch_user_id)
+    .bind(id)
+    .execute(connection)
+    .await?;
     Ok(())
 }
 
@@ -392,6 +487,7 @@ pub async fn flag_unsuitable(
     if changed != 1 {
         return Err(JobError::State);
     }
+    release_unfinished_slots_on(&mut tx, twitch_user_id, id).await?;
     tx.commit().await?;
     Ok(())
 }

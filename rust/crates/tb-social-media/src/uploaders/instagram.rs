@@ -451,7 +451,7 @@ impl InstagramUploader {
         data["id"]
             .as_str()
             .map(str::to_string)
-            .ok_or_else(|| UploadError::Api("No media ID in response".to_string()))
+            .ok_or_else(|| UploadError::PublishUnconfirmed("No media ID in response".to_string()))
     }
 
     /// Reel aus einer öffentlichen Video-URL veröffentlichen (Container, warten,
@@ -1149,5 +1149,19 @@ mod tests {
             matches!(err, UploadError::Validation(_)),
             "erwartet Validation, bekommen {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn publish_without_media_id_is_unconfirmed() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/{BIZ}/media_publish")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let uploader = InstagramUploader::new("tok", BIZ).with_api_base(server.uri());
+        let err = uploader.publish_container("container-1").await.unwrap_err();
+        assert!(matches!(err, UploadError::PublishUnconfirmed(_)), "{err:?}");
     }
 }

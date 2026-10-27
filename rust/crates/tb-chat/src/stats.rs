@@ -36,6 +36,14 @@ pub async fn fetch_rank(discord_id: &str, include_stats: bool) -> Option<RankInf
     fetch_rank_checked(discord_id, include_stats).await.ok()
 }
 
+const RANK_REFRESH_TIMEOUT_SECS: u64 = 30;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RankKey<'a> {
+    Discord(&'a str),
+    Steam(&'a str),
+}
+
 const DEFAULT_STEAM_BOT_RANK_URL: &str = "http://127.0.0.1:8783/rank";
 const DEFAULT_STEAM_BOT_MATCHES_URL: &str = "http://127.0.0.1:8783/player-matches";
 const DEFAULT_STEAM_BOT_MMR_TREND_URL: &str = "http://127.0.0.1:8783/player-mmr-trend";
@@ -56,6 +64,8 @@ pub struct RankInfo {
     pub wins: Option<i64>,
     pub losses: Option<i64>,
     pub matches: Option<i64>,
+    #[serde(default)]
+    pub rank_updated_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -148,6 +158,22 @@ pub(crate) async fn fetch_rank_at(
         params.push(("include_stats", "1"));
     }
     fetch_json(url, &params, if include_stats { 8 } else { 5 }).await
+}
+
+pub(crate) async fn fetch_rank_refreshed(
+    url: &str,
+    key: RankKey<'_>,
+) -> Result<RankInfo, StatsError> {
+    let (name, value) = match key {
+        RankKey::Discord(id) => ("discord_id", id),
+        RankKey::Steam(id) => ("steam_id", id),
+    };
+    fetch_json(
+        url,
+        &[(name, value), ("refresh", "1")],
+        RANK_REFRESH_TIMEOUT_SECS,
+    )
+    .await
 }
 
 pub async fn fetch_matches(discord_id: &str) -> Result<MatchHistory, StatsError> {
@@ -564,6 +590,7 @@ mod tests {
             wins: None,
             losses: None,
             matches: None,
+            rank_updated_at: None,
         };
         assert_eq!(rank_reply("nani", Some(&info)), "Rang von nani: Archon");
     }
@@ -581,6 +608,7 @@ mod tests {
             wins: None,
             losses: None,
             matches: None,
+            rank_updated_at: None,
         };
         assert_eq!(rank_reply("nani", Some(&info)), "Rang von nani: Phantom 1");
     }
@@ -598,6 +626,7 @@ mod tests {
             wins: None,
             losses: None,
             matches: None,
+            rank_updated_at: None,
         };
         assert!(rank_reply("nani", Some(&info)).contains("noch keinen Rang"));
     }
@@ -615,6 +644,7 @@ mod tests {
             wins: None,
             losses: None,
             matches: None,
+            rank_updated_at: None,
         };
         let reply = rank_reply("denoshock", Some(&info));
         assert!(reply.contains("Steam-Bots"));
@@ -635,6 +665,7 @@ mod tests {
             wins: None,
             losses: None,
             matches: None,
+            rank_updated_at: None,
         };
         assert!(rank_reply("nani", Some(&info)).contains("noch keinen Steam-Account"));
         assert!(rank_reply("nani", None).contains("noch keinen Steam-Account"));
@@ -653,6 +684,7 @@ mod tests {
             wins: Some(1164),
             losses: None,
             matches: None,
+            rank_updated_at: None,
         };
 
         let reply = wins_reply("nani", Some(&info));
@@ -674,6 +706,7 @@ mod tests {
             wins: None,
             losses: None,
             matches: None,
+            rank_updated_at: None,
         };
 
         assert!(wins_reply("nani", Some(&info)).contains("noch keine Sieg-Daten"));
@@ -692,6 +725,7 @@ mod tests {
             wins: None,
             losses: None,
             matches: None,
+            rank_updated_at: None,
         };
 
         assert!(wins_reply("nani", Some(&info)).contains("noch keinen Steam-Account"));

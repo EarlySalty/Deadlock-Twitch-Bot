@@ -15,12 +15,12 @@ use sqlx::PgPool;
 
 /// Plan-Tier aus Plan-ID ableiten.
 ///
-/// Aktuell buchbar sind `free`, `plus`, `pro`. Die acht Vorgaenger-IDs bleiben
-/// lesbar, weil sie in der DB stehen; kaufbar sind sie nicht mehr.
+/// Aktuell buchbar sind `free` und `plus`. Studio-Sprossen und `pro` bleiben
+/// lesbar, kaufbar sind sie erst nach Stripe-Preisen.
 pub fn plan_tier(plan_id: &str) -> &'static str {
     match plan_id {
         "free" | "raid_free" => "free",
-        "plus" | "pro" => "extended",
+        "plus" | "pro" | "studio" | "studio_ki" | "studio_cut" => "extended",
         "chat_quiet" | "raid_boost" | "bundle_chat_quiet_raid_boost" => "basic",
         "analysis_dashboard"
         | "bundle_analysis_raid_boost"
@@ -36,6 +36,9 @@ pub fn plan_display_name(plan_id: &str) -> &'static str {
     match plan_id {
         "free" => "Netzwerk Free",
         "plus" => "Netzwerk Plus",
+        "studio" => "Studio",
+        "studio_ki" => "Studio KI",
+        "studio_cut" => "Studio Schnitt",
         "pro" => "Creator Pro",
         "raid_free" => "Free",
         "chat_quiet" => "Werbefrei",
@@ -55,6 +58,43 @@ pub fn plan_is_extended(plan_id: &str) -> bool {
     plan_tier(plan_id) == "extended"
 }
 
+const PLUS_ENTITLEMENTS: &[&str] = &[
+    "analytics",
+    "chat.lurker_tax",
+    "chat.promos.disable",
+    "raid.priority",
+];
+
+const STUDIO_ENTITLEMENTS: &[&str] = &[
+    "analytics",
+    "chat.lurker_tax",
+    "chat.promos.disable",
+    "raid.priority",
+    "social.auto_post",
+    "social.studio",
+];
+
+const STUDIO_KI_ENTITLEMENTS: &[&str] = &[
+    "analytics",
+    "chat.lurker_tax",
+    "chat.promos.disable",
+    "raid.priority",
+    "social.auto_post",
+    "social.captions",
+    "social.studio",
+];
+
+const STUDIO_CUT_ENTITLEMENTS: &[&str] = &[
+    "analytics",
+    "chat.lurker_tax",
+    "chat.promos.disable",
+    "raid.priority",
+    "social.auto_post",
+    "social.captions",
+    "social.studio",
+    "social.video_edit",
+];
+
 /// Entitlements aus Plan-ID (Python: `PLAN_ENTITLEMENTS_MAP`).
 pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
     match plan_id {
@@ -62,19 +102,10 @@ pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
         // (kostenlose Tagesform) ist der Default; das Flag `"analytics"` => voller
         // Analytics-Zugang (voller Verlauf, Vergleiche, KI-Analyse via Opus).
         "free" | "raid_free" => &[],
-        "plus" => &[
-            "analytics",
-            "chat.lurker_tax",
-            "chat.promos.disable",
-            "raid.priority",
-        ],
-        "pro" => &[
-            "analytics",
-            "chat.lurker_tax",
-            "chat.promos.disable",
-            "raid.priority",
-            "social.auto_post",
-        ],
+        "plus" => PLUS_ENTITLEMENTS,
+        "studio" | "pro" => STUDIO_ENTITLEMENTS,
+        "studio_ki" => STUDIO_KI_ENTITLEMENTS,
+        "studio_cut" => STUDIO_CUT_ENTITLEMENTS,
         "chat_quiet" => &["chat.promos.disable"],
         "raid_boost" => &["chat.lurker_tax", "raid.priority"],
         "bundle_chat_quiet_raid_boost" => {
@@ -146,10 +177,7 @@ fn plan_id_aus_plan_name(plan_name: &str) -> &str {
 /// im Billing-Pfad dieselbe Entscheidung trifft wie der periodische Refresh im
 /// Bot. Der Ablaufzeitpunkt läuft durch denselben Parser wie der
 /// Plan-Snapshot (`parse_datetime_value`), also inklusive Date-only-Werten.
-pub fn raid_boost_active(
-    row: &tb_raid::RaidBoostRow,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
+pub fn raid_boost_active(row: &tb_raid::RaidBoostRow, now: chrono::DateTime<chrono::Utc>) -> bool {
     if row.raid_boost_enabled {
         return true;
     }
@@ -191,6 +219,9 @@ fn normalize_plan_id(raw: &str) -> &'static str {
     match raw.trim() {
         "free" => "free",
         "plus" => "plus",
+        "studio" => "studio",
+        "studio_ki" => "studio_ki",
+        "studio_cut" => "studio_cut",
         "pro" => "pro",
         "raid_free" => "raid_free",
         "chat_quiet" => "chat_quiet",
@@ -206,9 +237,12 @@ fn normalize_plan_id(raw: &str) -> &'static str {
 }
 
 /// Kanonische Plan-IDs (Python `KNOWN_PLAN_IDS`).
-const KNOWN_PLAN_IDS: [&str; 12] = [
+const KNOWN_PLAN_IDS: [&str; 15] = [
     "free",
     "plus",
+    "studio",
+    "studio_ki",
+    "studio_cut",
     "pro",
     "raid_free",
     "chat_quiet",
@@ -810,6 +844,9 @@ mod tests {
             "analytics_trial",
             "plus",
             "pro",
+            "studio",
+            "studio_ki",
+            "studio_cut",
         ] {
             assert!(plan_has_analytics(id), "{id} muss analytics-Flag tragen");
         }
@@ -879,7 +916,10 @@ mod tests {
         assert!(raid_boost_active(&boost_row(true, "", "", None), now));
         assert!(!raid_boost_active(&boost_row(false, "", "", None), now));
         // Abgekürzte Alt-Namen aus `plan_name_from_id`.
-        assert!(raid_boost_active(&boost_row(false, "Bundle", "", None), now));
+        assert!(raid_boost_active(
+            &boost_row(false, "Bundle", "", None),
+            now
+        ));
         assert!(raid_boost_active(
             &boost_row(false, "raid_boost", "", None),
             now

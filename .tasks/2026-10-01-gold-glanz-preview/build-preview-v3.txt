@@ -1,0 +1,26 @@
+
+> dashboard_v2@0.0.0 build:preview
+> tsc -b && vite build --mode preview
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - `__dirname` (vite.config.ts:14:27). Use `import.meta.dirname` instead
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+vite v8.2.2 building client environment for preview...
+transforming...
+✓ 3046 modules transformed.
+rendering chunks...
+computing gzip size...
+dist-preview/index.html                               1.22 kB │ gzip:   0.55 kB
+dist-preview/assets/index-9fU1NnZB.css              187.27 kB │ gzip:  26.91 kB
+dist-preview/assets/rolldown-runtime-hePW80VL.js      0.71 kB │ gzip:   0.42 kB
+dist-preview/assets/query-9It43pJm.js                33.11 kB │ gzip:  10.09 kB
+dist-preview/assets/react-BvkQ1XdT.js               178.27 kB │ gzip:  56.30 kB
+dist-preview/assets/charts-BIEUQnAb.js              451.23 kB │ gzip: 126.17 kB
+dist-preview/assets/index-BcBro8AU.js             1,221.41 kB │ gzip: 306.56 kB
+
+[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 1000 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 1.25s

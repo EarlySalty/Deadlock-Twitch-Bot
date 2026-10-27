@@ -70,6 +70,7 @@ export interface SocialClip {
   upload_local_path: string | null;
   retention_until: string | null;
   discarded_at: string | null;
+  pipeline_unified?: boolean;
   platform_status: ClipPlatformStatus;
   layout_override: LayoutPayload | null;
   effective_layout: LayoutPayload;

@@ -45,11 +45,10 @@ use tb_chat::timeout_tracking::{
 use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
-    promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts,
-    ChatterTracker, CrewGuard, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer,
-    InviteQuestionInviteUrlPort, InviteQuestionResponder, LfgPitchResponder,
-    LlmInviteQuestionJudge, LlmLfgJudge, ModAlerter, PartnerRoster, PgHelixMentionResolver,
-    PgInviteQuestionStore, ReviewLog, SusInviteCheck,
+    ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts, ChatterTracker, CrewGuard,
+    FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer, InviteQuestionInviteUrlPort,
+    InviteQuestionResponder, LfgPitchResponder, LlmInviteQuestionJudge, LlmLfgJudge, ModAlerter,
+    PartnerRoster, PgHelixMentionResolver, PgInviteQuestionStore, ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
@@ -858,6 +857,60 @@ pub async fn try_build_api(
     }))
 }
 
+async fn foreign_impersonation_guard(
+    token_manager: &BotTokenManager,
+    raw_api: Arc<dyn ChatApi>,
+    pool: sqlx::PgPool,
+    bot_login: String,
+) -> Arc<tb_chat::impersonation_guard::ImpersonationGuard> {
+    use tb_chat::impersonation_guard::{ForeignActions, GuardMode, ImpersonationGuard};
+    let can_write = token_manager
+        .scopes()
+        .await
+        .iter()
+        .any(|scope| scope == "user:write:chat");
+    if !can_write {
+        tracing::warn!(
+            "Impersonation-Guard: Bot-Token ohne Scope user:write:chat, Warnhinweise in fremden Chats werden übersprungen"
+        );
+    }
+    let api = can_write.then(|| {
+        Arc::new(ChannelPolicyChatApi::new(
+            raw_api,
+            PolicyContext::ImpersonationWarning,
+        )) as Arc<dyn ChatApi>
+    });
+    Arc::new(ImpersonationGuard::new(
+        GuardMode::Foreign,
+        bot_login,
+        Arc::new(ForeignActions::new(
+            api,
+            Some(Arc::new(GlobalChatterBanEnforcer::new(pool.clone()))),
+            Arc::new(DbPartnerPipelineChannels { pool: pool.clone() }),
+            pool,
+        )),
+    ))
+}
+
+struct DbPartnerPipelineChannels {
+    pool: PgPool,
+}
+
+#[async_trait::async_trait]
+impl tb_chat::impersonation_guard::PartnerPipelineChannels for DbPartnerPipelineChannels {
+    async fn handled_by_partner_pipeline(&self, broadcaster_id: &str) -> bool {
+        match select_eventsub_subscription_broadcasters(&self.pool).await {
+            Ok(rows) => rows.iter().any(|row| {
+                row.twitch_user_id == broadcaster_id && (row.is_partner || row.chat_subscriptions)
+            }),
+            Err(error) => {
+                tracing::warn!(%error, broadcaster_id, "Impersonation-Guard: Partner-Kanalprüfung fehlgeschlagen, Warnhinweis unterbleibt");
+                true
+            }
+        }
+    }
+}
+
 /// Phase 2: baut die komplette Pipeline auf der gebooteten ChatApi.
 pub struct ChatRuntimePorts {
     pub title_context: tb_chat::steam_lookup::CoStreamRuntime,
@@ -876,6 +929,7 @@ pub struct ChatRuntimePorts {
     pub brain_service_token: String,
     pub chat_persist_all_games: bool,
     pub lfg_pitch_enabled: bool,
+    pub impersonation_guard_enabled: bool,
     pub review_log_directory: std::path::PathBuf,
     pub review_relay: Option<BrokerRelay>,
     pub member_relay: Option<BrokerRelay>,
@@ -908,6 +962,7 @@ pub async fn build_runtime(
         brain_service_token,
         chat_persist_all_games,
         lfg_pitch_enabled,
+        impersonation_guard_enabled,
         review_log_directory,
         review_relay,
         member_relay,
@@ -929,6 +984,7 @@ pub async fn build_runtime(
     // send_message (Moderation/Promos/Commands/Scam-Pitch/Fun/Pipeline/
     // Mention-Resolver) durch das Tracking.
     let timeout_guard = Arc::new(TimeoutGuard::new());
+    let raw_api = Arc::clone(&api);
     let tracked_api: Arc<dyn ChatApi> = Arc::new(
         TimeoutTrackingChatApi::new(api, Arc::clone(&timeout_guard), pool.clone())
             .with_bot_ban_handler(bot_ban_handler),
@@ -996,7 +1052,6 @@ pub async fn build_runtime(
         pool: pool.clone(),
         relay: invite_relay,
         invite_channel_id: Some(invite_channel_id),
-        fallback: discord_chat.promo_invite.clone(),
     });
     if let Some(relay) = review_relay.clone() {
         let pool = pool.clone();
@@ -1057,10 +1112,7 @@ pub async fn build_runtime(
             pool: pool.clone(),
         }),
         Arc::clone(&discord_link),
-        Arc::new(DbInvitePort {
-            pool: pool.clone(),
-            fallback: discord_chat.promo_invite.clone(),
-        }),
+        Arc::new(DbInvitePort { pool: pool.clone() }),
         Arc::new(DbSuperMod { pool: pool.clone() }),
         Arc::clone(&moderation) as Arc<dyn LastAutobanStore>,
     )
@@ -1113,15 +1165,27 @@ pub async fn build_runtime(
         "http://localhost:8899/changelog",
         discord_chat.moderation_alert_channel_id,
     ));
-    let scout_crew_guard = Arc::new(CrewGuard::new(
-        true,
-        Arc::clone(&alerter),
-        pool.clone(),
-        bot_user_id.clone(),
-        Arc::clone(&account_age),
-        Arc::clone(&crew_centroid),
-        true,
-    ));
+    let bot_login = token_manager.bot_login().await;
+    let foreign_impersonation = if impersonation_guard_enabled {
+        Some(
+            foreign_impersonation_guard(&token_manager, raw_api, pool.clone(), bot_login.clone())
+                .await,
+        )
+    } else {
+        None
+    };
+    let scout_crew_guard = Arc::new(
+        CrewGuard::new(
+            true,
+            Arc::clone(&alerter),
+            pool.clone(),
+            bot_user_id.clone(),
+            Arc::clone(&account_age),
+            Arc::clone(&crew_centroid),
+            true,
+        )
+        .with_impersonation(foreign_impersonation),
+    );
     let lfg_judge: Arc<dyn tb_chat::lfg_pitch::LfgJudge> = Arc::new(LlmLfgJudge::new(
         EngagementLlmClient::new(None, None, None, None),
     ));
@@ -1136,7 +1200,7 @@ pub async fn build_runtime(
             timeout_guard: Arc::clone(&timeout_guard),
             pool: pool.clone(),
         });
-    let pipeline = Arc::new(ChatPipeline::new(ChatPipelineParts {
+    let pipeline = ChatPipeline::new(ChatPipelineParts {
         bot_user_id: bot_user_id.clone(),
         api: Arc::clone(&api),
         pool: pool.clone(),
@@ -1159,16 +1223,14 @@ pub async fn build_runtime(
         brain_chat: brain_chat_port,
         // _fun_thanks_reply_enabled ist in Python default false (bot.py Z. 190).
         fun: Arc::new(FunResponses::new(Arc::clone(&api), false)),
+        follow_hint: Arc::new(tb_chat::FollowHint::new(Arc::clone(&api), pool.clone())),
         standard_replies: Arc::new(tb_chat::StandardReplies::new(
             Arc::clone(&api),
             pool.clone(),
         )),
         invite_question: Arc::new(InviteQuestionResponder::new(
             Arc::clone(&api),
-            Arc::new(DbInviteUrlWithFallback {
-                pool: pool.clone(),
-                fallback: discord_chat.promo_invite.clone(),
-            }),
+            Arc::new(DbScopedInviteUrl { pool: pool.clone() }),
             Arc::new(PgInviteQuestionStore::new(pool.clone())),
             Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
                 None, None, None, None,
@@ -1190,10 +1252,7 @@ pub async fn build_runtime(
         lfg_pitch: Arc::new({
             let responder = LfgPitchResponder::new(
                 Arc::clone(&api),
-                Arc::new(DbInviteUrlWithFallback {
-                    pool: pool.clone(),
-                    fallback: discord_chat.promo_invite.clone(),
-                }),
+                Arc::new(DbScopedInviteUrl { pool: pool.clone() }),
                 Arc::clone(&lfg_judge),
                 lfg_pitch_enabled,
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
@@ -1212,7 +1271,9 @@ pub async fn build_runtime(
         alerter,
         account_age,
         crew_centroid,
-    }));
+    });
+    let pipeline =
+        Arc::new(pipeline.with_impersonation_guard(impersonation_guard_enabled, bot_login));
 
     let sweeper = Arc::new(GlobalBanSweeper::new(pool.clone(), Arc::clone(&api)));
     // Engagement-Layer (KI-Stammgast): Der EventSub-Partnerpfad darf weiterhin
@@ -2579,15 +2640,17 @@ impl RaidCommandPort for RaidCommandAdapter {
         &self,
         broadcaster_id: &str,
         broadcaster_login: &str,
+        target_login: Option<&str>,
     ) -> Result<RaidStartResult, String> {
         let Some(port) = &self.manual else {
             return Ok(RaidStartResult {
                 status: "unavailable".to_string(),
                 target_login: None,
+                error: None,
             });
         };
         let value = port
-            .start_manual_raid(broadcaster_id, broadcaster_login)
+            .start_manual_raid(broadcaster_id, broadcaster_login, target_login)
             .await;
         Ok(RaidStartResult {
             status: value
@@ -2597,6 +2660,10 @@ impl RaidCommandPort for RaidCommandAdapter {
                 .to_string(),
             target_login: value
                 .get("target_login")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string()),
+            error: value
+                .get("error")
                 .and_then(Value::as_str)
                 .map(|s| s.to_string()),
         })
@@ -2701,6 +2768,14 @@ impl DiscordLinkPort for DbDiscordLink {
         streamer_login: &str,
         inviter_twitch_user_id: &str,
     ) -> Result<Option<String>, String> {
+        let community =
+            tb_db::guild_membership::community_guild_id().map_err(|error| error.to_string())?;
+        let home = tb_db::guild_membership::home_guild_id(&self.pool, broadcaster_id, community)
+            .await
+            .map_err(|error| error.to_string())?;
+        if home != Some(community) {
+            return self.discord_invite(broadcaster_id).await;
+        }
         let Some(relay) = &self.relay else {
             return self.discord_invite(broadcaster_id).await;
         };
@@ -2717,45 +2792,30 @@ impl DiscordLinkPort for DbDiscordLink {
     }
 
     async fn discord_invite(&self, broadcaster_id: &str) -> Result<Option<String>, String> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT invite_url FROM twitch_streamer_invites WHERE twitch_user_id = $1",
-        )
-        .bind(broadcaster_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(row.map(|(url,)| url).filter(|u| !u.trim().is_empty()))
+        tb_db::guild_membership::scoped_invite_for_id(&self.pool, broadcaster_id)
+            .await
+            .map(|invite| invite.map(|(url, _)| url))
+            .map_err(|error| error.to_string())
     }
 }
 
-/// Invite-Question — URL wie `!invite`: Streamer-Invite, sonst Env-Fallback.
-struct DbInviteUrlWithFallback {
+struct DbScopedInviteUrl {
     pool: PgPool,
-    fallback: Option<String>,
 }
 
 #[async_trait::async_trait]
-impl InviteQuestionInviteUrlPort for DbInviteUrlWithFallback {
+impl InviteQuestionInviteUrlPort for DbScopedInviteUrl {
     async fn invite_url(&self, channel_login: &str) -> Result<Option<String>, String> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT invite_url FROM twitch_streamer_invites \
-             WHERE LOWER(streamer_login) = $1 LIMIT 1",
-        )
-        .bind(channel_login)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(row
-            .map(|(url,)| url)
-            .filter(|url| !url.trim().is_empty())
-            .or_else(|| self.fallback.clone()))
+        tb_db::guild_membership::scoped_invite_for_login(&self.pool, channel_login)
+            .await
+            .map(|invite| invite.map(|(url, _)| url))
+            .map_err(|error| error.to_string())
     }
 }
 
 /// !invite — Antwortzeile unabhängig von Streamstatus und Kategorie.
 struct DbInvitePort {
     pool: PgPool,
-    fallback: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -2765,18 +2825,10 @@ impl InvitePort for DbInvitePort {
         broadcaster_id: &str,
         chatter_login: &str,
     ) -> Result<Option<String>, String> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT invite_url FROM twitch_streamer_invites \
-             WHERE twitch_user_id = $1 LIMIT 1",
-        )
-        .bind(broadcaster_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        let invite_url = row
-            .map(|(url,)| url)
-            .filter(|u| !u.trim().is_empty())
-            .or_else(|| self.fallback.clone());
+        let invite_url = tb_db::guild_membership::scoped_invite_for_id(&self.pool, broadcaster_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .map(|(url, _)| url);
         let Some(invite_url) = invite_url else {
             return Ok(None);
         };
@@ -2836,46 +2888,75 @@ impl PartnerChannelCheck for DbPartnerCheck {
     }
 }
 
-/// Promo-Invite: streamer-spezifisch → Broker-Erstellung → globaler Fallback.
 struct DbInviteResolver {
     pool: PgPool,
-    fallback: Option<String>,
     relay: Option<BrokerRelay>,
     invite_channel_id: Option<u64>,
 }
 
 #[async_trait::async_trait]
 impl InviteResolver for DbInviteResolver {
+    async fn community_promotions(&self, channel_login: &str) -> bool {
+        let Ok(community) = tb_db::guild_membership::community_guild_id() else {
+            return false;
+        };
+        let id: Option<String> = sqlx::query_scalar("SELECT twitch_user_id FROM twitch_streamer_identities WHERE lower(twitch_login)=lower($1)")
+            .bind(channel_login).fetch_optional(&self.pool).await.ok().flatten();
+        let Some(id) = id else { return false };
+        matches!(tb_db::guild_membership::home_guild_id(&self.pool, &id, community).await, Ok(Some(home)) if home == community)
+    }
+
     async fn resolve_invite(&self, channel_login: &str) -> (String, bool) {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT invite_url FROM twitch_streamer_invites \
-             WHERE LOWER(streamer_login) = $1 LIMIT 1",
-        )
-        .bind(channel_login)
-        .fetch_optional(&self.pool)
-        .await
-        .ok()
-        .flatten();
-        if let Some((url,)) = row {
-            if !url.trim().is_empty() {
-                return (url, true);
+        match tb_db::guild_membership::scoped_invite_for_login(&self.pool, channel_login).await {
+            Ok(Some((url, true))) => (url, true),
+            Ok(Some((url, false))) => {
+                match self.create_and_store_streamer_invite(channel_login).await {
+                    Some(personal) => (personal, true),
+                    None => (url, false),
+                }
+            }
+            Ok(None) => match self.create_and_store_streamer_invite(channel_login).await {
+                Some(url) => (url, true),
+                None => (String::new(), false),
+            },
+            Err(error) => {
+                tracing::warn!(%error, "Scoped promotion invite lookup failed");
+                (String::new(), false)
             }
         }
-        if let Some(url) = self.create_and_store_streamer_invite(channel_login).await {
-            return (url, true);
-        }
-        (promo_invite_fallback(self.fallback.as_deref()), false)
     }
 }
 
 impl DbInviteResolver {
+    async fn invite_channel(&self, home: i64, community: i64) -> Option<u64> {
+        if home == community {
+            return self.invite_channel_id;
+        }
+        let channel: Option<i64> = sqlx::query_scalar("SELECT announce_channel_id FROM discord_guilds WHERE guild_id=$1 AND status='active' AND removed_at IS NULL")
+            .bind(home).fetch_optional(&self.pool).await.ok().flatten()?;
+        u64::try_from(channel?).ok()
+    }
+
     async fn create_and_store_streamer_invite(&self, channel_login: &str) -> Option<String> {
         let login = channel_login.trim().to_lowercase();
         if login.is_empty() {
             return None;
         }
         let relay = self.relay.as_ref()?;
-        let channel_id = self.invite_channel_id?;
+        let user_id: String = sqlx::query_scalar(
+            "SELECT twitch_user_id FROM twitch_streamer_identities WHERE lower(twitch_login)=$1",
+        )
+        .bind(&login)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()?;
+        let community = tb_db::guild_membership::community_guild_id().ok()?;
+        let home = tb_db::guild_membership::home_guild_id(&self.pool, &user_id, community)
+            .await
+            .ok()
+            .flatten()?;
+        let channel_id = self.invite_channel(home, community).await?;
         let reason = format!("streamer-invite:{login}");
         let invite = match relay.create_invite(channel_id, &reason).await {
             Ok(invite) => invite,
@@ -2888,7 +2969,7 @@ impl DbInviteResolver {
         let invite_code = invite.code.trim().to_string();
         if invite_url.is_empty()
             || invite_code.is_empty()
-            || invite.guild_id == 0
+            || i64::try_from(invite.guild_id).ok() != Some(home)
             || invite.channel_id == 0
         {
             tracing::warn!(
@@ -2908,9 +2989,10 @@ impl DbInviteResolver {
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let stored = sqlx::query(
             "INSERT INTO twitch_streamer_invites \
-             (streamer_login, guild_id, channel_id, invite_code, invite_url, created_at, last_sent_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, NULL) \
+             (streamer_login, guild_id, channel_id, invite_code, invite_url, created_at, last_sent_at, twitch_user_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, NULL, $7) \
              ON CONFLICT(streamer_login) DO UPDATE SET \
+                twitch_user_id = excluded.twitch_user_id, \
                 guild_id = excluded.guild_id, \
                 channel_id = excluded.channel_id, \
                 invite_code = excluded.invite_code, \
@@ -2923,6 +3005,7 @@ impl DbInviteResolver {
         .bind(&invite_code)
         .bind(&invite_url)
         .bind(&now)
+        .bind(&user_id)
         .execute(&self.pool)
         .await;
         if let Err(error) = stored {
@@ -3427,10 +3510,12 @@ mod chat_notification_tests {
             &self,
             _broadcaster_id: &str,
             _broadcaster_login: &str,
+            _target_login: Option<&str>,
         ) -> Result<RaidStartResult, String> {
             Ok(RaidStartResult {
                 status: "unavailable".to_string(),
                 target_login: None,
+                error: None,
             })
         }
 
@@ -3561,6 +3646,10 @@ mod chat_notification_tests {
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             brain_chat: None,
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
+            follow_hint: Arc::new(tb_chat::FollowHint::new(
+                Arc::clone(&api_trait),
+                pool.clone(),
+            )),
             standard_replies: Arc::new(tb_chat::StandardReplies::new(
                 Arc::clone(&api_trait),
                 pool.clone(),
@@ -4284,7 +4373,6 @@ mod db_tests {
             pool: pool.clone(),
             relay: None,
             invite_channel_id: None,
-            fallback: None,
         };
         let logins = resolver.partners_without_invite().await.unwrap();
         assert_eq!(logins, vec!["fresh".to_string()]);
@@ -4292,8 +4380,13 @@ mod db_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../test-support/postgres.rs"]
 pub(crate) mod invite_test_postgres;
+
+#[cfg(test)]
+#[path = "../../../test-support/guild_membership.rs"]
+mod invite_test_guilds;
 
 #[cfg(test)]
 mod invite_offline_tests {
@@ -4303,12 +4396,12 @@ mod invite_offline_tests {
     async fn echter_invite_port_antwortet_offline_und_bei_anderem_spiel() {
         let database = invite_test_postgres::TestPostgres::start().await;
         let pool = database.pool.clone();
-        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT, twitch_user_id TEXT)")
+        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT, twitch_user_id TEXT, guild_id BIGINT)")
             .execute(&pool)
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO twitch_streamer_invites VALUES ('oldchannel', 'https://discord.gg/test', 'channel-id'), ('testchannel', 'https://discord.gg/foreign', 'foreign-id')",
+            "INSERT INTO twitch_streamer_invites VALUES ('oldchannel', 'https://discord.gg/test', 'channel-id', 1), ('testchannel', 'https://discord.gg/foreign', 'foreign-id', 2)",
         )
         .execute(&pool)
         .await
@@ -4323,10 +4416,17 @@ mod invite_offline_tests {
             .execute(&pool)
             .await
             .unwrap();
-        let port = DbInvitePort {
-            pool: pool.clone(),
-            fallback: None,
-        };
+        invite_test_guilds::schema(&pool).await;
+        invite_test_guilds::member(&pool, "channel-id", "oldchannel").await;
+        let community = tb_db::guild_membership::community_guild_id().unwrap();
+        sqlx::query(
+            "UPDATE twitch_streamer_invites SET guild_id=$1 WHERE twitch_user_id='channel-id'",
+        )
+        .bind(community)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let port = DbInvitePort { pool: pool.clone() };
         for (live, game) in [(0, "Deadlock"), (1, "Just Chatting"), (1, "Deadlock")] {
             sqlx::query("UPDATE twitch_live_state SET is_live=$1,last_game=$2")
                 .bind(live)
@@ -4390,9 +4490,17 @@ mod command_adapter_regressions {
     #[tokio::test]
     async fn command_adapter_discord_invite_waehlt_nur_echte_id() {
         let db = invite_test_postgres::TestPostgres::start().await;
-        sqlx::raw_sql("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, twitch_user_id TEXT, invite_url TEXT);
-            INSERT INTO twitch_streamer_invites VALUES ('oldname','own','https://discord.gg/own'), ('newname','other','https://discord.gg/other');")
+        sqlx::raw_sql("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, twitch_user_id TEXT, invite_url TEXT, guild_id BIGINT);
+            INSERT INTO twitch_streamer_invites VALUES ('oldname','own','https://discord.gg/own',1), ('newname','other','https://discord.gg/other',2);")
             .execute(&db.pool).await.unwrap();
+        invite_test_guilds::schema(&db.pool).await;
+        invite_test_guilds::member(&db.pool, "own", "oldname").await;
+        let community = tb_db::guild_membership::community_guild_id().unwrap();
+        sqlx::query("UPDATE twitch_streamer_invites SET guild_id=$1 WHERE twitch_user_id='own'")
+            .bind(community)
+            .execute(&db.pool)
+            .await
+            .unwrap();
         let port = DbDiscordLink {
             pool: db.pool.clone(),
             relay: None,
@@ -4481,8 +4589,18 @@ impl tb_chat::streamer_voice::StreamerVoicePort for StreamerVoiceResolver {
         else {
             return Ok(None);
         };
+        let community = tb_db::guild_membership::community_guild_id()
+            .map_err(|_| "voice_config_unavailable".to_string())?;
+        let Some(home) =
+            tb_db::guild_membership::home_guild_id(&self.pool, broadcaster_id, community)
+                .await
+                .map_err(|_| "voice_home_unavailable".to_string())?
+        else {
+            return Ok(None);
+        };
+        let home = u64::try_from(home).map_err(|_| "voice_home_invalid".to_string())?;
         self.relay
-            .streamer_voice_invite(1289721245281292288, streamer_id, message_id)
+            .streamer_voice_invite(home, streamer_id, message_id)
             .await
             .map(|invite| {
                 invite.map(|invite| tb_chat::streamer_voice::VoiceInvite {

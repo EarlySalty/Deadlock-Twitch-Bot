@@ -51,7 +51,7 @@ pub async fn open_editor(
             let decisions = revision::parent_planning(pool, owner, video.id)
                 .await?
                 .plan
-                .kept_intervals
+                .timeline()
                 .into_iter()
                 .map(|interval| store::TimelineEntry {
                     start_ms: interval.start_ms as i64,
@@ -152,8 +152,17 @@ pub(super) async fn restore_failed_parents(
     for (owner, id) in jobs {
         let mut tx = lease.connection.begin().await?;
         autopilot_settings::lock_owner(&mut tx, &owner).await?;
-        restore_parent_on(&mut tx, &owner, id).await?;
-        tx.commit().await?;
+        match restore_parent_on(&mut tx, &owner, id).await {
+            Ok(()) => tx.commit().await?,
+            Err(store::AiStoreError::PipelineBusy) => {
+                tx.rollback().await?;
+                tracing::info!(
+                    job_id = id,
+                    "AI revision parent stays parked while a legacy publication is open"
+                );
+            }
+            Err(error) => return Err(error),
+        }
     }
     Ok(())
 }
@@ -169,7 +178,16 @@ pub(super) async fn restore_parent_on(
     ).bind(job_id).bind(owner).fetch_optional(&mut *tx).await?;
     if let Some(parent) = parent {
         sqlx::query("UPDATE twitch_clips_upload_queue SET status='waiting_exact_file',outcome_reason=NULL,next_retry_at=NULL WHERE produced_video_id=$1 AND status='autopilot_discarded' AND outcome_reason='revision_replaced' AND effect_started_at IS NULL AND external_id IS NULL")
-            .bind(parent).execute(tx).await?;
+            .bind(parent).execute(tx).await.map_err(busy_publication)?;
     }
     Ok(())
+}
+
+fn busy_publication(error: sqlx::Error) -> store::AiStoreError {
+    match &error {
+        sqlx::Error::Database(database) if database.code().as_deref() == Some("23505") => {
+            store::AiStoreError::PipelineBusy
+        }
+        _ => store::AiStoreError::Database(error),
+    }
 }

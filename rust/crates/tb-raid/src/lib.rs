@@ -135,7 +135,8 @@ pub use partner_raid_delivery::{
     PartnerRaidDeliveryRequest, PartnerRaidDeliveryStatus, PARTNER_RAID_DELAY_SECONDS,
 };
 pub use partner_roster::{
-    build_online_candidates, OnlineCandidate, PartnerRosterEntry, PartnerRosterStore, StreamData,
+    build_online_candidates, OnlineCandidate, PartnerRosterEntry, PartnerRosterStore,
+    RaidRosterScope, StreamData,
 };
 pub use partner_score_refresh::{
     build_score_upsert, raid_boost_nur_spalte, ExistingCache, LiveState, PartnerScoreRefresher,

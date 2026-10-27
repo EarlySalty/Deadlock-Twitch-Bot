@@ -6,7 +6,7 @@ use super::{
     EditorContext, EditorError, ErrorKind, BUDGET_LOCK,
 };
 
-pub const INITIAL_TOTAL_CAP_MICRO_USD: i64 = 2_000_000;
+pub const INITIAL_TOTAL_CAP_MICRO_USD: i64 = 20_000_000;
 pub(crate) const SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

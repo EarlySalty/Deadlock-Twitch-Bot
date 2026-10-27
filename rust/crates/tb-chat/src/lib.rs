@@ -34,9 +34,11 @@ pub mod commands;
 pub mod conversation_scam;
 pub mod crew_guard;
 pub mod db_token_store;
+pub mod follow_hint;
 pub mod fun_responses;
 pub mod global_ban_sweep;
 pub mod global_chatter_ban;
+pub mod impersonation_guard;
 pub mod invite_question;
 mod invite_request;
 pub mod lfg_pitch;
@@ -83,6 +85,7 @@ pub use conversation_scam::{
     VerdictKind,
 };
 pub use crew_guard::{screen as crew_screen, CrewGuard, CrewSignal};
+pub use follow_hint::FollowHint;
 pub use fun_responses::FunResponses;
 pub use global_ban_sweep::{GlobalBanSweeper, PartnerRoster};
 pub use global_chatter_ban::GlobalChatterBanEnforcer;
@@ -115,9 +118,8 @@ pub use promo_pitch::{
     PitchOccasion, PitchRejectReason, PitchResponse, PitchTextGen, TargetedPitchContext,
 };
 pub use promos::{
-    lurker_tax_title_matches, promo_invite_fallback, LurkerRewardChecker, NoopSuppressionCheck,
-    PartnerChannelCheck, PitchReviewSink, PromoEngine, StaticInviteResolver,
-    DEFAULT_PROMO_DISCORD_INVITE, LURKER_TAX_REWARD_TITLE,
+    lurker_tax_title_matches, LurkerRewardChecker, NoopSuppressionCheck, PartnerChannelCheck,
+    PitchReviewSink, PromoEngine, StaticInviteResolver, LURKER_TAX_REWARD_TITLE,
 };
 pub use safe_list::{is_safe as is_safe_account, SafeAccount, SAFE_ACCOUNTS};
 pub use scam_pitch::{AccountAgePort, PitchDecision, ScamPitchDetector, SpamAiReviewer};
@@ -133,6 +135,7 @@ pub use token::{load_seed_tokens, BotTokenManager, SeedTokens, TokenError};
 pub use types::{ChatMessageEvent, ChatReply, MentionRef, MessageFragment, SendOutcome};
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../test-support/postgres.rs"]
 mod test_postgres;
 

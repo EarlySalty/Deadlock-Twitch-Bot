@@ -81,9 +81,83 @@ pub async fn set_partner_access(
     .bind(twitch_user_id)
     .fetch_one(&mut *tx)
     .await?;
+    if granted {
+        sqlx::query("DELETE FROM social_media_access_requests WHERE twitch_user_id = $1")
+            .bind(twitch_user_id)
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
 
     Ok(entry)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct AccessRequest {
+    pub twitch_user_id: String,
+    pub twitch_login: String,
+    pub requested_at: chrono::DateTime<chrono::Utc>,
+}
+
+fn is_twitch_id(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+pub async fn request_access(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    twitch_login: &str,
+) -> Result<AccessRequest, sqlx::Error> {
+    if !is_twitch_id(twitch_user_id) {
+        return Err(sqlx::Error::Protocol("Ungültige Twitch-ID".into()));
+    }
+    sqlx::query_as::<_, AccessRequest>(
+        "INSERT INTO social_media_access_requests (twitch_user_id, twitch_login)
+         VALUES ($1, $2)
+         ON CONFLICT (twitch_user_id) DO UPDATE SET twitch_login = EXCLUDED.twitch_login
+         RETURNING twitch_user_id, twitch_login, requested_at",
+    )
+    .bind(twitch_user_id)
+    .bind(twitch_login)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn has_access_request(pool: &PgPool, twitch_user_id: &str) -> Result<bool, sqlx::Error> {
+    if !is_twitch_id(twitch_user_id) {
+        return Ok(false);
+    }
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM social_media_access_requests WHERE twitch_user_id = $1)",
+    )
+    .bind(twitch_user_id)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn list_access_requests(pool: &PgPool) -> Result<Vec<AccessRequest>, sqlx::Error> {
+    sqlx::query_as::<_, AccessRequest>(
+        "SELECT r.twitch_user_id, r.twitch_login, r.requested_at
+         FROM social_media_access_requests r
+         WHERE NOT COALESCE((SELECT granted FROM social_media_partner_access a WHERE a.twitch_user_id = r.twitch_user_id), FALSE)
+         ORDER BY r.requested_at",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn remove_access_request(
+    pool: &PgPool,
+    twitch_user_id: &str,
+) -> Result<bool, sqlx::Error> {
+    if !is_twitch_id(twitch_user_id) {
+        return Ok(false);
+    }
+    let result = sqlx::query("DELETE FROM social_media_access_requests WHERE twitch_user_id = $1")
+        .bind(twitch_user_id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 #[cfg(test)]
@@ -128,6 +202,16 @@ mod tests {
                 granted BOOLEAN NOT NULL DEFAULT FALSE,
                 granted_by TEXT,
                 granted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE social_media_access_requests (
+                twitch_user_id TEXT PRIMARY KEY CHECK (twitch_user_id ~ '^[0-9]+$'),
+                twitch_login TEXT NOT NULL,
+                requested_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             )",
         )
         .execute(&pool)
@@ -212,6 +296,31 @@ mod tests {
         let list = list_partner_access(&pool).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].streamer_login, "nani");
+    }
+
+    #[tokio::test]
+    async fn grant_clears_pending_request_and_reject_removes_it() {
+        let Some(pool) = make_pool("t_sm_pa_requests").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('nani', '42'), ('other', '7')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        request_access(&pool, "42", "nani").await.unwrap();
+        request_access(&pool, "7", "other").await.unwrap();
+        request_access(&pool, "7", "other").await.unwrap();
+        assert!(has_access_request(&pool, "42").await.unwrap());
+        assert_eq!(list_access_requests(&pool).await.unwrap().len(), 2);
+
+        set_partner_access(&pool, "42", true, Some("admin"))
+            .await
+            .unwrap();
+        assert!(!has_access_request(&pool, "42").await.unwrap());
+
+        assert!(remove_access_request(&pool, "7").await.unwrap());
+        assert!(!remove_access_request(&pool, "7").await.unwrap());
+        assert!(list_access_requests(&pool).await.unwrap().is_empty());
     }
     #[tokio::test]
     async fn grant_and_revoke_keep_selected_id_after_login_reassignment() {

@@ -387,10 +387,17 @@ discord_guilds|cross_server_raids|boolean|NO|true
 discord_guilds|guild_id|bigint|NO|
 discord_guilds|installed_at|timestamp with time zone|NO|now()
 discord_guilds|language|text|NO|'en'::text
+discord_guilds|live_role_id|bigint|YES|
 discord_guilds|name|text|YES|
 discord_guilds|ping_role_id|bigint|YES|
 discord_guilds|promo_invite_url|text|YES|
 discord_guilds|removed_at|timestamp with time zone|YES|
+discord_guilds|role_activity_method|text|NO|'deadlock_days'::text
+discord_guilds|role_gain_min_days|integer|NO|4
+discord_guilds|role_gain_window_days|integer|NO|30
+discord_guilds|role_keep_min_days|integer|NO|4
+discord_guilds|role_keep_window_days|integer|NO|60
+discord_guilds|role_require_bot_access|boolean|NO|true
 discord_guilds|status|text|NO|'inactive'::text
 discord_guilds|streamer_role_id|bigint|YES|
 discord_guilds|updated_at|timestamp with time zone|NO|now()
@@ -966,6 +973,7 @@ streamer_onboarding|updated_at|timestamp with time zone|NO|now()
 streamer_plans|activated_at|text|NO|CURRENT_TIMESTAMP
 streamer_plans|clip_command_duration_seconds|double precision|YES|
 streamer_plans|clip_command_enabled|integer|NO|1
+streamer_plans|command_name_aliases|jsonb|NO|'{}'::jsonb
 streamer_plans|command_name_overrides|jsonb|NO|'{}'::jsonb
 streamer_plans|expires_at|text|YES|
 streamer_plans|first_login_at|text|YES|

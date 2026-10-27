@@ -1,7 +1,12 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use sqlx::PgPool;
 use tb_llm::social_editor;
+
+use crate::clip_prep_worker::ClipDownloader;
 
 use super::{
     pipeline::{self, Identity, StageContext},
@@ -48,7 +53,10 @@ async fn project(
     owner: &str,
     mut job: AiJobView,
 ) -> Result<AiJobView, AiEditorError> {
-    if job.failure_code.as_deref() == Some("invalid_checkpoint") {
+    if matches!(
+        job.failure_code.as_deref(),
+        Some("invalid_checkpoint" | "revision_unchanged" | "request_too_large")
+    ) {
         job.can_retry = false;
     }
     if job.can_retry {
@@ -84,7 +92,9 @@ async fn project(
     job.estimated_provider_cost_usd = totals.estimated_provider_cost_usd;
     job.measured_provider_cost_usd = None;
     job.provider_latency_ms = totals.provider_latency_ms;
-    job.cost_basis = if job.estimated_provider_cost_usd.is_some() {
+    job.cost_basis = if totals.subscription_included {
+        "subscription_included"
+    } else if job.estimated_provider_cost_usd.is_some() {
         "usage_priced_estimate"
     } else {
         "unknown"
@@ -210,9 +220,10 @@ pub async fn create_manual_job(
     runtime: &EditorRuntime,
     owner: &str,
     clip_id: i64,
+    downloader: &dyn ClipDownloader,
 ) -> Result<AiJobView, AiEditorError> {
     social_editor::consent_allowed(pool, owner).await?;
-    super::source::load_source(pool, runtime, owner, clip_id).await?;
+    super::source::load_source(pool, runtime, owner, clip_id, Some(downloader)).await?;
     let job = store::create_job(pool, owner, clip_id, attempt_limit(runtime)?).await?;
     project(pool, runtime, owner, job).await
 }
@@ -233,15 +244,22 @@ pub async fn retry_manual_job(
     project(pool, runtime, owner, job).await
 }
 
-fn failure(error: &AiEditorError, stage: AiStage) -> JobFailure {
+pub(super) fn failure(error: &AiEditorError, stage: AiStage) -> JobFailure {
     match error {
-        AiEditorError::Source | AiEditorError::NotFound => JobFailure::SourceUnavailable,
+        AiEditorError::Source
+        | AiEditorError::SourceDownload
+        | AiEditorError::SourceMissing
+        | AiEditorError::SourceUnreadable
+        | AiEditorError::NotFound => JobFailure::SourceUnavailable,
         AiEditorError::Consent => JobFailure::ConsentMissing,
         AiEditorError::Budget => JobFailure::BudgetExceeded,
         AiEditorError::Provider => JobFailure::ProviderUnavailable,
+        AiEditorError::ProviderAccess => JobFailure::ProviderAccess,
         AiEditorError::Transcription => JobFailure::TranscriptionFailed,
         AiEditorError::Render => JobFailure::RenderingFailed,
         AiEditorError::Validation => JobFailure::ValidationFailed,
+        AiEditorError::RevisionUnchanged => JobFailure::RevisionUnchanged,
+        AiEditorError::RequestTooLarge => JobFailure::RequestTooLarge,
         _ => match stage {
             AiStage::Preparing => JobFailure::SourceUnavailable,
             AiStage::Transcribing => JobFailure::TranscriptionFailed,
@@ -257,14 +275,21 @@ pub struct ManualWorker {
     pool: PgPool,
     runtime: EditorRuntime,
     brain_token: Option<String>,
+    downloader: Arc<dyn ClipDownloader>,
 }
 
 impl ManualWorker {
-    pub fn new(pool: PgPool, runtime: EditorRuntime, brain_token: Option<String>) -> Self {
+    pub fn new(
+        pool: PgPool,
+        runtime: EditorRuntime,
+        brain_token: Option<String>,
+        downloader: Arc<dyn ClipDownloader>,
+    ) -> Self {
         Self {
             pool,
             runtime,
             brain_token,
+            downloader,
         }
     }
 
@@ -470,6 +495,7 @@ impl ManualWorker {
                             expected_twitch_clip_id: Some(&job.source_twitch_clip_id),
                             checkpoints: &job.checkpoints,
                             brain_token: self.brain_token.as_deref(),
+                            downloader: Some(self.downloader.as_ref()),
                         },
                         job.stage,
                     ),

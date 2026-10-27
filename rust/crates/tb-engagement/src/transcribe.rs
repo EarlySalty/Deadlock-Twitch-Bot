@@ -51,6 +51,7 @@ pub struct TranscriptionResult {
     /// werden sie ohnehin (`timestamp_granularities[]=segment`); frueher
     /// wurden sie nur weggeworfen.
     pub segments: Vec<TranscriptSegment>,
+    pub language: Option<String>,
 }
 
 /// Ein Abschnitt mit eigener Zeit, so wie Whisper ihn liefert.
@@ -85,6 +86,8 @@ pub struct OpenAiTranscriber {
     http: reqwest::Client,
     /// Ordner fuer die Zwischendateien; `None` heisst Systemtemp.
     temp_dir: Option<std::path::PathBuf>,
+    prompt: Option<String>,
+    audio_filter: Option<String>,
 }
 
 impl OpenAiTranscriber {
@@ -126,6 +129,8 @@ impl OpenAiTranscriber {
             ffmpeg_bin: "ffmpeg".to_string(),
             http,
             temp_dir: None,
+            prompt: None,
+            audio_filter: None,
         })
     }
 
@@ -161,6 +166,8 @@ impl OpenAiTranscriber {
                 .build()
                 .ok()?,
             temp_dir: None,
+            prompt: None,
+            audio_filter: None,
         })
     }
 
@@ -198,6 +205,16 @@ impl OpenAiTranscriber {
         self
     }
 
+    pub fn with_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.prompt = Some(prompt.into()).filter(|prompt| !prompt.trim().is_empty());
+        self
+    }
+
+    pub fn with_audio_filter(mut self, filter: impl Into<String>) -> Self {
+        self.audio_filter = Some(filter.into()).filter(|filter| !filter.trim().is_empty());
+        self
+    }
+
     /// Extrahiert Audio in ein Temp-WAV und transkribiert es (Python
     /// `transcribe_clip`). Das Temp-Verzeichnis wird immer aufgeräumt.
     pub async fn transcribe_clip(&self, video_path: &Path) -> Result<TranscriptionResult, String> {
@@ -224,7 +241,13 @@ impl OpenAiTranscriber {
             .arg("-y")
             .arg("-i")
             .arg(video)
-            .args(["-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"])
+            .args(["-vn", "-ac", "1", "-ar", "16000"])
+            .args(
+                self.audio_filter
+                    .iter()
+                    .flat_map(|filter| ["-af", filter.as_str()]),
+            )
+            .args(["-c:a", "pcm_s16le"])
             .arg(wav)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -284,12 +307,15 @@ impl OpenAiTranscriber {
             .file_name("audio.wav")
             .mime_str("audio/wav")
             .map_err(|_| TranscribeError::Unavailable)?;
-        let form = reqwest::multipart::Form::new()
+        let mut form = reqwest::multipart::Form::new()
             .text("model", model.to_owned())
             .text("language", "de")
             .text("response_format", "verbose_json")
-            .text("timestamp_granularities[]", "segment")
-            .part("file", part);
+            .text("timestamp_granularities[]", "segment");
+        if let Some(prompt) = &self.prompt {
+            form = form.text("prompt", prompt.clone());
+        }
+        let form = form.part("file", part);
         let resp = self
             .http
             .post(&self.base_url)
@@ -379,8 +405,17 @@ impl OpenAiTranscriber {
             engine: "openai_api".to_string(),
             model: genutztes_modell,
             segments,
+            language: reported_language(&payload),
         })
     }
+}
+
+fn reported_language(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("language")
+        .and_then(serde_json::Value::as_str)
+        .map(|language| language.trim().to_ascii_lowercase())
+        .filter(|language| !language.is_empty() && language != "unknown")
 }
 
 fn classify_transport_error(error: reqwest::Error) -> TranscribeError {
@@ -526,6 +561,8 @@ mod tests {
                 .build()
                 .unwrap(),
             temp_dir: None,
+            prompt: None,
+            audio_filter: None,
         }
     }
 
@@ -829,6 +866,8 @@ mod tests_segmente {
             ffmpeg_bin: "ffmpeg".into(),
             http: reqwest::Client::new(),
             temp_dir: None,
+            prompt: None,
+            audio_filter: None,
         };
         transcriber
             .transcribe_bytes(b"nicht wirklich wav".to_vec())
@@ -862,6 +901,24 @@ mod tests_segmente {
         }))
         .await;
         assert_eq!(ohne_modell.model, "whisper-1");
+    }
+
+    #[tokio::test]
+    async fn reported_language_is_kept_and_unknown_is_dropped() {
+        let korean = antwort_mit(serde_json::json!({
+            "text": "아, 너 괜찮은데?",
+            "duration": 2.0,
+            "language": "ko"
+        }))
+        .await;
+        assert_eq!(korean.language.as_deref(), Some("ko"));
+        let silence = antwort_mit(serde_json::json!({
+            "text": "",
+            "duration": 2.0,
+            "language": "unknown"
+        }))
+        .await;
+        assert_eq!(silence.language, None);
     }
 
     #[tokio::test]

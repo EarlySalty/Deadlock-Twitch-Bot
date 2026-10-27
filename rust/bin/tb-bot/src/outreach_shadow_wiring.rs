@@ -726,6 +726,7 @@ fn discord_error_class(error: &DiscordError) -> &'static str {
         DiscordError::Http(_) => "transport",
         DiscordError::BrokerError { .. } => "broker_status",
         DiscordError::Deserialize(_) => "decode",
+        DiscordError::DmOptedOut => "dm_opted_out",
     }
 }
 

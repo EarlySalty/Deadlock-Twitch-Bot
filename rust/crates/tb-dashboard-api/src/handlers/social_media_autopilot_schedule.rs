@@ -106,6 +106,8 @@ fn failure(error: ScheduleError) -> Response {
         ScheduleError::Started => (StatusCode::CONFLICT, "job_started"),
         ScheduleError::NotInReview => (StatusCode::CONFLICT, "job_not_in_review"),
         ScheduleError::QueueChanged => (StatusCode::CONFLICT, "queue_changed"),
+        ScheduleError::TestRunActive => (StatusCode::CONFLICT, "test_run_active"),
+        ScheduleError::EmptyPool => (StatusCode::CONFLICT, "test_run_empty_pool"),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "schedule_unavailable"),
     };
     if status == StatusCode::INTERNAL_SERVER_ERROR {
@@ -228,6 +230,62 @@ pub async fn resolve_handler(
     if let Err(error) =
         autopilot_schedule::resolve_review(&pool, &owner, id, body.action, note).await
     {
+        return failure(error);
+    }
+    response(&pool, &owner).await
+}
+
+pub async fn test_run_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    body: Result<Json<QueueActionWrite>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = body else {
+        return invalid_body();
+    };
+    let owner = match owner_scope(&auth, &pool, body.twitch_user_id.as_deref()).await {
+        Ok(owner) => owner,
+        Err(error) => return *error,
+    };
+    if let Err(error) = autopilot_schedule::start_test_run(&pool, &owner).await {
+        return failure(error);
+    }
+    response(&pool, &owner).await
+}
+
+pub async fn test_run_discard_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(id): Path<i64>,
+    body: Result<Json<QueueActionWrite>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = body else {
+        return invalid_body();
+    };
+    let owner = match owner_scope(&auth, &pool, body.twitch_user_id.as_deref()).await {
+        Ok(owner) => owner,
+        Err(error) => return *error,
+    };
+    if let Err(error) = autopilot_schedule::discard_test_run(&pool, &owner, id).await {
+        return failure(error);
+    }
+    response(&pool, &owner).await
+}
+
+pub async fn test_run_retry_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(id): Path<i64>,
+    body: Result<Json<QueueActionWrite>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = body else {
+        return invalid_body();
+    };
+    let owner = match owner_scope(&auth, &pool, body.twitch_user_id.as_deref()).await {
+        Ok(owner) => owner,
+        Err(error) => return *error,
+    };
+    if let Err(error) = autopilot_schedule::retry_test_run(&pool, &owner, id).await {
         return failure(error);
     }
     response(&pool, &owner).await

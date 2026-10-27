@@ -1,0 +1,27 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Versus · Deutsche Deadlock Community</title><style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;font-family:"Segoe UI",Roboto,Arial,sans-serif}
+.stage{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:top left}
+.panel{position:absolute;top:0;width:500px;height:1080px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:44px;padding:300px 36px 0;background:linear-gradient(180deg,rgba(22,22,24,.62),rgba(14,14,16,.78))}
+.panel.left{left:118px;box-shadow:inset 0 6px 0 #E0A955}
+.panel.right{left:1302px;box-shadow:inset 0 6px 0 #7F9BD8}
+.logo-box{width:400px;height:300px;display:flex;align-items:center;justify-content:center}
+.logo{max-width:400px;max-height:300px;object-fit:contain;filter:drop-shadow(0 8px 18px rgba(0,0,0,.45))}
+.logo[hidden]{display:none}
+.name{width:100%;text-align:center;font-family:"Cinzel","Trajan Pro","Trajan","Times New Roman",Georgia,serif;font-weight:700;font-size:58px;line-height:1.1;letter-spacing:2px;text-transform:uppercase;color:#fff;text-shadow:0 3px 10px rgba(0,0,0,.6);overflow-wrap:anywhere}
+.short{font-family:"Cinzel","Trajan Pro","Times New Roman",Georgia,serif;font-size:26px;letter-spacing:6px;text-transform:uppercase;color:rgba(255,255,255,.72)}
+.short:empty{display:none}
+.panel.left .short{color:#f3d29c}.panel.right .short{color:#c6d4f4}
+.brand{position:absolute;left:50%;top:50%;width:300px;height:140px;transform:translate(-50%,-50%);object-fit:contain;opacity:.42}
+.brand[hidden]{display:none}
+</style></head><body><main class="stage" id="stage"><section class="panel left" id="team-left"><div class="logo-box"><img class="logo" alt="" hidden></div><div class="name"></div><div class="short"></div></section><img class="brand" id="brand" alt="" src="/twitch/caster-overlay/builtin/dachlock.png"><section class="panel right" id="team-right"><div class="logo-box"><img class="logo" alt="" hidden></div><div class="name"></div><div class="short"></div></section></main><script>
+'use strict';
+const stage=document.getElementById('stage');
+function resize(){stage.style.transform=`scale(${Math.min(innerWidth/1920,innerHeight/1080)})`;}addEventListener('resize',resize);resize();
+function setImage(img,url){const safe=typeof url==='string'&&url.startsWith('/twitch/caster-overlay/')?url:'';if(!safe){img.hidden=true;img.removeAttribute('src');return;}if(img.getAttribute('src')!==safe)img.src=safe;img.hidden=false;}
+function text(value,max){return typeof value==='string'?value.trim().slice(0,max):'';}
+function fitName(el){el.style.fontSize='58px';const full=el.scrollHeight;if(full>200&&full>0)el.style.fontSize=Math.max(34,Math.floor(58*200/full))+'px';}
+function renderTeam(id,team){const host=document.getElementById(id);const name=text(team?.name,80);const short=text(team?.short,8);const nameEl=host.querySelector('.name');nameEl.textContent=name||short;fitName(nameEl);host.querySelector('.short').textContent=name&&short?short:'';setImage(host.querySelector('.logo'),team?.logoUrl);}
+function render(payload){const ctx=payload?.matchContext||{};const teams=payload?.teams||{left:ctx.teamA,right:ctx.teamB};renderTeam('team-left',teams.left);renderTeam('team-right',teams.right);const brand=document.getElementById('brand');if(typeof payload?.event?.brandUrl==='string')setImage(brand,payload.event.brandUrl);brand.hidden=payload?.event?.showBrand===false;}
+const preview=new URLSearchParams(location.search).get('preview')==='1'&&parent!==window;if(preview){addEventListener('message',event=>{if(event.source!==parent||event.origin!=='https://admin.deutsche-deadlock-community.de'||event.data?.type!=='ddc-caster-preview')return;render(event.data);});}
+let reportedFailure=false;async function refresh(){try{const response=await fetch('/twitch/api/v2/public/caster-overlay',{cache:'no-store',credentials:'omit'});if(!response.ok)throw new Error('HTTP '+response.status);render(await response.json());reportedFailure=false;}catch(error){if(!reportedFailure){console.warn('Versus: Aktualisierung fehlgeschlagen; letzte Anzeige bleibt erhalten.',error);reportedFailure=true;}}finally{if(!preview)setTimeout(refresh,2000);}}if(!preview)refresh();
+</script></body></html>

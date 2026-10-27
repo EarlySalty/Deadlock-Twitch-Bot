@@ -73,6 +73,7 @@ pub mod llm;
 pub mod llm_dispatch;
 pub mod oauth;
 pub mod partner_access;
+pub mod pipeline_migration;
 pub mod posting_plan;
 pub mod preview;
 pub mod produced_video;

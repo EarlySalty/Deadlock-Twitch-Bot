@@ -176,3 +176,14 @@ test('absolute und Daten-Bildquellen bleiben unberuehrt', () => {
   assert.match(html, /src="https:\/\/x\.test\/a\.png"/);
   assert.match(html, /src="\/schon\/absolut\.svg"/);
 });
+
+test('englische Hilfe liegt unter en/ und bleibt beim Einbetten dort', () => {
+  for (const page of UPLINK_HELP_PAGES) {
+    assert.ok(existsSync(join(HELP_ROOT, 'en', page.file)), `en/${page.file} fehlt`);
+  }
+  assert.equal(uplinkHelpUrl('obs.html', 'en'), '/uplink/en/obs.html');
+  assert.equal(uplinkHelpUrl('obs.html', 'de'), '/uplink/obs.html');
+  const html = readFileSync(join(HELP_ROOT, 'en', 'obs.html'), 'utf8');
+  const fragment = extractUplinkMain(html, 'en');
+  assert.doesNotMatch(fragment, /(?:href|src)="\/uplink\/(?!en\/)[^"]+"/);
+});

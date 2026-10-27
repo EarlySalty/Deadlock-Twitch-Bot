@@ -46,6 +46,14 @@
       social:
         "German Deadlock streamers pass their viewers on to each other. No email, password or payment details.",
     },
+    v4: {
+      title:
+        "Your Connection to the German Deadlock Network · German Deadlock Community",
+      description:
+        "The free partner network for German Deadlock streamers on Twitch. Pricing, free trial, cancellation, integrations and public API at a glance. Your viewers remain yours, and one click on Twitch lets you leave.",
+      social:
+        "German Deadlock streamers pass their viewers on to each other. No email, password or payment details.",
+    },
     faq: {
       title: "Reception · Questions about the Twitch bot",
       description:

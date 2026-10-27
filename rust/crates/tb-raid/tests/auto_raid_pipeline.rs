@@ -242,6 +242,7 @@ impl ArrivalReadiness for StubReadiness {
 }
 
 struct StubFallback {
+    languages: Arc<Mutex<Vec<String>>>,
     streams: Vec<FairnessCandidate>,
 }
 #[async_trait::async_trait]
@@ -249,9 +250,10 @@ impl FallbackStreamSource for StubFallback {
     async fn category_streams(
         &self,
         _category_id: &str,
-        _language: &str,
+        language: &str,
         _limit: usize,
     ) -> Result<Vec<FairnessCandidate>, String> {
+        self.languages.lock().unwrap().push(language.to_string());
         Ok(self.streams.clone())
     }
 }
@@ -317,6 +319,7 @@ fn fixed_millis(value: u64) -> MillisSource {
 // ── Aufbau ──
 
 struct Harness {
+    fallback_languages: Arc<Mutex<Vec<String>>>,
     pipeline: AutoRaidPipeline,
     pending: Arc<Mutex<PendingRaidStore>>,
     api: Arc<TargetedRaidApi>,
@@ -378,6 +381,7 @@ fn build_with_enricher(
     let readiness = Arc::new(StubReadiness {
         calls: Mutex::new(Vec::new()),
     });
+    let fallback_languages = Arc::new(Mutex::new(Vec::new()));
     let pipeline = AutoRaidPipeline::new(
         RaidBlacklistStore::new(pool.clone()),
         ScoreStore::new(pool.clone()),
@@ -387,12 +391,14 @@ fn build_with_enricher(
         pending.clone(),
         readiness.clone(),
         Some(Arc::new(StubFallback {
+            languages: fallback_languages.clone(),
             streams: fallback_streams,
         })),
         follower_enricher,
         Some(tb_raid::OutreachBoostStore::new(pool.clone())),
     );
     Harness {
+        fallback_languages,
         pipeline,
         pending,
         api,
@@ -402,6 +408,8 @@ fn build_with_enricher(
 
 fn request(partners: Vec<OnlineCandidate>) -> AutoRaidRequest {
     AutoRaidRequest {
+        language: Some("de".to_string()),
+        out_of_scope_ids: Default::default(),
         broadcaster_id: "100".to_string(),
         broadcaster_login: "quelle".to_string(),
         viewer_count: 42,
@@ -411,6 +419,7 @@ fn request(partners: Vec<OnlineCandidate>) -> AutoRaidRequest {
         offline_trigger_ts: Some(1000.0),
         reason: "auto_raid_on_offline".to_string(),
         respect_soft_raid_blacklist: true,
+        fixed_target: None,
     }
 }
 
@@ -1258,4 +1267,167 @@ async fn fallback_filtert_nicht_partner_weiter_gegen_weiche_blacklist() {
         "der Kategorie-Fallback filtert weiche Blacklist-Eintraege unveraendert"
     );
     assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["600"]);
+}
+
+#[tokio::test]
+async fn category_fallback_and_boost_skip_out_of_scope_partners() {
+    let pool = pool_or_skip!("r1_fallback_scope");
+    seed_source_token(&pool, "100").await;
+    let h = build(
+        &pool,
+        HashMap::new(),
+        vec![
+            fairness("300", "closed_server"),
+            fairness("400", "open_streamer"),
+        ],
+    );
+    let mut req = request(Vec::new());
+    req.out_of_scope_ids = ["300".to_string()].into();
+    assert!(matches!(
+        h.pipeline.run(&req).await,
+        AutoRaidPipelineOutcome::Started { .. }
+    ));
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["400"]);
+    let h = build(
+        &pool,
+        HashMap::new(),
+        vec![fairness("300", "closed_server")],
+    );
+    assert_eq!(
+        h.pipeline.run(&req).await,
+        AutoRaidPipelineOutcome::NoTarget
+    );
+    assert!(h.api.calls.lock().unwrap().is_empty());
+    sqlx::query(
+        "INSERT INTO twitch_partner_outreach (streamer_login, status, contacted_at)
+         VALUES ('closed_server', 'sent', (NOW() - INTERVAL '2 hours')::text)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    seed_score(&pool, "200", 0.9, 1).await;
+    let h = build(
+        &pool,
+        HashMap::new(),
+        vec![fairness("300", "closed_server")],
+    );
+    req.partners = vec![partner("200", "partner")];
+    assert_eq!(
+        h.pipeline.run(&req).await,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "partner".to_string(),
+            is_partner_raid: true,
+        }
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["200"]);
+}
+
+#[tokio::test]
+async fn category_fallback_uses_source_language_and_skips_unknown_language() {
+    let pool = pool_or_skip!("r1_fallback_language");
+    seed_source_token(&pool, "100").await;
+    let h = build(&pool, HashMap::new(), vec![fairness("300", "english")]);
+    let mut req = request(Vec::new());
+    req.language = Some("en".to_string());
+    assert!(matches!(
+        h.pipeline.run(&req).await,
+        AutoRaidPipelineOutcome::Started { .. }
+    ));
+    assert_eq!(*h.fallback_languages.lock().unwrap(), ["en"]);
+    let h = build(&pool, HashMap::new(), vec![fairness("400", "unknown")]);
+    req.language = None;
+    assert_eq!(
+        h.pipeline.run(&req).await,
+        AutoRaidPipelineOutcome::NoTarget
+    );
+    assert!(h.fallback_languages.lock().unwrap().is_empty());
+}
+
+fn fixed(user_id: &str, login: &str) -> tb_raid::target_resolution::ResolvedTarget {
+    tb_raid::target_resolution::ResolvedTarget {
+        user_id: user_id.to_string(),
+        user_login: login.to_string(),
+        started_at: None,
+        is_partner_raid: false,
+        is_outreach_boost: false,
+        candidates_count: 1,
+        target_stream_data: None,
+    }
+}
+
+#[tokio::test]
+async fn wunschziel_ersetzt_auswahl() {
+    let pool = pool_or_skip!("t6w_pipe_fixed_target");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    let h = build(&pool, HashMap::new(), vec![fairness("300", "de_streamer")]);
+    let mut req = request(vec![partner("200", "partner_zu")]);
+    req.fixed_target = Some(fixed("400", "trippymelo"));
+
+    let outcome = h.pipeline.run(&req).await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "trippymelo".to_string(),
+            is_partner_raid: false,
+        }
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["400"]);
+}
+
+#[tokio::test]
+async fn abgelehntes_wunschziel_ohne_ersatz_und_strike() {
+    let pool = pool_or_skip!("t6w_pipe_fixed_target_rejected");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    let errors: HashMap<String, String> = [(
+        "400".to_string(),
+        "HTTP 400: raids are disabled".to_string(),
+    )]
+    .into();
+    let h = build(&pool, errors, vec![fairness("300", "de_streamer")]);
+    let mut req = request(vec![partner("200", "partner_zu")]);
+    req.fixed_target = Some(fixed("400", "trippymelo"));
+
+    let outcome = h.pipeline.run(&req).await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Failed {
+            error: "HTTP 400: raids are disabled".to_string()
+        }
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["400"]);
+    let strikes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_raid_disabled_strikes")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(strikes, 0);
+}
+
+#[tokio::test]
+async fn gebanntes_wunschziel_wird_blockiert() {
+    let pool = pool_or_skip!("t6w_pipe_fixed_target_banned");
+    seed_source_token(&pool, "100").await;
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) \
+         VALUES ('trippymelo', '400')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = build(&pool, HashMap::new(), vec![]);
+    let mut req = request(vec![]);
+    req.fixed_target = Some(fixed("400", "trippymelo"));
+
+    let outcome = h.pipeline.run(&req).await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Blocked {
+            error: "target_blacklisted".to_string()
+        }
+    );
+    assert!(h.api.calls.lock().unwrap().is_empty());
 }

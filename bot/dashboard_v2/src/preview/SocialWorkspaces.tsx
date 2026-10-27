@@ -8,7 +8,7 @@ import {
   type ScheduleQueueApi,
 } from '@/components/socialmedia/autopilot/schedule-queue';
 import { createPublishReviewFixture } from '@/components/socialmedia/autopilot/publish-review/fixtures';
-import { previewWorkspaceState } from './socialWorkspaceFixtures';
+import { previewWorkspaceState, studioPreviewPublish, withStudioPreviewJobs } from './socialWorkspaceFixtures';
 import { SOCIAL_POSTER } from './fixtures';
 
 function createPreviewScheduleApi(): ScheduleQueueApi {
@@ -39,7 +39,7 @@ function createPreviewScheduleApi(): ScheduleQueueApi {
         production_hold: 'empty_pool',
       }),
     };
-  return fixture.api;
+  return withStudioPreviewJobs(fixture.api);
 }
 
 function PreviewImport({
@@ -85,7 +85,11 @@ function PreviewImport({
 export default function SocialWorkspaces(props: SocialMediaProps) {
   const t = useT();
   const [scheduleApi] = useState(createPreviewScheduleApi);
-  const [publishFixture] = useState(createPublishReviewFixture);
+  const [publishFixture] = useState(() => {
+    const snapshot = studioPreviewPublish(createPublishReviewFixture().snapshot());
+    const fixture = new URLSearchParams(window.location.search).get('fixture');
+    return createPublishReviewFixture(fixture === 'idle' ? { ...snapshot, videos: [] } : snapshot);
+  });
   const workspaceSlots = {
     ...props.workspaceSlots,
     libraryImport: props.workspaceSlots?.libraryImport ?? (

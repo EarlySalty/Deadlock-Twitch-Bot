@@ -52,7 +52,7 @@ export interface UsageReport {
 export interface ProcessingControl {
   revision: number;
   paused: boolean;
-  initial_total_cap_micro_usd: 2000000;
+  initial_total_cap_micro_usd: 20000000;
   monthly_cap_micro_usd: number | null;
   updated_at: string;
   updated_by: string;

@@ -43,6 +43,29 @@ test('requires both demo route and demo namespace for effective demo mode', () =
     }),
     true
   );
+
+  assert.equal(
+    runtimeConfigModule.resolveEffectiveDemoMode({
+      pathname: '/twitch/rundgang',
+      runtimeConfig: demoConfig,
+    }),
+    true
+  );
+});
+
+test('maps public tour paths onto live dashboard routes', () => {
+  assert.equal(runtimeConfigModule.isPublicTourPath('/twitch/rundgang'), true);
+  assert.equal(runtimeConfigModule.isPublicTourPath('/twitch/rundgang/analyse'), true);
+  assert.equal(runtimeConfigModule.isAnalyticsDemoPath('/twitch/demo'), true);
+  assert.equal(runtimeConfigModule.isAnalyticsDemoPath('/twitch/rundgang'), false);
+  assert.equal(runtimeConfigModule.livePathFromTourPath('/twitch/rundgang'), '/twitch/dashboard');
+  assert.equal(runtimeConfigModule.livePathFromTourPath('/twitch/rundgang/analyse'), '/twitch/analyse');
+  assert.equal(runtimeConfigModule.livePathFromTourPath('/twitch/rundgang/social-media'), '/twitch/social-media');
+  assert.equal(
+    runtimeConfigModule.tourHref('/twitch/analyse?view=category', '/twitch/rundgang'),
+    '/twitch/rundgang/analyse?view=category',
+  );
+  assert.equal(runtimeConfigModule.tourHref('/twitch/dashboard', '/twitch/analyse'), '/twitch/dashboard');
 });
 
 test('does not treat demoMode alone as a valid demo runtime', () => {

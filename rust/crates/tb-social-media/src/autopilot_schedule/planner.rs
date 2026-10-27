@@ -2,10 +2,13 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
 
-use super::{hold, production_horizon, review_count_on, taken_on, ProductionHold, ScheduleError};
+use super::{
+    failure_count_on, hold, production_horizon, reservations_on, reserve_on, review_count_on,
+    review_required_on, Allocation, Allocator, ProductionHold, ScheduleError, Subject,
+};
 use crate::autopilot_settings::{self, AutopilotSettings, ClipSort};
 
-type ClipBounds = (DateTime<Utc>, DateTime<Utc>);
+pub(super) type ClipBounds = (DateTime<Utc>, DateTime<Utc>);
 
 #[derive(Debug, Default, Serialize)]
 pub struct PlanReport {
@@ -15,7 +18,7 @@ pub struct PlanReport {
     pub production_hold: Option<ProductionHold>,
 }
 
-async fn select_on(
+pub(super) async fn select_on(
     connection: &mut PgConnection,
     owner: &str,
     bounds: ClipBounds,
@@ -26,8 +29,9 @@ async fn select_on(
         WHERE p.twitch_user_id = $1 AND p.game_id = '2132205352'
         AND p.source_created_at >= $2 AND p.source_created_at < $3
         AND p.processed_at IS NULL AND p.published_at IS NULL AND NOT p.legacy_reserved
-        AND NOT EXISTS(SELECT 1 FROM social_production_jobs j WHERE j.clip_id = p.clip_db_id)
-        AND NOT EXISTS(SELECT 1 FROM social_produced_videos v WHERE v.clip_id = p.clip_db_id)
+        AND NOT EXISTS(SELECT 1 FROM social_production_jobs j WHERE j.clip_id = p.clip_db_id
+            AND NOT social_job_releases_clip(j.id))
+        AND NOT social_clip_video_holds(p.clip_db_id)
         AND NOT EXISTS(SELECT 1 FROM twitch_clips_upload_queue q WHERE q.clip_id = p.clip_db_id)
         ORDER BY p.selected_at IS NULL, CASE WHEN $4 THEN p.source_created_at END DESC,
             CASE WHEN NOT $4 THEN p.source_created_at END ASC, p.clip_id ASC
@@ -52,30 +56,34 @@ async fn retime_on(
     .bind(now)
     .fetch_all(&mut *connection)
     .await?;
-    let mut taken = taken_on(connection, owner).await?;
     let mut changed = 0;
     for id in missed {
-        let slot = autopilot_settings::next_shared_slot(now, &taken, settings)?;
-        sqlx::query("UPDATE social_production_jobs SET scheduled_at = $3 WHERE id = $1 AND twitch_user_id = $2")
-            .bind(id).bind(owner).bind(slot).execute(&mut *connection).await?;
-        if let Some(slot) = slot {
-            taken.push(slot);
+        let previous = reservations_on(connection, id).await?;
+        let subject = Subject {
+            job: Some(id),
+            video: None,
+        };
+        let allocator = Allocator::load_for(connection, owner, settings, subject).await?;
+        let allocation = allocator.plan_job(now, &previous)?;
+        reserve_on(connection, owner, id, allocation.as_ref()).await?;
+        if allocation.is_some() {
             changed += 1;
         }
     }
     Ok(changed)
 }
 
-async fn reserve_on(
+async fn create_on(
     connection: &mut PgConnection,
     owner: &str,
     clip: i64,
-    slot: DateTime<Utc>,
+    allocation: &Allocation,
     now: DateTime<Utc>,
 ) -> Result<(), ScheduleError> {
-    sqlx::query("INSERT INTO social_production_jobs (twitch_user_id, clip_id, source, queue_order, scheduled_at)
-        VALUES ($1, $2, 'autopilot', COALESCE((SELECT MAX(queue_order) + 1 FROM social_production_jobs), 1), $3)")
-        .bind(owner).bind(clip).bind(slot).execute(&mut *connection).await?;
+    let job: i64 = sqlx::query_scalar("INSERT INTO social_production_jobs (twitch_user_id, clip_id, source, queue_order, scheduled_at)
+        VALUES ($1, $2, 'autopilot', COALESCE((SELECT MAX(queue_order) + 1 FROM social_production_jobs), 1), $3) RETURNING id")
+        .bind(owner).bind(clip).bind(allocation.reference).fetch_one(&mut *connection).await?;
+    reserve_on(connection, owner, job, Some(allocation)).await?;
     sqlx::query("UPDATE social_clip_pool SET selected_at = COALESCE(selected_at, $3),
         first_selected_at = COALESCE(first_selected_at, $3) WHERE twitch_user_id = $1 AND clip_db_id = $2")
         .bind(owner).bind(clip).bind(now).execute(connection).await?;
@@ -92,6 +100,7 @@ async fn save_report(
         ProductionHold::Disabled => "disabled",
         ProductionHold::Paused => "paused",
         ProductionHold::ReviewBacklog => "review_backlog",
+        ProductionHold::FailureBacklog => "failure_backlog",
         ProductionHold::EmptyPool => "empty_pool",
         ProductionHold::NoSchedule => "no_schedule",
         ProductionHold::OutsideLead => "outside_lead",
@@ -112,21 +121,29 @@ pub async fn plan_owner(
     autopilot_settings::lock_owner(&mut tx, owner).await?;
     let settings = autopilot_settings::load_on(&mut tx, owner).await?;
     let reviews = review_count_on(&mut tx, owner).await?;
+    let failures = failure_count_on(&mut tx, owner).await?;
+    let allocator = Allocator::load_on(&mut tx, owner, &settings).await?;
     let mut report = PlanReport {
-        next_slot: autopilot_settings::next_shared_slot(
-            now,
-            &taken_on(&mut tx, owner).await?,
-            &settings,
-        )?,
+        next_slot: allocator.plan(now)?.map(|plan| plan.reference),
         ..Default::default()
     };
-    report.production_hold = hold(&settings, reviews, report.next_slot, now);
+    let review_required = review_required_on(&mut tx, owner).await?;
+    report.production_hold = hold(
+        &settings,
+        review_required,
+        allocator.has_schedule(),
+        reviews,
+        failures,
+        report.next_slot,
+        now,
+    );
     if matches!(
         report.production_hold,
         Some(
             ProductionHold::Disabled
                 | ProductionHold::Paused
                 | ProductionHold::ReviewBacklog
+                | ProductionHold::FailureBacklog
                 | ProductionHold::NoSchedule
         )
     ) {
@@ -135,17 +152,17 @@ pub async fn plan_owner(
         return Ok(report);
     }
     report.retimed = retime_on(&mut tx, owner, &settings, now).await?;
+    let mut allocator = Allocator::load_on(&mut tx, owner, &settings).await?;
     let window = crate::clip_pool::bounds(&settings, now)
         .map_err(|error| ScheduleError::Invalid(error.to_string()))?;
     let bounds = (window.start, window.end);
-    let mut taken = taken_on(&mut tx, owner).await?;
     let horizon = production_horizon(&settings, now);
     let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM social_production_jobs WHERE twitch_user_id = $1 AND status IN ('queued', 'running')")
         .bind(owner).fetch_one(&mut *tx).await?;
     for _ in pending..500 {
-        let next = autopilot_settings::next_shared_slot(now, &taken, &settings)?;
-        report.next_slot = next;
-        let Some(slot) = next.filter(|slot| *slot <= horizon) else {
+        let next = allocator.plan(now)?;
+        report.next_slot = next.as_ref().map(|plan| plan.reference);
+        let Some(allocation) = next.filter(|plan| plan.reference <= horizon) else {
             report.production_hold = if report.created == 0 && report.retimed == 0 {
                 Some(ProductionHold::OutsideLead)
             } else {
@@ -157,8 +174,8 @@ pub async fn plan_owner(
             report.production_hold = Some(ProductionHold::EmptyPool);
             break;
         };
-        reserve_on(&mut tx, owner, clip, slot, now).await?;
-        taken.push(slot);
+        create_on(&mut tx, owner, clip, &allocation, now).await?;
+        allocator.commit(&allocation);
         report.created += 1;
     }
     save_report(&mut tx, owner, now, &report).await?;

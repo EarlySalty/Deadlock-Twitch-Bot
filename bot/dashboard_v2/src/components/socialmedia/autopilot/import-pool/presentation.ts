@@ -191,17 +191,7 @@ export function selectionAllowed(clip: PoolClip): boolean {
   return clip.selected_at !== null || clip.selectable;
 }
 
-export function clipStatus(clip: PoolClip): string {
-  if (clip.published_at) return "Veröffentlicht";
-  if (clip.processed_at) return "Verarbeitet";
-  if (clip.legacy_reserved) return "Für bestehende Verarbeitung reserviert";
-  if (clip.selected_at) return "Ausgewählt";
-  if (!clip.eligible) return "Außerhalb des gespeicherten Zeitraums";
-  if (!clip.selectable) return "Für Verarbeitung reserviert";
-  return "Auswählbar";
-}
-
-export function sourceMetadata(clip: PoolClip): {
+export function sourceMetadata(clip: Pick<PoolClip, "clip_id" | "source_metadata">): {
   title: string;
   url: string | null;
   duration: number | null;
@@ -234,7 +224,7 @@ export function sourceMetadata(clip: PoolClip): {
   };
 }
 
-export function clipThumbnail(clip: PoolClip): string | null {
+export function clipThumbnail(clip: Pick<PoolClip, "source_metadata">): string | null {
   const metadata =
     clip.source_metadata && typeof clip.source_metadata === "object"
       ? (clip.source_metadata as Record<string, unknown>)
@@ -248,15 +238,6 @@ export function clipThumbnail(clip: PoolClip): string | null {
   } catch {
     return null;
   }
-}
-
-export function clipStatusTone(clip: PoolClip): string {
-  if (clip.published_at) return "success";
-  if (clip.processed_at) return "info";
-  if (clip.legacy_reserved) return "muted";
-  if (clip.selected_at) return "gold";
-  if (!clip.eligible || !clip.selectable) return "muted";
-  return "neutral";
 }
 
 export function clipDuration(seconds: number): string {
@@ -273,5 +254,38 @@ export function localTimestamp(value: string, timezone: string, locale = "de-DE"
     }).format(new Date(value));
   } catch {
     return value;
+  }
+}
+
+function localDay(value: string, timezone: string): string | null {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+    const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? "";
+    return `${part("year")}-${part("month")}-${part("day")}`;
+  } catch {
+    return null;
+  }
+}
+
+export function insideWindow(createdAt: string, preferences: PoolPreferences, now = Date.now()): boolean {
+  if (new Date(createdAt).getTime() > now) return false;
+  const filter = preferences.clip_date_filter;
+  if (filter.kind === "all") return true;
+  const day = localDay(createdAt, preferences.timezone);
+  if (!day) return false;
+  const year = Number(day.slice(0, 4));
+  switch (filter.kind) {
+    case "year":
+      return year === filter.year;
+    case "quarter":
+      return year === filter.year && Math.floor((Number(day.slice(5, 7)) - 1) / 3) + 1 === filter.quarter;
+    case "range":
+      return day >= filter.start && day <= filter.end;
+    case "before":
+      return day < filter.date;
+    case "after":
+      return day > filter.date;
   }
 }

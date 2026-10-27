@@ -14,7 +14,8 @@ use std::collections::BTreeMap;
 use tb_chat::catalog::catalog;
 use tb_chat::command_names::{
     conflicting_command, effective_aliases, effective_name, entry_by_key, key,
-    normalize_custom_name, normalize_saved_name, CommandNameValidationError,
+    normalize_custom_name, normalize_saved_name, primary_names, CommandNameValidationError,
+    ExtraNames, MAX_EXTRA_NAMES,
 };
 
 #[derive(Deserialize, Default)]
@@ -29,6 +30,15 @@ pub struct CommandNameUpdate {
     pub name: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandAliasUpdate {
+    pub command: String,
+    pub aliases: Vec<String>,
+}
+
+type SavedNames = (DbJson<BTreeMap<String, String>>, DbJson<ExtraNames>);
+
 #[derive(Serialize)]
 struct CommandNameView {
     command: &'static str,
@@ -37,6 +47,7 @@ struct CommandNameView {
     custom_name: Option<String>,
     effective_name: String,
     effective_aliases: &'static [&'static str],
+    custom_aliases: Vec<String>,
     group: &'static str,
     group_label: &'static str,
     summary: &'static str,
@@ -82,7 +93,7 @@ fn conflict_error(candidate: &str, conflict: &tb_chat::catalog::CommandInfo) -> 
         .into_response()
 }
 
-fn views(overrides: &BTreeMap<String, String>) -> Vec<CommandNameView> {
+fn views(overrides: &BTreeMap<String, String>, extras: &ExtraNames) -> Vec<CommandNameView> {
     catalog()
         .iter()
         .map(|entry| {
@@ -96,6 +107,7 @@ fn views(overrides: &BTreeMap<String, String>) -> Vec<CommandNameView> {
                 custom_name,
                 effective_name: effective_name(entry, overrides),
                 effective_aliases: effective_aliases(entry, overrides),
+                custom_aliases: stored_aliases(entry, extras),
                 group: entry.group.as_str(),
                 group_label: entry.group.label(),
                 summary: entry.summary,
@@ -113,8 +125,8 @@ pub async fn get_handler(
         Ok(target) => target,
         Err(response) => return response,
     };
-    let saved = sqlx::query_scalar::<_, DbJson<BTreeMap<String, String>>>(
-        "SELECT command_name_overrides FROM streamer_plans
+    let saved = sqlx::query_as::<_, SavedNames>(
+        "SELECT command_name_overrides, command_name_aliases FROM streamer_plans
          WHERE ($2 <> '' AND twitch_user_id = $2)
             OR ($2 = '' AND LOWER(COALESCE(twitch_login, '')) = $1)
          LIMIT 1",
@@ -126,8 +138,10 @@ pub async fn get_handler(
 
     match saved {
         Ok(saved) => {
-            let overrides = saved.map(|value| value.0).unwrap_or_default();
-            Json(json!({"commands": views(&overrides)})).into_response()
+            let (overrides, extras) = saved
+                .map(|(overrides, extras)| (overrides.0, extras.0))
+                .unwrap_or_default();
+            Json(json!({"commands": views(&overrides, &extras)})).into_response()
         }
         Err(error) => db_error(error),
     }
@@ -175,55 +189,27 @@ pub async fn post_handler(
         Ok(tx) => tx,
         Err(error) => return db_error(error),
     };
-
-    if !user_id.is_empty() {
-        if let Err(error) = sqlx::query(
-            "INSERT INTO streamer_plans (twitch_user_id, twitch_login)
-             VALUES ($1, $2)
-             ON CONFLICT (twitch_user_id) DO UPDATE
-             SET twitch_login = COALESCE(streamer_plans.twitch_login, EXCLUDED.twitch_login)",
-        )
-        .bind(&user_id)
-        .bind(&login)
-        .execute(&mut *tx)
-        .await
-        {
-            return db_error(error);
-        }
-    }
-
-    let saved = sqlx::query_scalar::<_, DbJson<BTreeMap<String, String>>>(
-        "SELECT command_name_overrides FROM streamer_plans
-         WHERE ($2 <> '' AND twitch_user_id = $2)
-            OR ($2 = '' AND LOWER(COALESCE(twitch_login, '')) = $1)
-         LIMIT 1
-         FOR UPDATE",
-    )
-    .bind(&login)
-    .bind(&user_id)
-    .fetch_optional(&mut *tx)
-    .await;
-
-    let mut overrides = match saved {
-        Ok(Some(saved)) => saved.0,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error":"no plan row"}))).into_response()
-        }
-        Err(error) => return db_error(error),
+    let (mut overrides, extras) = match lock_names(&mut tx, &login, &user_id).await {
+        Ok(names) => names,
+        Err(response) => return response,
     };
 
     if let Some(candidate) = requested_name.as_deref() {
-        if let Some(conflict) = conflicting_command(command_key, candidate, &overrides) {
+        if let Some(conflict) = conflicting_command(command_key, candidate, &overrides, &extras) {
             return conflict_error(candidate, conflict);
         }
         overrides.insert(command_key.to_string(), candidate.to_string());
     } else {
         for candidate in std::iter::once(entry.name).chain(entry.aliases.iter().copied()) {
-            if let Some(conflict) = conflicting_command(command_key, candidate, &overrides) {
+            if let Some(conflict) = conflicting_command(command_key, candidate, &overrides, &extras)
+            {
                 return conflict_error(candidate, conflict);
             }
         }
         overrides.remove(command_key);
+    }
+    if let Some(taken) = own_extra_overlap(entry, &overrides, &extras) {
+        return conflict_error(&taken, entry);
     }
 
     let result = if !user_id.is_empty() {
@@ -267,6 +253,165 @@ pub async fn post_handler(
     }
 }
 
+async fn lock_names(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    login: &str,
+    user_id: &str,
+) -> Result<(BTreeMap<String, String>, ExtraNames), Response> {
+    if !user_id.is_empty() {
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login)
+             VALUES ($1, $2)
+             ON CONFLICT (twitch_user_id) DO UPDATE
+             SET twitch_login = COALESCE(streamer_plans.twitch_login, EXCLUDED.twitch_login)",
+        )
+        .bind(user_id)
+        .bind(login)
+        .execute(&mut **tx)
+        .await
+        .map_err(db_error)?;
+    }
+    let saved = sqlx::query_as::<_, SavedNames>(
+        "SELECT command_name_overrides, command_name_aliases FROM streamer_plans
+         WHERE ($2 <> '' AND twitch_user_id = $2)
+            OR ($2 = '' AND LOWER(COALESCE(twitch_login, '')) = $1)
+         LIMIT 1
+         FOR UPDATE",
+    )
+    .bind(login)
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db_error)?;
+    match saved {
+        Some((overrides, extras)) => Ok((overrides.0, extras.0)),
+        None => Err((StatusCode::NOT_FOUND, Json(json!({"error":"no plan row"}))).into_response()),
+    }
+}
+
+fn stored_aliases(entry: &tb_chat::catalog::CommandInfo, extras: &ExtraNames) -> Vec<String> {
+    extras.get(key(entry)).cloned().unwrap_or_default()
+}
+
+fn own_extra_overlap(
+    entry: &tb_chat::catalog::CommandInfo,
+    overrides: &BTreeMap<String, String>,
+    extras: &ExtraNames,
+) -> Option<String> {
+    let primary = primary_names(entry, overrides);
+    extras
+        .get(key(entry))?
+        .iter()
+        .find(|name| primary.contains(name))
+        .cloned()
+}
+
+fn requested_aliases(raw: &[String]) -> Result<Vec<String>, Response> {
+    let mut aliases: Vec<String> = Vec::new();
+    for value in raw
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        let alias = normalize_custom_name(value).map_err(validation_error)?;
+        if !aliases.contains(&alias) {
+            aliases.push(alias);
+        }
+    }
+    if aliases.len() > MAX_EXTRA_NAMES {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error":"too_many_aliases",
+                "message": format!("Höchstens {MAX_EXTRA_NAMES} zusätzliche Namen pro Befehl.")
+            })),
+        )
+            .into_response());
+    }
+    Ok(aliases)
+}
+
+pub async fn aliases_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<CommandNameQuery>,
+    body: Result<Json<CommandAliasUpdate>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let (login, user_id) = match resolve_target(&auth, &query.streamer) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let Ok(Json(body)) = body else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid command alias settings"})),
+        )
+            .into_response();
+    };
+    let Some(entry) = entry_by_key(&body.command) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"unknown_command"})),
+        )
+            .into_response();
+    };
+    let command_key = key(entry);
+    let aliases = match requested_aliases(&body.aliases) {
+        Ok(aliases) => aliases,
+        Err(response) => return response,
+    };
+
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(error) => return db_error(error),
+    };
+    let (overrides, mut extras) = match lock_names(&mut tx, &login, &user_id).await {
+        Ok(names) => names,
+        Err(response) => return response,
+    };
+    for alias in &aliases {
+        if let Some(conflict) = conflicting_command(command_key, alias, &overrides, &extras) {
+            return conflict_error(alias, conflict);
+        }
+    }
+    if aliases.is_empty() {
+        extras.remove(command_key);
+    } else {
+        extras.insert(command_key.to_string(), aliases);
+    }
+    if let Some(taken) = own_extra_overlap(entry, &overrides, &extras) {
+        return conflict_error(&taken, entry);
+    }
+
+    let result = sqlx::query(
+        "UPDATE streamer_plans
+         SET command_name_aliases = $3
+         WHERE ($2 <> '' AND twitch_user_id = $2)
+            OR ($2 = '' AND LOWER(COALESCE(twitch_login, '')) = $1)",
+    )
+    .bind(&login)
+    .bind(&user_id)
+    .bind(DbJson(extras.clone()))
+    .execute(&mut *tx)
+    .await;
+
+    match result {
+        Ok(result) if result.rows_affected() > 0 => {
+            if let Err(error) = tx.commit().await {
+                return db_error(error);
+            }
+            Json(json!({
+                "ok": true,
+                "command": command_key,
+                "custom_aliases": stored_aliases(entry, &extras),
+            }))
+            .into_response()
+        }
+        Ok(_) => (StatusCode::NOT_FOUND, Json(json!({"error":"no plan row"}))).into_response(),
+        Err(error) => db_error(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +431,12 @@ mod tests {
         .unwrap();
         sqlx::raw_sql(include_str!(
             "../../../../migrations/20260925191500_add_command_name_overrides.sql"
+        ))
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20261027190000_add_command_name_aliases.sql"
         ))
         .execute(&database.pool)
         .await
@@ -601,6 +752,104 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(foreign["raid"], "!andererraid");
+    }
+
+    async fn save_aliases(
+        pool: &PgPool,
+        command: &str,
+        aliases: &[&str],
+    ) -> (StatusCode, serde_json::Value) {
+        body(
+            aliases_handler(
+                partner("42"),
+                State(pool.clone()),
+                Query(CommandNameQuery::default()),
+                Ok(Json(CommandAliasUpdate {
+                    command: command.into(),
+                    aliases: aliases.iter().map(|alias| alias.to_string()).collect(),
+                })),
+            )
+            .await,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn zusatznamen_speichern_kollidieren_und_leeren() {
+        let database = database().await;
+        let pool = &database.pool;
+
+        let (status, saved) = save_aliases(pool, "discord", &["DC", "", "!discord", "dc"]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(saved["custom_aliases"], json!(["!dc", "!discord"]));
+
+        let (status, conflict) = save_aliases(pool, "clip", &["dc"]).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(conflict["conflict_command"], "discord");
+
+        let rename = post_handler(
+            partner("42"),
+            State(pool.clone()),
+            Query(CommandNameQuery::default()),
+            Ok(Json(CommandNameUpdate {
+                command: "raid".into(),
+                name: Some("discord".into()),
+            })),
+        )
+        .await;
+        assert_eq!(rename.status(), StatusCode::CONFLICT);
+
+        let (status, own) = save_aliases(pool, "clip", &["clip"]).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(own["conflict_command"], "clip");
+        let (status, _) = save_aliases(pool, "clip", &["moment"]).await;
+        assert_eq!(status, StatusCode::OK);
+        let rename_onto_extra = post_handler(
+            partner("42"),
+            State(pool.clone()),
+            Query(CommandNameQuery::default()),
+            Ok(Json(CommandNameUpdate {
+                command: "clip".into(),
+                name: Some("moment".into()),
+            })),
+        )
+        .await;
+        assert_eq!(rename_onto_extra.status(), StatusCode::CONFLICT);
+        let (status, _) = save_aliases(pool, "clip", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, _) = save_aliases(pool, "clip", &["a1", "a2", "a3", "a4", "a5", "a6"]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = save_aliases(pool, "clip", &["mein clip"]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (_, current) = body(
+            get_handler(
+                partner("42"),
+                State(pool.clone()),
+                Query(CommandNameQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        let discord = current["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["command"] == "discord")
+            .unwrap();
+        assert_eq!(discord["custom_aliases"], json!(["!dc", "!discord"]));
+
+        let (status, cleared) = save_aliases(pool, "discord", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(cleared["custom_aliases"], json!([]));
+        let stored: serde_json::Value = sqlx::query_scalar(
+            "SELECT command_name_aliases FROM streamer_plans WHERE twitch_user_id='42'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, json!({}));
     }
 
     #[tokio::test]

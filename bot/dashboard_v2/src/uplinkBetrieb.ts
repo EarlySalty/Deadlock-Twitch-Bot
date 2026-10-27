@@ -92,6 +92,13 @@ export function eingangStatus(session: EingangsSession | null | undefined, unava
   return { label, observation: session.source_observation ?? null };
 }
 
+function enthaeltSteuerzeichen(wert: string): boolean {
+  return Array.from(wert).some((zeichen) => {
+    const code = zeichen.charCodeAt(0);
+    return code <= 0x20 || code === 0x7f;
+  });
+}
+
 export function obsZugang(me: {
   service_status?: string;
   public_ingest_url?: string;
@@ -101,7 +108,7 @@ export function obsZugang(me: {
   if (me.service_status !== 'ready') return null;
   const server = me.public_ingest_url ?? me.ingest_url;
   const key = me.ingest_key;
-  if (!server || !key || !key.trim() || /[\u0000-\u0020\u007f]/.test(key)) return null;
+  if (!server || !key || !key.trim() || enthaeltSteuerzeichen(key)) return null;
   try {
     const url = new URL(server);
     if (url.protocol !== 'rtmps:' || !url.hostname || url.username || url.password

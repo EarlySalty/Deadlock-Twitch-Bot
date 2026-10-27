@@ -659,6 +659,7 @@ pub async fn get_handler(
     // ── Datenblöcke (jeder fehlertolerant) ──────────────────────────────────
     let access_state = access_state_block(&pool, &resolved_login, &resolved_user_id).await;
     let oauth = oauth_block(&pool, &resolved_login, &resolved_user_id).await;
+    let reauth_offered = reauth_offered(&pool, &resolved_user_id).await;
     let kpis = kpis_recent_block(&pool, &resolved_login, since).await;
     let ban = ban_events_block(&pool, &resolved_user_id, since).await;
     let raid_events = raid_events_block(&pool, &resolved_login, &resolved_user_id, since).await;
@@ -747,6 +748,7 @@ pub async fn get_handler(
                 "granted_scopes": oauth.granted_scopes,
                 "missing_scopes": oauth.missing_scopes,
                 "reconnect_url": oauth_reconnect_url,
+                "reauth_offered": reauth_offered,
                 "profile_url": "/twitch/dashboard",
                 "last_checked_at": generated_at,
             },
@@ -1196,6 +1198,35 @@ pub(crate) async fn oauth_block(
                 oauth_needs_reauth: false,
                 oauth_status: "missing".to_string(),
             }
+        }
+    }
+}
+
+const NEW_STREAMER_LOGINS: i32 = 3;
+const NEW_STREAMER_DAYS: i32 = 7;
+
+async fn reauth_offered(pool: &PgPool, resolved_user_id: &str) -> bool {
+    if resolved_user_id.is_empty() {
+        return true;
+    }
+    let sql = r#"
+        SELECT COALESCE((SELECT login_count FROM twitch_dashboard_logins
+                         WHERE twitch_user_id = $1), 0) > $2
+            OR COALESCE((SELECT MIN(created_at::timestamptz) FROM twitch_raid_auth
+                         WHERE TRIM(COALESCE(twitch_user_id, '')) = $1)
+                        < NOW() - make_interval(days => $3), TRUE)
+    "#;
+    match sqlx::query_scalar::<_, bool>(sql)
+        .bind(resolved_user_id)
+        .bind(NEW_STREAMER_LOGINS)
+        .bind(NEW_STREAMER_DAYS)
+        .fetch_one(pool)
+        .await
+    {
+        Ok(offered) => offered,
+        Err(e) => {
+            tracing::warn!("internal-home reauth gate: {e}");
+            true
         }
     }
 }

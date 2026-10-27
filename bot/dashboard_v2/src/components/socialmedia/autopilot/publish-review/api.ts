@@ -1,8 +1,10 @@
 import { fetchJson, withCookieCredentials } from '@/api/core';
 import { fetchAuthStatus } from '@/api/auth';
+import type { TikTokDraft } from '@/api/socialMedia';
 
 export type PublishPlatform = 'youtube' | 'tiktok' | 'instagram';
 export type PublishMode = 'review' | 'full_auto';
+export type ReviewMode = 'review' | 'full_auto' | 'veto_until_deadline';
 export type PendingHandling = 'keep_review' | 'transfer_eligible';
 export type DestinationStatus = 'pending' | 'preparing' | 'effect_started' | 'processing' | 'published' | 'retry' | 'held' | 'uncertain' | 'discarded' | 'failed';
 
@@ -76,10 +78,37 @@ export interface PublishVideo {
   cleanup_error: string | null;
   approvals: { platform: PublishPlatform; state: string; approver_user_id: string | null; decided_at: string | null }[];
   event: PublicationEvent | null;
+  test_job_id?: number | null;
+}
+
+export interface TikTokVersionContext {
+  creator: {
+    creator_username: string;
+    creator_nickname: string;
+    privacy_level_options: string[];
+    comment_disabled: boolean;
+    duet_disabled: boolean;
+    stitch_disabled: boolean;
+    max_video_post_duration_sec: number;
+  };
+  caption: string;
+  duration_seconds: number;
+  approved_video_sha256: string;
+  credential_id: number;
+  platform_user_id: string;
+  produced_video_id: number;
+  music_consent: boolean;
+  draft: TikTokDraft | null;
+  defaults: TikTokDraft | null;
+  bound_options: TikTokVersionOptions | null;
+}
+
+export function fetchTikTokVersion(clipDbId: number, videoId: number, signal?: AbortSignal): Promise<TikTokVersionContext> {
+  return fetchJson(`/twitch/social-media/api/clips/${clipDbId}/tiktok/creator-info?${new URLSearchParams({ produced_video_id: String(videoId) })}`, withCookieCredentials({ cache: 'no-store', signal }));
 }
 
 export interface PublishSnapshot {
-  settings: { publish_mode: PublishMode; paused: boolean; notifications: NotificationPreferences };
+  settings: { publish_mode: PublishMode; review_mode?: ReviewMode; paused: boolean; notifications: NotificationPreferences };
   target_platforms: PublishPlatform[];
   connections: { platform: PublishPlatform; connected: boolean; account_id: string | null }[];
   videos: PublishVideo[];

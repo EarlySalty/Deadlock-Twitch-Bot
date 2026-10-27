@@ -586,3 +586,503 @@ async fn explicit_retry_resets_unfinished_ai_attempts_without_losing_checkpoints
     assert_eq!(resumed.status, "queued");
     cleanup(pool).await;
 }
+
+#[tokio::test]
+async fn discarding_a_reviewed_test_run_returns_the_clip_to_the_pool() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let id = clip(&pool, "owner", "test-run", utc("2025-01-01T00:00:00Z")).await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    assert_eq!(run.clip_id, id);
+    sqlx::query("UPDATE social_production_jobs SET status = 'completed' WHERE id = $1")
+        .bind(run.job_id)
+        .execute(&pool)
+        .await
+        .expect("test job complete");
+    let video: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at)
+        VALUES ('owner', $1, $2, 'static', 'review', '/fixture/test.mp4', 1000, clock_timestamp() + INTERVAL '7 days') RETURNING id")
+        .bind(id).bind(run.job_id).fetch_one(&pool).await.expect("test review");
+    sqlx::query("INSERT INTO social_media_clip_approval (produced_video_id, platform, state) VALUES ($1, 'youtube', 'awaiting_approval')")
+        .bind(video)
+        .execute(&pool)
+        .await
+        .expect("pending approval");
+    let processed: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT processed_at FROM social_clip_pool WHERE clip_db_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("processed before discard");
+    assert!(processed.is_some());
+    discard_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect("discard");
+    let (processed, selected): (Option<DateTime<Utc>>, Option<DateTime<Utc>>) = sqlx::query_as(
+        "SELECT processed_at, selected_at FROM social_clip_pool WHERE clip_db_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("pool row");
+    assert_eq!((processed, selected), (None, None));
+    let approvals: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM social_media_clip_approval WHERE produced_video_id = $1",
+    )
+    .bind(video)
+    .fetch_one(&pool)
+    .await
+    .expect("approval count");
+    assert_eq!(approvals, 0);
+    let holds: bool = sqlx::query_scalar("SELECT social_clip_video_holds($1)")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .expect("clip hold");
+    assert!(!holds);
+    let managed: bool = sqlx::query_scalar(
+        "UPDATE twitch_clips_social_media SET game_id = '2132205352', clip_title = 'touched'
+        WHERE id = $1 RETURNING pool_managed_at IS NOT NULL",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("clip row write after discard");
+    assert!(managed);
+    let processed: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT processed_at FROM social_clip_pool WHERE clip_db_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("processed after clip write");
+    assert_eq!(processed, None);
+    let again = start_test_run(&pool, "owner").await.expect("second run");
+    assert_eq!(again.clip_id, id);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn discarding_a_revised_test_run_rejects_every_version_and_frees_the_clip() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let id = clip(&pool, "owner", "test-revision", utc("2025-01-01T00:00:00Z")).await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    sqlx::query("UPDATE social_production_jobs SET status = 'completed' WHERE id = $1")
+        .bind(run.job_id)
+        .execute(&pool)
+        .await
+        .expect("test job complete");
+    let parent: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at, metadata)
+        VALUES ('owner', $1, $2, 'ai', 'rejected', '/fixture/parent.mp4', 1000, clock_timestamp() + INTERVAL '7 days',
+            jsonb_build_object('production_ai_job_id', $2::bigint)) RETURNING id")
+        .bind(id).bind(run.job_id).fetch_one(&pool).await.expect("superseded parent");
+    let revision: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at, parent_version_id, version_no, metadata)
+        VALUES ('owner', $1, NULL, 'ai', 'review', '/fixture/revision.mp4', 1000, clock_timestamp() + INTERVAL '7 days', $3, 2,
+            jsonb_build_object('production_ai_job_id', $2::bigint, 'manual_ai_job_id', 1)) RETURNING id")
+        .bind(id).bind(run.job_id).bind(parent).fetch_one(&pool).await.expect("revision version");
+    sqlx::query("UPDATE social_produced_videos SET metadata = metadata || jsonb_build_object('superseded_by', $2::bigint) WHERE id = $1")
+        .bind(parent)
+        .bind(revision)
+        .execute(&pool)
+        .await
+        .expect("supersede parent");
+    let active = snapshot(&pool, "owner").await.expect("snapshot").test_run;
+    assert_eq!(active.and_then(|run| run.video_id), Some(revision));
+    discard_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect("discard revised test run");
+    let revived: String = sqlx::query_scalar(
+        "UPDATE social_produced_videos SET status = 'review' WHERE id = $1 RETURNING status",
+    )
+    .bind(revision)
+    .fetch_one(&pool)
+    .await
+    .expect("late revision write");
+    assert_eq!(revived, "rejected");
+    let (processed, selected): (Option<DateTime<Utc>>, Option<DateTime<Utc>>) = sqlx::query_as(
+        "SELECT processed_at, selected_at FROM social_clip_pool WHERE clip_db_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("pool row");
+    assert_eq!((processed, selected), (None, None));
+    assert!(snapshot(&pool, "owner")
+        .await
+        .expect("snapshot")
+        .test_run
+        .is_none());
+    let again = start_test_run(&pool, "owner").await.expect("second run");
+    assert_eq!(again.clip_id, id);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn retrying_a_failed_test_run_requeues_the_same_clip() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let id = clip(&pool, "owner", "retry-failed", utc("2025-01-01T00:00:00Z")).await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    sqlx::query(
+        "UPDATE social_production_jobs SET status = 'failed', stage = 'failed',
+        last_error = 'Der Clip konnte nicht von Twitch geladen werden.', finished_at = NOW()
+        WHERE id = $1",
+    )
+    .bind(run.job_id)
+    .execute(&pool)
+    .await
+    .expect("failed test");
+    sqlx::query("UPDATE social_clip_pool SET selected_at = NULL WHERE clip_db_id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("unpin");
+    let again = retry_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect("retry");
+    assert_eq!(again.job_id, run.job_id);
+    assert_eq!(again.clip_id, id);
+    assert_eq!(again.status, "queued");
+    assert_eq!(again.stage, "queued");
+    assert_eq!(again.last_error, None);
+    let selected: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT selected_at FROM social_clip_pool WHERE clip_db_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("pin");
+    assert!(selected.is_some());
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn retrying_a_review_without_video_requeues_the_clip() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let id = clip(&pool, "owner", "retry-review", utc("2025-01-01T00:00:00Z")).await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    sqlx::query(
+        "UPDATE social_production_jobs SET status = 'review', stage = 'review',
+        last_error = 'Die erlaubten Versuche sind aufgebraucht.', finished_at = NOW()
+        WHERE id = $1",
+    )
+    .bind(run.job_id)
+    .execute(&pool)
+    .await
+    .expect("review without video");
+    let again = retry_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect("retry empty review");
+    assert_eq!(again.job_id, run.job_id);
+    assert_eq!(again.clip_id, id);
+    assert_eq!(again.status, "queued");
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn retrying_a_failed_test_resets_stage_attempts_and_keeps_checkpoints() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    clip(
+        &pool,
+        "owner",
+        "retry-attempts",
+        utc("2025-01-01T00:00:00Z"),
+    )
+    .await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    sqlx::query(
+        "UPDATE social_production_jobs SET status = 'failed', stage = 'failed',
+        last_error = 'Der KI-Dienst ist derzeit nicht verfügbar.', finished_at = NOW(),
+        metadata = metadata || '{\"retry_after\":\"2035-01-01T00:00:00Z\",\"static\":{\"stale\":true},\"ai_editor\":{\"checkpoints\":{\"preparing\":{\"kept\":true}},\"attempts\":{\"preparing\":1,\"analyzing\":2}}}'::jsonb
+        WHERE id = $1",
+    )
+    .bind(run.job_id)
+    .execute(&pool)
+    .await
+    .expect("exhausted analyzing");
+    retry_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect("retry exhausted stage");
+    let metadata: String =
+        sqlx::query_scalar("SELECT metadata::text FROM social_production_jobs WHERE id = $1")
+            .bind(run.job_id)
+            .fetch_one(&pool)
+            .await
+            .expect("state");
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).expect("json");
+    let state = &metadata["ai_editor"];
+    assert!(metadata.get("static").is_none());
+    assert!(metadata.get("retry_after").is_none());
+    assert_eq!(state["attempts"], serde_json::json!({"preparing": 1}));
+    assert_eq!(
+        state["checkpoints"]["preparing"]["kept"],
+        serde_json::json!(true)
+    );
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn retrying_a_test_with_a_review_video_is_rejected() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let id = clip(&pool, "owner", "retry-ready", utc("2025-01-01T00:00:00Z")).await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    sqlx::query("UPDATE social_production_jobs SET status = 'completed' WHERE id = $1")
+        .bind(run.job_id)
+        .execute(&pool)
+        .await
+        .expect("complete");
+    sqlx::query(
+        "INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at)
+        VALUES ('owner', $1, $2, 'static', 'review', '/fixture/ready.mp4', 1000, clock_timestamp() + INTERVAL '7 days')",
+    )
+    .bind(id)
+    .bind(run.job_id)
+    .execute(&pool)
+    .await
+    .expect("review video");
+    let error = retry_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect_err("video stays in review");
+    assert!(matches!(error, ScheduleError::Invalid(_)));
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn retrying_a_queued_or_superseded_test_run_is_rejected() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    clip(&pool, "owner", "retry-old", utc("2025-01-01T00:00:00Z")).await;
+    let newer_clip = clip(&pool, "owner", "retry-new", utc("2025-01-02T00:00:00Z")).await;
+    let run = start_test_run(&pool, "owner").await.expect("test run");
+    let error = retry_test_run(&pool, "owner", run.job_id)
+        .await
+        .expect_err("queued run keeps its attempts");
+    assert!(matches!(&error, ScheduleError::Invalid(text) if text.contains("wartet schon")));
+    sqlx::query(
+        "UPDATE social_production_jobs SET status = 'failed', stage = 'failed', attempts = 2,
+        finished_at = NOW() WHERE id = $1",
+    )
+    .bind(run.job_id)
+    .execute(&pool)
+    .await
+    .expect("failed test");
+    let newer = job(&pool, "owner", newer_clip, None).await;
+    for status in ["queued", "running"] {
+        sqlx::query(
+            "UPDATE social_production_jobs SET source = 'test', status = $2, mode = 'static',
+            started_at = NOW() WHERE id = $1",
+        )
+        .bind(newer.id)
+        .bind(status)
+        .execute(&pool)
+        .await
+        .expect("newer test run");
+        let error = retry_test_run(&pool, "owner", run.job_id)
+            .await
+            .expect_err("newer run wins");
+        assert!(
+            matches!(&error, ScheduleError::Invalid(text) if text.contains("neuerer Testlauf"))
+        );
+    }
+    let (status, attempts): (String, i32) =
+        sqlx::query_as("SELECT status, attempts FROM social_production_jobs WHERE id = $1")
+            .bind(run.job_id)
+            .fetch_one(&pool)
+            .await
+            .expect("old run");
+    assert_eq!((status.as_str(), attempts), ("failed", 2));
+    cleanup(pool).await;
+}
+
+async fn parked(pool: &PgPool, clip_id: i64, source: &str, status: &str, reason: &str) -> i64 {
+    let created = job(pool, "owner", clip_id, None).await;
+    sqlx::query(
+        "UPDATE social_production_jobs SET source = $2, status = $3, stage = $3,
+        review_reasons = jsonb_build_array($4::text), finished_at = NOW()
+        WHERE id = $1",
+    )
+    .bind(created.id)
+    .bind(source)
+    .bind(status)
+    .bind(reason)
+    .execute(pool)
+    .await
+    .expect("parked job");
+    created.id
+}
+
+async fn job_state(pool: &PgPool, id: i64) -> (String, String, Option<String>) {
+    sqlx::query_as("SELECT status, stage, last_error FROM social_production_jobs WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("job state")
+}
+
+async fn clip_status(pool: &PgPool, id: i64) -> String {
+    sqlx::query_scalar("SELECT status FROM twitch_clips_social_media WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("clip status")
+}
+
+async fn selected_at(pool: &PgPool, id: i64) -> Option<DateTime<Utc>> {
+    sqlx::query_scalar("SELECT selected_at FROM social_clip_pool WHERE clip_db_id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("pool entry")
+}
+
+async fn planner_pick(pool: &PgPool) -> Option<i64> {
+    let mut tx = pool.begin().await.expect("planner transaction");
+    let bounds = (utc("2025-01-01T00:00:00Z"), utc("2026-01-01T00:00:00Z"));
+    let pick = planner::select_on(&mut tx, "owner", bounds, ClipSort::OldestFirst)
+        .await
+        .expect("planner selection");
+    tx.rollback().await.expect("planner rollback");
+    pick
+}
+
+#[tokio::test]
+async fn clear_legacy_review_jam_only_clears_legacy_reviews_without_video() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    sqlx::query(
+        "INSERT INTO social_pipeline_cutover (twitch_user_id, state, migration_version)
+        VALUES ('owner', 'unified', 1)
+        ON CONFLICT (twitch_user_id) DO UPDATE SET state = 'unified'",
+    )
+    .execute(&pool)
+    .await
+    .expect("unified owner");
+    let source = crate::ai_editor::AiEditorError::Source.to_string();
+    let attempts = crate::ai_editor::AiEditorError::Attempts.to_string();
+    let consent = crate::ai_editor::AiEditorError::Consent.to_string();
+    let names = [
+        "legacy-autopilot",
+        "legacy-test",
+        "failed-test",
+        "failed-autopilot",
+        "consent-hold",
+        "unsuitable-hold",
+        "ready",
+        "legacy-code",
+    ];
+    let mut clips = Vec::with_capacity(names.len());
+    for (index, name) in names.into_iter().enumerate() {
+        let created = utc(&format!("2025-01-0{}T00:00:00Z", index + 1));
+        clips.insert(index, clip(&pool, "owner", name, created).await);
+    }
+    let legacy_autopilot = parked(&pool, clips[0], "autopilot", "review", &source).await;
+    let legacy_test = parked(&pool, clips[1], "test", "review", &attempts).await;
+    let failed_test = parked(&pool, clips[2], "test", "failed", &source).await;
+    let failed_autopilot = parked(&pool, clips[3], "autopilot", "failed", &source).await;
+    let consent_hold = parked(&pool, clips[4], "autopilot", "review", &consent).await;
+    let unsuitable_hold = parked(
+        &pool,
+        clips[5],
+        "autopilot",
+        "review",
+        crate::production_jobs::UNSUITABLE_REASON,
+    )
+    .await;
+    let ready = parked(&pool, clips[6], "autopilot", "review", &source).await;
+    let legacy_code = parked(
+        &pool,
+        clips[7],
+        "autopilot",
+        "review",
+        "static_production_failed",
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at)
+        VALUES ('owner', $1, $2, 'static', 'review', '/fixture/ready.mp4', 1000, clock_timestamp() + INTERVAL '7 days')",
+    )
+    .bind(clips[6])
+    .bind(ready)
+    .execute(&pool)
+    .await
+    .expect("ready video");
+    sqlx::query(
+        "UPDATE twitch_clips_social_media SET status = 'awaiting_approval' WHERE id = ANY($1)",
+    )
+    .bind([clips[0], clips[6]].as_slice())
+    .execute(&pool)
+    .await
+    .expect("legacy approval status");
+    sqlx::query("UPDATE social_clip_pool SET selected_at = NOW() WHERE clip_db_id = ANY($1)")
+        .bind(clips.as_slice())
+        .execute(&pool)
+        .await
+        .expect("pin all");
+    let untouched = [
+        failed_test,
+        failed_autopilot,
+        consent_hold,
+        unsuitable_hold,
+        ready,
+    ];
+    let mut before = Vec::with_capacity(untouched.len());
+    for (index, id) in untouched.into_iter().enumerate() {
+        before.insert(index, job_state(&pool, id).await);
+    }
+
+    assert_eq!(planner_pick(&pool).await, None);
+
+    let report = crate::pipeline_migration::clear_legacy_review_jam(&pool)
+        .await
+        .expect("clear jam");
+    assert_eq!(planner_pick(&pool).await, Some(clips[0]));
+    assert_eq!(report.jobs_cleared, 3);
+    assert_eq!(report.clips_unpinned, 3);
+    assert_eq!(report.awaiting_returned, 1);
+    assert_eq!(
+        job_state(&pool, legacy_autopilot).await,
+        (
+            "cancelled".into(),
+            "cleared_no_video".into(),
+            Some(source.clone())
+        )
+    );
+    assert_eq!(
+        job_state(&pool, legacy_test).await,
+        ("failed".into(), "failed".into(), Some(attempts.clone()))
+    );
+    assert_eq!(
+        job_state(&pool, legacy_code).await,
+        (
+            "cancelled".into(),
+            "cleared_no_video".into(),
+            Some("static_production_failed".into())
+        )
+    );
+    for (id, state) in untouched.into_iter().zip(before) {
+        assert_eq!(job_state(&pool, id).await, state);
+    }
+    assert_eq!(clip_status(&pool, clips[0]).await, "pool");
+    assert_eq!(clip_status(&pool, clips[6]).await, "awaiting_approval");
+    assert!(selected_at(&pool, clips[0]).await.is_none());
+    assert!(selected_at(&pool, clips[1]).await.is_none());
+    assert!(selected_at(&pool, clips[7]).await.is_none());
+    for id in &clips[2..7] {
+        assert!(selected_at(&pool, *id).await.is_some());
+    }
+
+    let again = crate::pipeline_migration::clear_legacy_review_jam(&pool)
+        .await
+        .expect("idempotent");
+    assert_eq!(again, Default::default());
+
+    retry_test_run(&pool, "owner", legacy_test)
+        .await
+        .expect("legacy test run can be retried");
+    assert_eq!(
+        job_state(&pool, legacy_test).await,
+        ("queued".into(), "queued".into(), None)
+    );
+    cleanup(pool).await;
+}

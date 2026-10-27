@@ -365,7 +365,11 @@ async fn tick_ordnen_rename_snapshot_per_user_id_zu_und_schreibt_live_state() {
     .unwrap();
     assert_eq!(
         state,
-        ("new_login".to_string(), Some(1), Some("Deadlock".to_string()))
+        (
+            "new_login".to_string(),
+            Some(1),
+            Some("Deadlock".to_string())
+        )
     );
 }
 
@@ -416,11 +420,12 @@ async fn tick_verarbeitet_andere_kanaele_trotz_fehlgeschlagenem_rename() {
             .unwrap()
             .flatten();
     // Kanal A bleibt unangetastet, statt fälschlich als offline zu gelten.
-    let a_login: String =
-        sqlx::query_scalar("SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = '520300019'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let a_login: String = sqlx::query_scalar(
+        "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = '520300019'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     assert_eq!((drag_live, a_login.as_str()), (Some(1), "old_login"));
 }
@@ -1225,11 +1230,31 @@ async fn deadlock_live_cleart_inaktivitaetsflag_ohne_admin_archiv() {
     let engine = engine_with(&pool, source.clone(), hooks.clone());
     source.set_streams(vec![live_stream("sleepy", "422", "s-sleepy", 7)]);
     engine.tick().await;
+    assert_eq!(
+        hooks.auto_unarchive.load(Ordering::SeqCst),
+        0,
+        "ein einzelner Deadlock-Stream reicht nicht zur Reaktivierung"
+    );
+
+    let now = Utc::now();
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, game_name, had_deadlock_in_session)
+         VALUES ('sleepy', $1, $1, 'Deadlock', true),
+                ('sleepy', $2, $2, 'Deadlock', true),
+                ('sleepy', $3, $3, 'Deadlock', true)",
+    )
+    .bind((now - Duration::days(2)).to_rfc3339())
+    .bind((now - Duration::days(9)).to_rfc3339())
+    .bind((now - Duration::days(20)).to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+    engine.tick().await;
 
     assert_eq!(
         hooks.auto_unarchive.load(Ordering::SeqCst),
         1,
-        "Deadlock-Live soll nur das Inaktivitaetsflag clearen"
+        "vier Deadlock-Tage in 30 Tagen clearen nur das Inaktivitaetsflag"
     );
     assert_eq!(
         hooks.auto_archive.load(Ordering::SeqCst),
@@ -1239,36 +1264,49 @@ async fn deadlock_live_cleart_inaktivitaetsflag_ohne_admin_archiv() {
 }
 
 #[tokio::test]
-async fn archive_candidates_ignoriert_kuerzlich_aktive_nicht_deadlock_streamer() {
-    let pool = pool_or_skip!("t4c_archive_recent_any_game");
+async fn archive_candidates_markiert_unter_vier_deadlock_tagen_in_60_tagen() {
+    let pool = pool_or_skip!("t4c_archive_deadlock_window");
     let now = Utc::now();
-    let cutoff = now - Duration::days(10);
+    let since = now - Duration::days(60);
     sqlx::query(
         "INSERT INTO twitch_streamers_partner_state
             (twitch_login, twitch_user_id, is_partner_active, is_partner, operational_state)
-         VALUES ('variety', '423', 1, 1, 'active')",
+         VALUES ('variety', '423', 1, 1, 'active'),
+                ('regular', '424', 1, 1, 'active'),
+                ('newbie', '425', 1, 1, 'active')",
     )
     .execute(&pool)
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, game_name)
+        "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, game_name, had_deadlock_in_session)
          VALUES
-            ('variety', $1, $1, 'Deadlock'),
-            ('variety', $2, $2, 'Just Chatting')",
+            ('variety', $1, $1, 'Deadlock', true),
+            ('variety', $2, $2, 'Deadlock', true),
+            ('variety', $3, $3, 'Deadlock', true),
+            ('variety', $4, $4, 'Deadlock', true),
+            ('variety', $6, $6, 'Just Chatting', false),
+            ('regular', $1, $1, 'Deadlock', true),
+            ('regular', $2, $2, 'Deadlock', true),
+            ('regular', $3, $3, 'Deadlock', true),
+            ('regular', $4, $4, 'Deadlock', true),
+            ('regular', $5, $5, 'Deadlock', true),
+            ('newbie', $3, $3, 'Deadlock', true),
+            ('newbie', $6, $6, 'Just Chatting', false)",
     )
+    .bind((now - Duration::days(70)).to_rfc3339())
+    .bind((now - Duration::days(45)).to_rfc3339())
     .bind((now - Duration::days(30)).to_rfc3339())
+    .bind((now - Duration::days(15)).to_rfc3339())
+    .bind((now - Duration::days(5)).to_rfc3339())
     .bind((now - Duration::days(1)).to_rfc3339())
     .execute(&pool)
     .await
     .unwrap();
 
     let candidates = TrackedStore::new(pool)
-        .archive_candidates("Deadlock", cutoff)
+        .archive_candidates("Deadlock", since, 4)
         .await
         .unwrap();
-    assert!(
-        candidates.is_empty(),
-        "kuerzlich aktive Nicht-Deadlock-Streamer sind keine Inaktivitaetskandidaten"
-    );
+    assert_eq!(candidates, vec!["variety".to_string()]);
 }

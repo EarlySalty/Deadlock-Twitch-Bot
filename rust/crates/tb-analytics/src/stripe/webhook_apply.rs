@@ -120,6 +120,9 @@ pub fn plan_name_from_id(plan_id: &str) -> &'static str {
     match plan_id.trim() {
         "plus" => "plus",
         "pro" => "pro",
+        "studio" => "studio",
+        "studio_ki" => "studio_ki",
+        "studio_cut" => "studio_cut",
         "raid_boost" => "raid_boost",
         "analysis_dashboard" => "analysis",
         "bundle_analysis_raid_boost" => "bundle",
@@ -839,6 +842,9 @@ mod tests {
         // Aktueller Katalog: die bezahlten Stufen stehen unter eigener ID.
         assert_eq!(plan_name_from_id("plus"), "plus");
         assert_eq!(plan_name_from_id("pro"), "pro");
+        assert_eq!(plan_name_from_id("studio"), "studio");
+        assert_eq!(plan_name_from_id("studio_ki"), "studio_ki");
+        assert_eq!(plan_name_from_id("studio_cut"), "studio_cut");
         assert_eq!(plan_name_from_id("free"), "free");
         // Bestandsschutz: Alt-IDs aus laufenden Abos bleiben abgebildet.
         assert_eq!(plan_name_from_id("raid_boost"), "raid_boost");

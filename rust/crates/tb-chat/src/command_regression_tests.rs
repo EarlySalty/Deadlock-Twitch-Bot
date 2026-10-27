@@ -405,7 +405,12 @@ async fn regression_raid_status_letzter_fehlgeschlagen_trotz_frueherem_erfolg() 
 struct ErrorCommandPorts;
 #[async_trait]
 impl RaidCommandPort for ErrorCommandPorts {
-    async fn manual_raid(&self, _: &str, _: &str) -> Result<RaidStartResult, String> {
+    async fn manual_raid(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<RaidStartResult, String> {
         Err("test unavailable".into())
     }
     async fn raid_status(&self, _: &str) -> Result<RaidStatusInfo, String> {

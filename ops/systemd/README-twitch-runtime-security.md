@@ -12,7 +12,8 @@ Alle drei sind weder in `sudo` noch in `docker`. Nur das Medienverzeichnis
 als root-eigenes, nicht beschreibbares Release unter `/opt/deadlock/twitch`.
 `UMask=0007` lässt Dateien im setgid-Medienordner für beide Dienste lesbar;
 die privaten Zustandswurzeln gehören weiterhin jeweils nur einem Dienstkonto.
-Bot und Coaching-Audit teilen ausschließlich den root-eigenen, nicht
+Bot, Dashboard (yt-dlp für den Clip-Download) und Coaching-Audit teilen
+ausschließlich den root-eigenen, nicht
 beschreibbaren STT-Werkzeugbaum über die Gruppe `twitchstt`; Daten- und
 Secret-Verzeichnisse sind darüber nicht erreichbar.
 

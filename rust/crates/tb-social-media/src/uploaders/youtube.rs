@@ -884,16 +884,16 @@ impl YouTubeUploader {
             return Err(UploadError::NotAuthenticated);
         }
         self.validate_video(video_path)?;
-        self.pruefe_shorts_eignung(video_path).await?;
+        let short = self.pruefe_shorts_eignung(video_path).await?;
         let groesse = tokio::fs::metadata(video_path).await?.len();
         if groesse == 0 {
             return Err(UploadError::Validation(format!(
                 "Videodatei ist leer: {video_path}"
             )));
         }
-        let body = baue_snippet(title, description, hashtags)?;
+        let body = baue_snippet(title, description, hashtags, short)?;
 
-        let (sitzung, mut offset) = match session.filter(|s| !s.is_empty()) {
+        let (mut sitzung, mut offset) = match session.filter(|s| !s.is_empty()) {
             Some(uri) => match self.resumable_offset(uri, groesse).await? {
                 ResumeStand::Fertig(video_id) => {
                     return Ok(ShortsUpload {
@@ -910,6 +910,7 @@ impl YouTubeUploader {
             None => (self.sitzung_starten(&body, groesse, "video/mp4").await?, 0),
         };
         self.melde_fortschritt(&sitzung, offset);
+        let mut neu_begonnen = false;
 
         loop {
             if offset >= groesse {
@@ -919,10 +920,33 @@ impl YouTubeUploader {
                     "YouTube upload: vollstaendig uebertragen, aber ohne Video-ID".to_string(),
                 ));
             }
-            match self
+            let ergebnis = match self
                 .upload_chunk(&sitzung, Path::new(video_path), offset)
-                .await?
+                .await
             {
+                Ok(ergebnis) => ergebnis,
+                Err(fehler) if !neu_begonnen => {
+                    match self.resumable_offset(&sitzung, groesse).await {
+                        Ok(ResumeStand::Verfallen) => {
+                            tracing::info!(video_path, "Upload-Sitzung verfallen, beginne neu");
+                            neu_begonnen = true;
+                            sitzung = self.sitzung_starten(&body, groesse, "video/mp4").await?;
+                            offset = 0;
+                            self.melde_fortschritt(&sitzung, offset);
+                            continue;
+                        }
+                        Ok(ResumeStand::Fertig(video_id)) => {
+                            return Ok(ShortsUpload {
+                                video_id,
+                                session_uri: sitzung.clone(),
+                            })
+                        }
+                        _ => return Err(fehler),
+                    }
+                }
+                Err(fehler) => return Err(fehler),
+            };
+            match ergebnis {
                 ChunkOutcome::Fertig(video_id) => {
                     return Ok(ShortsUpload {
                         video_id,
@@ -946,7 +970,7 @@ impl YouTubeUploader {
     /// drei Minuten und hochkant. Laesst sich das nicht feststellen (ffprobe
     /// fehlt, Datei unlesbar), bleibt es bei einer Warnung; ein fehlendes
     /// Werkzeug darf keinen Upload verhindern.
-    async fn pruefe_shorts_eignung(&self, video_path: &str) -> Result<(), UploadError> {
+    async fn pruefe_shorts_eignung(&self, video_path: &str) -> Result<bool, UploadError> {
         let ausgabe = tokio::process::Command::new(&self.ffprobe)
             .args([
                 "-v",
@@ -966,7 +990,7 @@ impl YouTubeUploader {
                 Ok(v) => v,
                 Err(fehler) => {
                     tracing::warn!(video_path, %fehler, "ffprobe-Ausgabe unlesbar, Shorts-Pruefung uebersprungen");
-                    return Ok(());
+                    return Ok(true);
                 }
             },
             Ok(out) => {
@@ -975,11 +999,11 @@ impl YouTubeUploader {
                     meldung = %String::from_utf8_lossy(&out.stderr).trim(),
                     "ffprobe meldet einen Fehler, Shorts-Pruefung uebersprungen"
                 );
-                return Ok(());
+                return Ok(true);
             }
             Err(fehler) => {
                 tracing::warn!(video_path, %fehler, "ffprobe nicht ausfuehrbar, Shorts-Pruefung uebersprungen");
-                return Ok(());
+                return Ok(true);
             }
         };
 
@@ -1000,9 +1024,13 @@ impl YouTubeUploader {
         if breite > 0.0 && hoehe > 0.0 {
             let verhaeltnis = breite / hoehe;
             if verhaeltnis > 1.0 {
-                return Err(UploadError::Validation(format!(
-                    "Video ist im Querformat ({breite:.0}x{hoehe:.0}), Shorts brauchen Hochformat (9:16)"
-                )));
+                tracing::info!(
+                    video_path,
+                    breite,
+                    hoehe,
+                    "Querformat, Upload als normales Video statt als Short"
+                );
+                return Ok(false);
             }
             if (verhaeltnis - SHORTS_ZIEL_VERHAELTNIS).abs() > 0.05 {
                 tracing::warn!(
@@ -1013,7 +1041,7 @@ impl YouTubeUploader {
                 );
             }
         }
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -1042,12 +1070,17 @@ fn iso_dauer(text: &str) -> Option<i64> {
 
 /// Baut den `snippet`/`status`-Teil des Upload-Bodys und lehnt ab, was YouTube
 /// ohnehin mit einem 400 zurueckweisen wuerde.
-fn baue_snippet(title: &str, description: &str, hashtags: &[String]) -> Result<Value, UploadError> {
+fn baue_snippet(
+    title: &str,
+    description: &str,
+    hashtags: &[String],
+    short: bool,
+) -> Result<Value, UploadError> {
     let mut snippet = Map::new();
     snippet.insert("title".to_string(), json!(bereinige_titel(title)?));
     snippet.insert(
         "description".to_string(),
-        json!(baue_beschreibung(description, hashtags)),
+        json!(baue_beschreibung(description, hashtags, short)),
     );
     let tags = tags_im_zeichenbudget(hashtags, TAGS_MAX_CHARS);
     if !tags.is_empty() {
@@ -1092,8 +1125,13 @@ pub(crate) fn tags_im_zeichenbudget(hashtags: &[String], budget: usize) -> Vec<S
 
 /// Baut die Beschreibung so, dass `#Shorts` die Kuerzung ueberlebt: erst den
 /// Rumpf auf das verbleibende Budget kuerzen, dann den Anhang dransetzen.
-fn baue_beschreibung(description: &str, hashtags: &[String]) -> String {
+fn baue_beschreibung(description: &str, hashtags: &[String], short: bool) -> String {
     let rumpf = bereinige_text(&format!("{description}\n\n{}", format_hashtags(hashtags)));
+    if !short {
+        return truncate_bytes(&rumpf, DESCRIPTION_MAX_BYTES)
+            .trim_end()
+            .to_string();
+    }
     let platz = DESCRIPTION_MAX_BYTES.saturating_sub(SHORTS_SUFFIX.len());
     format!(
         "{}{SHORTS_SUFFIX}",
@@ -1659,6 +1697,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(id, "yt-123");
+    }
+
+    #[tokio::test]
+    async fn verfallene_sitzung_beginnt_einmal_neu() {
+        let server = MockServer::start().await;
+        let alt = format!("{}/session/alt", server.uri());
+        let neu = format!("{}/session/neu", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/videos"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Location", alt.as_str()))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/videos"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Location", neu.as_str()))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/session/alt"))
+            .respond_with(ResponseTemplate::new(410))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/session/neu"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "yt-neu" })))
+            .mount(&server)
+            .await;
+        let up = uploader(&server);
+        let video = temp_video().await;
+        let fertig = up
+            .upload_short_resumable(&video, "Titel", "Desc", &[], None)
+            .await
+            .unwrap();
+        assert_eq!(fertig.video_id, "yt-neu");
+        assert_eq!(fertig.session_uri, neu);
+        let inits = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method.as_str() == "POST")
+            .count();
+        assert_eq!(inits, 2);
+    }
+
+    #[tokio::test]
+    async fn verfallene_sitzung_wird_nur_einmal_neu_begonnen() {
+        let server = MockServer::start().await;
+        let alt = format!("{}/session/immer-weg", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/videos"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Location", alt.as_str()))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/session/immer-weg"))
+            .respond_with(ResponseTemplate::new(410))
+            .mount(&server)
+            .await;
+        let up = uploader(&server);
+        let video = temp_video().await;
+        let fehler = up
+            .upload_short_resumable(&video, "Titel", "Desc", &[], None)
+            .await
+            .unwrap_err();
+        assert!(matches!(fehler, UploadError::Api(_)));
     }
 
     // Der Shorts-Pfad meldet die benutzte Sitzung nach aussen und schreibt den
@@ -2246,7 +2351,7 @@ mod tests {
     #[test]
     fn beschreibung_behaelt_shorts_anhang() {
         let lang = "ä".repeat(6000); // 12000 Bytes, doppelt so viel wie erlaubt
-        let text = baue_beschreibung(&lang, &["deadlock".into()]);
+        let text = baue_beschreibung(&lang, &["deadlock".into()], true);
         assert!(
             text.ends_with(SHORTS_SUFFIX),
             "der Shorts-Anhang muss ueberleben"
@@ -2260,9 +2365,27 @@ mod tests {
         assert!(std::str::from_utf8(text.as_bytes()).is_ok());
     }
 
+    #[tokio::test]
+    async fn querformat_wird_normales_video_statt_abgelehnt() {
+        use std::os::unix::fs::PermissionsExt;
+        let ffprobe =
+            std::env::temp_dir().join(format!("tb_youtube_ffprobe_{}.sh", std::process::id()));
+        std::fs::write(
+            &ffprobe,
+            "#!/bin/sh\nprintf '%s\\n' '{\"streams\":[{\"width\":1920,\"height\":1080,\"duration\":\"11\"}]}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&ffprobe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let up = YouTubeUploader::new("tok").with_ffprobe(ffprobe.to_string_lossy());
+        let video = temp_video().await;
+        assert!(!up.pruefe_shorts_eignung(&video).await.unwrap());
+        assert!(!baue_beschreibung("Clip", &[], false).contains("#Shorts"));
+        let _ = std::fs::remove_file(&ffprobe);
+    }
+
     #[test]
     fn beschreibung_ohne_spitze_klammern() {
-        let text = baue_beschreibung("Gruss <3 an <alle>", &[]);
+        let text = baue_beschreibung("Gruss <3 an <alle>", &[], true);
         assert!(!text.contains('<') && !text.contains('>'));
         assert!(text.contains("Gruss 3 an alle"));
     }
@@ -2300,9 +2423,9 @@ mod tests {
 
     #[test]
     fn snippet_laesst_leere_tags_weg() {
-        let ohne = baue_snippet("Titel", "Desc", &[]).unwrap();
+        let ohne = baue_snippet("Titel", "Desc", &[], true).unwrap();
         assert!(ohne["snippet"].get("tags").is_none());
-        let mit = baue_snippet("Titel", "Desc", &["deadlock".into()]).unwrap();
+        let mit = baue_snippet("Titel", "Desc", &["deadlock".into()], true).unwrap();
         assert_eq!(mit["snippet"]["tags"], json!(["deadlock"]));
     }
 

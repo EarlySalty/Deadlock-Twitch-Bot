@@ -52,8 +52,6 @@ const MAX_ATTEMPTS: usize = 3;
 const STRIKE_BLACKLIST_THRESHOLD: i32 = 2;
 /// Cooldown für den Fairness-Fallback (Python `recent_raid_cooldown_days = 7`).
 const RECENT_RAID_COOLDOWN_DAYS: i32 = 7;
-/// Sprache + Limit des Kategorie-Fallbacks (Python `language="de", limit=50`).
-const FALLBACK_LANGUAGE: &str = "de";
 const FALLBACK_LIMIT: usize = 50;
 
 /// Port: Live-Streams der Ziel-Kategorie für den Fairness-Fallback
@@ -323,8 +321,10 @@ pub struct AutoRaidRequest {
     pub stream_duration_sec: i32,
     /// Online-Partner nach Deadlock-Eligibility-Filter.
     pub partners: Vec<OnlineCandidate>,
-    /// Kategorie-ID für den DE-Fallback (None → kein Fallback).
+    /// Kategorie-ID für den Sprach-Fallback (None → kein Fallback).
     pub category_id: Option<String>,
+    pub language: Option<String>,
+    pub out_of_scope_ids: HashSet<String>,
     /// Unix-Zeitpunkt des Offline-Triggers (für Arrival-Latenz-Metriken).
     pub offline_trigger_ts: Option<f64>,
     /// History-Grund, z. B. `auto_raid_on_offline`.
@@ -332,6 +332,7 @@ pub struct AutoRaidRequest {
     /// Auto-Raids respektieren die weiche Raid-Blacklist; manuelle Raids nur
     /// harte globale Bans.
     pub respect_soft_raid_blacklist: bool,
+    pub fixed_target: Option<ResolvedTarget>,
 }
 
 /// Ergebnis eines Pipeline-Laufs (Python Status-Dict).
@@ -513,7 +514,8 @@ impl AutoRaidPipeline {
             }
         };
 
-        let mut exclude_ids: HashSet<String> = [req.broadcaster_id.clone()].into();
+        let mut exclude_ids: HashSet<String> = req.out_of_scope_ids.clone();
+        exclude_ids.insert(req.broadcaster_id.clone());
         // Fallback-Streams werden lazy geholt und über Versuche gecacht
         // (Python `cached_de_streams`).
         let mut cached_fallback: Option<Vec<FairnessCandidate>> = None;
@@ -522,24 +524,44 @@ impl AutoRaidPipeline {
             .as_ref()
             .map(|service| service.next_flow_id("raid"));
 
+        if let Some(target) = &req.fixed_target {
+            if hard_blacklist_ids.contains(&target.user_id)
+                || hard_blacklist_logins.contains(&target.user_login.to_lowercase())
+            {
+                tracing::info!(
+                    from = %req.broadcaster_login,
+                    to = %target.user_login,
+                    "Raid-Wunschziel ist global gesperrt"
+                );
+                return AutoRaidPipelineOutcome::Blocked {
+                    error: "target_blacklisted".to_string(),
+                };
+            }
+        }
+
         for attempt in 1..=MAX_ATTEMPTS {
             let attempt_start = Instant::now();
-            let target = match self
-                .resolve_target(
-                    req,
-                    &scores,
-                    raider_class,
-                    &boost_logins,
-                    &hard_blacklist_ids,
-                    &hard_blacklist_logins,
-                    &full_blacklist_ids,
-                    &full_blacklist_logins,
-                    &exclude_ids,
-                    &mut cached_fallback,
-                    attempt,
-                )
-                .await
-            {
+            let resolved = match &req.fixed_target {
+                Some(target) if attempt == 1 => Some(target.clone()),
+                Some(_) => None,
+                None => {
+                    self.resolve_target(
+                        req,
+                        &scores,
+                        raider_class,
+                        &boost_logins,
+                        &hard_blacklist_ids,
+                        &hard_blacklist_logins,
+                        &full_blacklist_ids,
+                        &full_blacklist_logins,
+                        &exclude_ids,
+                        &mut cached_fallback,
+                        attempt,
+                    )
+                    .await
+                }
+            };
+            let target = match resolved {
                 Some(target) => target,
                 None => {
                     if let Some(flow_id) = observability_flow_id.as_deref() {
@@ -709,11 +731,16 @@ impl AutoRaidPipeline {
                 }
                 RaidOutcome::Failed(error) => {
                     exclude_ids.insert(target.user_id.clone());
-                    if !is_retryable_raid_error(&error) {
+                    if req.fixed_target.is_some() || !is_retryable_raid_error(&error) {
+                        let decision = if req.fixed_target.is_some() {
+                            "fixed_target_failed"
+                        } else {
+                            "non_retryable"
+                        };
                         self.emit_raid_observability_event(
                             &flow_id,
                             "raid_failed",
-                            "non_retryable",
+                            decision,
                             req,
                             Some(&target),
                             raid_failed_details(
@@ -731,7 +758,8 @@ impl AutoRaidPipeline {
                             to = %target.user_login,
                             attempt,
                             %error,
-                            "Raid mit nicht-wiederholbarem Fehler fehlgeschlagen"
+                            decision,
+                            "Raid fehlgeschlagen ohne weiteren Versuch"
                         );
                         return AutoRaidPipelineOutcome::Failed { error };
                     }
@@ -931,13 +959,12 @@ impl AutoRaidPipeline {
         let (Some(fallback), Some(category_id)) = (&self.fallback, &req.category_id) else {
             return;
         };
-        tracing::info!(
-            from = %req.broadcaster_login,
-            attempt,
-            "Hole Deadlock-DE-Kategorie-Streams (Boost/Fallback)"
-        );
+        let Some(language) = req.language.as_deref() else {
+            return;
+        };
+        tracing::info!(from = %req.broadcaster_login, attempt, language, "Loading category streams");
         let streams = match fallback
-            .category_streams(category_id, FALLBACK_LANGUAGE, FALLBACK_LIMIT)
+            .category_streams(category_id, language, FALLBACK_LIMIT)
             .await
         {
             Ok(streams) => streams,

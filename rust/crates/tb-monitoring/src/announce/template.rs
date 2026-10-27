@@ -706,7 +706,7 @@ pub struct OfflineComponentsContext<'a> {
     pub channel_avatar_url: Option<&'a str>,
     pub target_game: &'a str,
     pub started_at: Option<DateTime<Utc>>,
-    pub now: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
 }
 
 /// Offline-/VOD-Components V2. Der Button bleibt Broker-Sache und wird hier
@@ -733,10 +733,10 @@ pub fn build_offline_components(context: OfflineComponentsContext<'_>) -> Value 
         ),
         context.channel_avatar_url.unwrap_or(""),
     )];
-    if let Some(started_at) = context.started_at {
+    if let (Some(started_at), Some(ended_at)) = (context.started_at, context.ended_at) {
         children.push(v2_text_display(format!(
             "🎮 {game}   ·   ⏱ Stream lief **{}**",
-            fmt_duration(started_at, context.now)
+            fmt_duration(started_at, ended_at)
         )));
     }
     children.push(v2_separator());
@@ -1082,7 +1082,7 @@ mod tests {
 
     #[test]
     fn offline_components_v2_enthalten_gold_container_thumbnail_stats_preview_und_hinweis() {
-        let now = parse_dt_utc("2026-06-09T18:00:00Z").unwrap();
+        let ended_at = parse_dt_utc("2026-06-09T18:00:00Z");
         let started_at = parse_dt_utc("2026-06-09T17:00:00Z");
         let components = build_offline_components(OfflineComponentsContext {
             display_name: "Drag",
@@ -1092,7 +1092,7 @@ mod tests {
             channel_avatar_url: Some("https://avatar/drag.png"),
             target_game: "Deadlock",
             started_at,
-            now,
+            ended_at,
         });
         let components = components.as_array().expect("components array");
         assert_eq!(components.len(), 1);
@@ -1125,6 +1125,22 @@ mod tests {
             children[4]["content"],
             "-# Die Aufzeichnung gibt's über den Button — solange Twitch sie hält."
         );
+    }
+
+    #[test]
+    fn offline_components_ohne_bekanntes_stream_ende_zeigen_keine_laufzeit() {
+        let components = build_offline_components(OfflineComponentsContext {
+            display_name: "Drag",
+            last_title: Some("Letzter Titel"),
+            last_game: Some("Deadlock"),
+            preview_image_url: None,
+            channel_avatar_url: None,
+            target_game: "Deadlock",
+            started_at: parse_dt_utc("2026-06-09T17:00:00Z"),
+            ended_at: None,
+        });
+        let rendered = components.to_string();
+        assert!(!rendered.contains("Stream lief"));
     }
 
     #[test]

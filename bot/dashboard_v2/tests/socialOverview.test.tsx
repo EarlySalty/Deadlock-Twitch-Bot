@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 (globalThis as { React?: typeof React }).React = React;
@@ -102,4 +103,50 @@ test('empty overview exposes incomplete data instead of asserting an all-clear',
     const partial = renderToStaticMarkup(<PipelineOverview data={{ ...complete(), [failure]: true }} now={now} onNavigate={() => {}} />);
     assert.match(partial, /class="studio-overview-notice" role="status"/);
   }
+});
+
+function renderHeute(data: StudioOverviewData) {
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+  return renderToStaticMarkup(
+    <QueryClientProvider client={client}>
+      <PipelineOverview data={data} now={Date.parse('2026-10-14T12:00:00Z')} onNavigate={() => {}} testRunApi={createScheduleQueueFixture().api} />
+    </QueryClientProvider>,
+  );
+}
+
+test('failed test run shows the error and retry on Heute instead of a fake wait', () => {
+  const data = complete();
+  data.schedule!.test_run = {
+    job_id: 1, clip_id: 45, clip_title: 'He got Deletet', status: 'failed', stage: 'failed',
+    mode: 'ai', last_error: 'Der Clip konnte nicht von Twitch geladen werden.', video_id: null, video_status: null,
+  };
+  const html = renderHeute(data);
+  assert.match(html, /Der Clip konnte nicht von Twitch geladen werden/);
+  assert.match(html, /Erneut versuchen/);
+  assert.match(html, /Test verwerfen/);
+  assert.doesNotMatch(html, /wartet auf deine Entscheidung/);
+  assert.doesNotMatch(html, /Gerade läuft nichts/);
+});
+
+test('review without a produced video is a failure, not a decision wait', () => {
+  const data = complete();
+  data.schedule!.test_run = {
+    job_id: 1, clip_id: 45, clip_title: 'He got Deletet', status: 'review', stage: 'review',
+    mode: 'ai', last_error: 'Die erlaubten Versuche sind aufgebraucht.', video_id: null, video_status: null,
+  };
+  const html = renderHeute(data);
+  assert.match(html, /Die erlaubten Versuche sind aufgebraucht/);
+  assert.match(html, /Erneut versuchen/);
+  assert.doesNotMatch(html, /wartet auf deine Entscheidung/);
+});
+
+test('a produced test video still waits for a decision', () => {
+  const data = complete();
+  data.schedule!.test_run = {
+    job_id: 1, clip_id: 45, clip_title: 'Fertiger Test', status: 'review', stage: 'review',
+    mode: 'ai', last_error: null, video_id: 9, video_status: 'review',
+  };
+  const html = renderHeute(data);
+  assert.match(html, /wartet auf deine Entscheidung/);
+  assert.doesNotMatch(html, /Erneut versuchen/);
 });

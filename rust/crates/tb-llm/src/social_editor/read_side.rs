@@ -13,6 +13,7 @@ pub struct JobUsage {
     pub output_tokens: Option<i64>,
     pub estimated_provider_cost_usd: Option<f64>,
     pub provider_latency_ms: Option<i64>,
+    pub subscription_included: bool,
 }
 
 pub async fn consent_allowed(pool: &PgPool, twitch_user_id: &str) -> Result<(), EditorError> {
@@ -56,11 +57,13 @@ pub async fn job_usage(
     let row = sqlx::query("SELECT COUNT(*)::bigint AS attempts,
         COUNT(*) FILTER (WHERE attempt_state NOT IN ('succeeded','failed') OR attempt_state IS NULL)::bigint AS unfinished,
         COUNT(*) FILTER (WHERE tokens_in IS NULL OR tokens_in < 0 OR tokens_out IS NULL OR tokens_out < 0)::bigint AS unknown_tokens,
-        COUNT(*) FILTER (WHERE estimated_micro_usd IS NULL OR estimated_micro_usd < 0 OR cost_basis IS DISTINCT FROM 'usage_priced_estimate')::bigint AS unknown_cost,
+        COUNT(*) FILTER (WHERE cache_creation_input_tokens IS NULL OR cache_creation_input_tokens < 0 OR cache_read_input_tokens IS NULL OR cache_read_input_tokens < 0)::bigint AS unknown_cache,
+        COUNT(*) FILTER (WHERE estimated_micro_usd IS NULL OR estimated_micro_usd < 0 OR cost_basis IS NULL OR cost_basis NOT IN ('usage_priced_estimate','provider_rejected_unbilled','subscription_included'))::bigint AS unknown_cost,
         COUNT(*) FILTER (WHERE latency_ms IS NULL OR latency_ms < 0)::bigint AS unknown_latency,
+        COUNT(*) FILTER (WHERE cost_basis = 'subscription_included')::bigint AS subscription,
         CASE WHEN COUNT(DISTINCT provider) = 1 AND COUNT(provider) = COUNT(*) THEN MIN(provider) END AS provider,
         CASE WHEN COUNT(DISTINCT model) = 1 AND COUNT(model) = COUNT(*) THEN MIN(model) END AS model,
-        SUM(tokens_in::numeric)::text AS input_tokens,
+        SUM(tokens_in::numeric + cache_creation_input_tokens::numeric + cache_read_input_tokens::numeric)::text AS input_tokens,
         SUM(tokens_out::numeric)::text AS output_tokens,
         SUM(estimated_micro_usd::numeric)::text AS estimated,
         SUM(latency_ms::numeric)::text AS latency
@@ -93,7 +96,7 @@ pub async fn job_usage(
         input_tokens: bounded_sum(
             &row,
             "input_tokens",
-            complete && unknown("unknown_tokens")? == 0,
+            complete && unknown("unknown_tokens")? == 0 && unknown("unknown_cache")? == 0,
         )?,
         output_tokens: bounded_sum(
             &row,
@@ -111,5 +114,6 @@ pub async fn job_usage(
             "latency",
             complete && unknown("unknown_latency")? == 0,
         )?,
+        subscription_included: complete && unknown("subscription")? == count,
     })
 }

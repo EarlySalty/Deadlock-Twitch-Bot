@@ -148,3 +148,39 @@ fn pool_api_rejects_unowned_settings_fields_and_maps_storage_failures_to_server_
         StatusCode::INTERNAL_SERVER_ERROR
     );
 }
+
+#[tokio::test]
+async fn canonical_policy_handlers_require_authenticated_owner_scope() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://localhost/twitch_test")
+        .expect("lazy pool");
+    assert_eq!(
+        pipeline_policy_get_handler(DashboardAuthLevel::None, State(pool.clone()), query(None))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        pipeline_policy_put_handler(
+            DashboardAuthLevel::None,
+            State(pool),
+            query(None),
+            Json(tb_social_media::autopilot_settings::PipelinePolicy::default())
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(
+        serde_json::from_value::<tb_social_media::autopilot_settings::PipelinePolicy>(
+            json!({"enabled":true})
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<tb_social_media::autopilot_settings::PipelinePolicy>(
+            json!({"twitch_user_id":"99"})
+        )
+        .is_err()
+    );
+}

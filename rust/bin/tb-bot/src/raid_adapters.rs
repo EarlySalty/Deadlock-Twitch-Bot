@@ -23,11 +23,18 @@ pub struct HelixRaidApi {
 #[async_trait::async_trait]
 impl RaidApi for HelixRaidApi {
     async fn start_raid_classified(
-        &self, from_id: &str, to_id: &str, token: &str,
+        &self,
+        from_id: &str,
+        to_id: &str,
+        token: &str,
     ) -> Result<(), tb_raid::raid_executor::RaidStartError> {
-        use tb_transport_twitch::raid::RaidStartOutcome;
         use tb_raid::raid_executor::RaidStartError;
-        match self.helix.start_raid_with_status(from_id, to_id, token).await {
+        use tb_transport_twitch::raid::RaidStartOutcome;
+        match self
+            .helix
+            .start_raid_with_status(from_id, to_id, token)
+            .await
+        {
             Ok(RaidStartOutcome::Started) => Ok(()),
             Ok(RaidStartOutcome::Rejected { status, message }) => Err(RaidStartError {
                 message,
@@ -61,7 +68,7 @@ impl RaidApi for HelixRaidApi {
     }
 }
 
-/// Wandelt einen Helix-Stream in einen Fairness-Kandidaten des DE-Fallbacks.
+/// Wandelt einen Helix-Stream in einen Fairness-Kandidaten des Sprach-Fallbacks.
 /// Follower werden hier bewusst NICHT geholt (bis zu 50 Streams → 50 Calls) —
 /// `followers_total` startet auf [`FOLLOWERS_UNKNOWN`] und wird erst für den
 /// **gefilterten** Pool per [`HelixFollowerEnricher`] angereichert (Python
@@ -524,10 +531,11 @@ impl tb_internal_api::ManualRaidPort for ManualRaidAdapter {
         &self,
         broadcaster_id: &str,
         broadcaster_login: &str,
+        target_login: Option<&str>,
     ) -> serde_json::Value {
         let response = self
             .handler
-            .start_manual_raid(broadcaster_id, broadcaster_login)
+            .start_manual_raid(broadcaster_id, broadcaster_login, target_login)
             .await;
         serde_json::to_value(&response).unwrap_or_else(|error| {
             tracing::error!(%error, "Manual-Raid-Antwort nicht serialisierbar");

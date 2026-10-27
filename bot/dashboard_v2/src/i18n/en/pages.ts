@@ -1,4 +1,13 @@
 export const PAGES_EN: Record<string, string> = {
+  "Follow-Hinweis für neue Zuschauer": "Follow reminder for new viewers",
+  "Schreibt jemand zum ersten Mal in deinen Chat und folgt dir noch nicht, bittet der Bot ihn einmal um einen Follow. Höchstens alle 90 Sekunden.": "When someone chats in your channel for the first time and does not follow you yet, the bot asks them once to follow. At most every 90 seconds.",
+  "Aus. Der Bot bittet neue Zuschauer nicht um einen Follow.": "Off. The bot does not ask new viewers to follow.",
+  "Eigene Nachricht": "Custom message",
+  "Nachricht speichern": "Save message",
+  "Zu lang für den Twitch-Chat, sobald die Namen eingesetzt sind.": "Too long for Twitch chat once the names are filled in.",
+  "Die Nachricht ist zu lang.": "The message is too long.",
+  "{user} wird durch den Namen ersetzt. Ohne {user} setzt der Bot den Namen an den Anfang. Leer lassen für den Standardtext.": "{user} is replaced with the name. Without {user} the bot puts the name at the start. Leave empty for the default text.",
+  "Vorschau:": "Preview:",
   " (freiwillig)": " (optional)",
   "/ 4000 Zeichen": "/ 4000 characters",
   "5 bis 60 Sekunden, Standard: 60 Sekunden. Am Streamanfang oder Streamende kann Twitch einen kürzeren Clip liefern.": "5 to 60 seconds, default: 60 seconds. Twitch may return a shorter clip at the start or end of a stream.",

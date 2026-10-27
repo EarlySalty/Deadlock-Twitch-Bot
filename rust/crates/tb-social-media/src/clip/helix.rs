@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use tb_transport_twitch::{HelixClient, HelixError};
@@ -160,6 +160,19 @@ impl HelixClipSource {
     pub async fn fetch_user_id(&self, login: &str) -> Result<Option<String>, HelixError> {
         let users = self.client.get_users(&[login]).await?;
         Ok(users.get(&login.to_lowercase()).map(|u| u.id.clone()))
+    }
+
+    pub async fn fetch_game_names(
+        &self,
+        game_ids: &[String],
+    ) -> Result<HashMap<String, String>, HelixError> {
+        if game_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let params: Vec<(&str, &str)> = game_ids.iter().map(|id| ("id", id.as_str())).collect();
+        let req = self.client.get("/games").await?.query(&params);
+        let resp: serde_json::Value = req.send().await?.error_for_status()?.json().await?;
+        Ok(parse_game_names(&resp))
     }
 
     /// Fetcht eine Seite Clips für einen Broadcaster im 14-Tage-Fenster.
@@ -339,6 +352,20 @@ fn parse_historical_page(
         raw_count: raw.len(),
         next_cursor,
     })
+}
+
+fn parse_game_names(response: &serde_json::Value) -> HashMap<String, String> {
+    response
+        .get("data")
+        .and_then(|data| data.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|game| {
+            let id = game.get("id")?.as_str()?;
+            let name = game.get("name")?.as_str()?.trim();
+            (!id.is_empty() && !name.is_empty()).then(|| (id.to_owned(), name.to_owned()))
+        })
+        .collect()
 }
 
 fn parse_clip(v: &serde_json::Value, broadcaster_id: &str) -> Option<ClipRecord> {

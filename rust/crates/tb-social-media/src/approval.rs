@@ -46,6 +46,8 @@ pub enum ApprovalError {
     /// Deutsch da.
     #[error("only_paused_platforms: {0}")]
     NurPausiertePlattformen(String),
+    #[error("pipeline_unified")]
+    PipelineUnified,
     #[error("db: {0}")]
     Db(#[from] sqlx::Error),
 }
@@ -193,13 +195,22 @@ pub async fn ensure_approval_row(pool: &PgPool, clip_db_id: i32) -> ApprovalReco
         })
 }
 
-/// Setzt den Clip (zurück) auf „wartet auf Freigabe" (Python
-/// `mark_clip_awaiting_approval`; ersetzt den Orchestrator-Stub).
-pub async fn mark_clip_awaiting_approval(pool: &PgPool, clip_db_id: i32) {
-    if !crate::clip_pool::legacy_automatic_allowed(pool, i64::from(clip_db_id))
+async fn legacy_pipeline_open(pool: &PgPool, clip_db_id: i32) -> Result<bool, sqlx::Error> {
+    let mut connection = pool.acquire().await?;
+    crate::pipeline_migration::legacy_writer_open(&mut connection, i64::from(clip_db_id)).await
+}
+
+async fn legacy_automation_allowed(pool: &PgPool, clip_db_id: i32) -> bool {
+    crate::clip_pool::legacy_automatic_allowed(pool, i64::from(clip_db_id))
         .await
         .unwrap_or(false)
-    {
+        && legacy_pipeline_open(pool, clip_db_id)
+            .await
+            .unwrap_or(false)
+}
+
+pub async fn mark_clip_awaiting_approval(pool: &PgPool, clip_db_id: i32) {
+    if !legacy_automation_allowed(pool, clip_db_id).await {
         return;
     }
     ensure_approval_row(pool, clip_db_id).await;
@@ -432,10 +443,7 @@ async fn auto_platforms(pool: &PgPool, clip_db_id: i32) -> Vec<String> {
 /// Wird am Ende der Enrichment-Pipeline aufgerufen. Im Modus `manual` passiert
 /// hier nichts, der Clip bleibt in `awaiting_approval` liegen.
 pub async fn auto_approve_if_allowed(pool: &PgPool, clip_db_id: i32) -> Vec<String> {
-    if !crate::clip_pool::legacy_automatic_allowed(pool, i64::from(clip_db_id))
-        .await
-        .unwrap_or(false)
-    {
+    if !legacy_automation_allowed(pool, clip_db_id).await {
         return Vec::new();
     }
     if !posting_plan::auto_schedule_allowed(pool, i64::from(clip_db_id)).await {
@@ -478,6 +486,9 @@ pub async fn handle_decision(
         return Err(ApprovalError::ClipNotFound(clip_db_id));
     }
     let decision = normalize_decision(decision);
+    if decision == DECISION_APPROVE && !legacy_pipeline_open(pool, clip_db_id).await? {
+        return Err(ApprovalError::PipelineUnified);
+    }
     let selected = normalize_platforms(approved_platforms.iter().cloned());
 
     let mut nicht_eingeplant: Vec<String> = Vec::new();
@@ -613,10 +624,7 @@ async fn enqueue_approved_platform(
 }
 
 pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(String, i64)> {
-    if !crate::clip_pool::legacy_automatic_allowed(pool, i64::from(clip_db_id))
-        .await
-        .unwrap_or(false)
-    {
+    if !legacy_automation_allowed(pool, clip_db_id).await {
         return Vec::new();
     }
     if !clip_exists(pool, clip_db_id).await {
@@ -926,7 +934,7 @@ mod tests {
         for ddl in [
             "CREATE TABLE twitch_clips_social_media (twitch_user_id TEXT DEFAULT '42', id SERIAL PRIMARY KEY, status TEXT DEFAULT 'pending', uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ, produced_video_id BIGINT)",
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
         ] {

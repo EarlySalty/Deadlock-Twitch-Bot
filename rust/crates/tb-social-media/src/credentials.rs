@@ -16,7 +16,7 @@ use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher};
 
 /// Plattformen mit Social-Media-Anbindung (Python-Reihenfolge).
-pub const PLATFORMS: [&str; 3] = ["tiktok", "youtube", "instagram"];
+pub const PLATFORMS: [&str; 4] = ["tiktok", "youtube", "youtube_vod", "instagram"];
 
 /// Entschlüsselte Plattform-Credentials.
 #[derive(Debug, Clone)]
@@ -109,6 +109,19 @@ impl CredentialManager {
             .await
             .ok()
             .flatten()
+    }
+
+    pub async fn vod_platform_for_id(
+        &self,
+        twitch_user_id: &str,
+    ) -> Result<&'static str, sqlx::Error> {
+        let dedicated: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM social_media_platform_auth WHERE platform = 'youtube_vod' AND twitch_user_id = $1 AND enabled = 1)",
+        )
+        .bind(twitch_user_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(if dedicated { "youtube_vod" } else { "youtube" })
     }
 
     async fn get_credentials_scoped(
@@ -692,7 +705,7 @@ mod tests {
         seed(&pool, &c, "youtube", None, "yt-access", None).await;
         let mgr = CredentialManager::new(pool, c);
         let status = mgr.get_all_platforms_status(None).await.unwrap();
-        assert_eq!(status.len(), 3);
+        assert_eq!(status.len(), PLATFORMS.len());
         let yt = status.iter().find(|s| s.platform == "youtube").unwrap();
         assert!(yt.connected);
         let tk = status.iter().find(|s| s.platform == "tiktok").unwrap();

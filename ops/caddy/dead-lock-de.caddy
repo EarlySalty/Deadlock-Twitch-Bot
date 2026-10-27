@@ -32,7 +32,7 @@
 		Speculation-Rules `"/brand/speculation.json"`
 	}
 
-	@non_demo_embed not path /demo/twitch/demo /demo/twitch/demo/* /streamer /streamer/* /clips /clips/* /analyse /analyse/* /social-media /social-media/* /twitch/social-media /twitch/social-media/* /social-media-admin /social-media-admin/* /twitch/dashboard /twitch/dashboard/* /twitch/dashboard-v2 /twitch/dashboard-v2/* /twitch/analyse /twitch/analyse/* /twitch/verwaltung /twitch/verwaltung/* /twitch/hilfe /twitch/hilfe/* /twitch/feedback /twitch/feedback/* /twitch/uplink /twitch/uplink/* /twitch/connect /twitch/connect/* /twitch/titel /twitch/titel/* /twitch/legal/access /twitch/legal/verify /coaching /coaching/* /patch /patch/* /patchnotes /patchnotes/* /turnier /turnier/* /yoshi/* /twitch/overlay /twitch/overlay/* /twitch/pause-loop /uplink/dock /uplink/dock/* /twitch/pricing /twitch/pricing/* /twitch/caster-overlay /twitch/kategorie /twitch/kategorie/* /twitch/challenges /twitch/challenges/*
+	@non_demo_embed not path /demo/twitch/demo /demo/twitch/demo/* /streamer /streamer/* /clips /clips/* /analyse /analyse/* /social-media /social-media/* /twitch/social-media /twitch/social-media/* /social-media-admin /social-media-admin/* /twitch/dashboard /twitch/dashboard/* /twitch/dashboard-v2 /twitch/dashboard-v2/* /twitch/analyse /twitch/analyse/* /twitch/verwaltung /twitch/verwaltung/* /twitch/hilfe /twitch/hilfe/* /twitch/feedback /twitch/feedback/* /twitch/uplink /twitch/uplink/* /twitch/connect /twitch/connect/* /twitch/titel /twitch/titel/* /twitch/legal/access /twitch/legal/verify /coaching /coaching/* /patch /patch/* /patchnotes /patchnotes/* /turnier /turnier/* /yoshi/* /twitch/overlay /twitch/overlay/* /twitch/pause-loop /uplink/dock /uplink/dock/* /twitch/pricing /twitch/pricing/* /twitch/caster-overlay /twitch/dono-goal /twitch/kategorie /twitch/kategorie/* /twitch/challenges /twitch/challenges/*
 	header @non_demo_embed {
 		defer
 		X-Frame-Options "DENY"
@@ -45,7 +45,7 @@
 		X-Frame-Options "DENY"
 		Content-Security-Policy "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com https://static-cdn.jtvnw.net https://clips-media-assets2.twitch.tv; font-src 'self' data:; connect-src 'self' https://discord.com https://discordapp.com https://cloudflareinsights.com; base-uri 'none'; frame-ancestors 'none'"
 	}
-	@overlay_embed path /twitch/overlay /twitch/overlay/*
+	@overlay_embed path /twitch/overlay /twitch/overlay/* /twitch/dono-goal
 	header @overlay_embed {
 		defer
 		X-Frame-Options "SAMEORIGIN"

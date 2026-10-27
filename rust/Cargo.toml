@@ -36,6 +36,7 @@ members = [
     "bin/tb-category-collector",
     "bin/tb-stt-server",
     "bin/tb-discord-hub",
+    "bin/tb-claude-relay",
 ]
 
 [workspace.package]

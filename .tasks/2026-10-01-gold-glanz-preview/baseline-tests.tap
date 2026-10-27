@@ -1,0 +1,636 @@
+TAP version 13
+# Subtest: kein Hex-Wert ausserhalb der Industrial-Gold-Palette
+not ok 1 - kein Hex-Wert ausserhalb der Industrial-Gold-Palette
+  ---
+  duration_ms: 603.132239
+  type: 'test'
+  location: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/tests/brandPalette.test.ts:1:1465'
+  failureType: 'testCodeFailure'
+  error: |-
+    Fremdfarben gefunden:
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayBuilderSection.tsx: #4ade80
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #4ade80
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #d6b56c
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #4ade80
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #d6b56c
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #ef7474
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #090a0d
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #d6b56c
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #090a0d
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/components/shared/GermanDatePicker.tsx: #211c19
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #b8b8b8
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #47adff
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #00d69b
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #ffb31a
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #c299ff
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: #131525
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #a970ff
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #3b82f6
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #22c55e
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #f97316
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37
+    + actual - expected
+    
+    + [
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayBuilderSection.tsx: #4ade80',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #4ade80',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #d6b56c',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #4ade80',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #d6b56c',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #ef7474',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #090a0d',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #d6b56c',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #090a0d',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/components/shared/GermanDatePicker.tsx: #211c19',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #b8b8b8',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #47adff',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #00d69b',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #ffb31a',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #c299ff',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: #131525',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #a970ff',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #3b82f6',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #22c55e',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #f97316',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37'
+    + ]
+    - []
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual:
+    0: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayBuilderSection.tsx: #4ade80'
+    1: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #4ade80'
+    2: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #d6b56c'
+    3: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #4ade80'
+    4: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #d6b56c'
+    5: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #ef7474'
+    6: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #090a0d'
+    7: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #d6b56c'
+    8: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/components/verwaltung/OverlayCanvasGuides.tsx: #090a0d'
+    9: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/components/shared/GermanDatePicker.tsx: #211c19'
+    10: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #b8b8b8'
+    11: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #47adff'
+    12: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #00d69b'
+    13: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #ffb31a'
+    14: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/Announcements.tsx: #c299ff'
+    15: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: #131525'
+    16: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #a970ff'
+    17: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #3b82f6'
+    18: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #22c55e'
+    19: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #f97316'
+    20: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37'
+    21: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37'
+    22: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37'
+    23: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37'
+    24: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: #d4af37'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/tests/brandPalette.test.ts:85:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: keine Tailwind-Standardfarben (die ueberleben jeden Farb-Remap)
+not ok 2 - keine Tailwind-Standardfarben (die ueberleben jeden Farb-Remap)
+  ---
+  duration_ms: 55.16967
+  type: 'test'
+  location: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/tests/brandPalette.test.ts:2:26'
+  failureType: 'testCodeFailure'
+  error: |-
+    Tailwind-Standardfarben gefunden:
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: border-amber-500
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: bg-amber-500
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: text-zinc-300
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: text-zinc-500
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: text-zinc-300
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: text-zinc-300
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/components/shared/DeDateTimeInput.tsx: text-red-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/config/OperatingConfig.tsx: text-red-300
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-200
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-200
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: border-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: bg-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-100
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: border-red-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: bg-red-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-red-100
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-200
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-100
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-200
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: outline-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: outline-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-zinc-950
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-red-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-red-950
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-red-100
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-200
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-emerald-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-emerald-200
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-100
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-100
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-100
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-emerald-300
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-200
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-zinc-950
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-100
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: text-amber-200
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: text-red-300
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: text-green-300
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/PromoTimers.tsx: text-red-300
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/PromoTimers.tsx: text-green-300
+    + actual - expected
+    
+    + [
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: border-amber-500',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: bg-amber-500',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: text-zinc-300',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: text-zinc-500',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: text-zinc-300',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: text-zinc-300',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/components/shared/DeDateTimeInput.tsx: text-red-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/config/OperatingConfig.tsx: text-red-300',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-200',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-200',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: border-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: bg-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-100',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: border-red-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: bg-red-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-red-100',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-200',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-100',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-200',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: outline-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: outline-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-zinc-950',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-red-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-red-950',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-red-100',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-200',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-emerald-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-emerald-200',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-100',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-100',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-100',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-emerald-300',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-200',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-zinc-950',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-100',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: text-amber-200',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: text-red-300',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: text-green-300',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/PromoTimers.tsx: text-red-300',
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/PromoTimers.tsx: text-green-300'
+    + ]
+    - []
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual:
+    0: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: border-amber-500'
+    1: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: bg-amber-500'
+    2: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: text-zinc-300'
+    3: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: text-zinc-500'
+    4: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: text-zinc-300'
+    5: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/src/pages/Challenges.tsx: text-zinc-300'
+    6: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/components/shared/DeDateTimeInput.tsx: text-red-400'
+    7: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/config/OperatingConfig.tsx: text-red-300'
+    8: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-200'
+    9: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-200'
+    10: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: border-amber-400'
+    11: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: bg-amber-400'
+    12: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-100'
+    13: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: border-red-400'
+    14: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: bg-red-400'
+    15: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-red-100'
+    16: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-200'
+    17: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-100'
+    18: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx: text-amber-200'
+    19: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400'
+    20: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: outline-amber-400'
+    21: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: outline-amber-400'
+    22: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400'
+    23: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-zinc-950'
+    24: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-red-400'
+    25: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-red-950'
+    26: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-red-100'
+    27: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400'
+    28: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-200'
+    29: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-emerald-400'
+    30: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-emerald-200'
+    31: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400'
+    32: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400'
+    33: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400'
+    34: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400'
+    35: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400'
+    36: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400'
+    37: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-100'
+    38: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400'
+    39: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-100'
+    40: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400'
+    41: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400'
+    42: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-100'
+    43: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-emerald-300'
+    44: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-200'
+    45: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400'
+    46: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-zinc-950'
+    47: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: border-amber-400'
+    48: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: bg-amber-400'
+    49: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CasterOverlay.tsx: text-amber-100'
+    50: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: text-amber-200'
+    51: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: text-red-300'
+    52: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/CommunityAnnouncements.tsx: text-green-300'
+    53: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/PromoTimers.tsx: text-red-300'
+    54: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/PromoTimers.tsx: text-green-300'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/tests/brandPalette.test.ts:98:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: kein weisser Text auf heller Markenflaeche
+not ok 3 - kein weisser Text auf heller Markenflaeche
+  ---
+  duration_ms: 105.422707
+  type: 'test'
+  location: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/tests/brandPalette.test.ts:3:26'
+  failureType: 'testCodeFailure'
+  error: |-
+    Weisser Text auf heller Markenflaeche (unlesbar):
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/components/shared/GermanDatePicker.tsx:182: className={`rounded-lg py-1.5 ${value === toIso(day) ? 'bg-primary font-semibold text-blac
+    /home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx:82: </fieldset><button disabled={busy || !input.hero} type="submit" className="mt-5 flex items
+    + actual - expected
+    
+    + [
+    +   "/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/components/shared/GermanDatePicker.tsx:182: className={`rounded-lg py-1.5 ${value === toIso(day) ? 'bg-primary font-semibold text-blac",
+    +   '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx:82: </fieldset><button disabled={busy || !input.hero} type="submit" className="mt-5 flex items'
+    + ]
+    - []
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual:
+    0: "/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/components/shared/GermanDatePicker.tsx:182: className={`rounded-lg py-1.5 ${value === toIso(day) ? 'bg-primary font-semibold text-blac"
+    1: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/admin_dashboard/src/pages/content/BrainBuildLab.tsx:82: </fieldset><button disabled={busy || !input.hero} type="submit" className="mt-5 flex items'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/tests/brandPalette.test.ts:160:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: Pergament-Tinten halten Kontrast >= 4.5:1 gegen das Papier
+ok 4 - Pergament-Tinten halten Kontrast >= 4.5:1 gegen das Papier
+  ---
+  duration_ms: 0.666932
+  type: 'test'
+  ...
+# Subtest: Dashboard-Akzente halten den Textkontrast
+ok 5 - Dashboard-Akzente halten den Textkontrast
+  ---
+  duration_ms: 0.910587
+  type: 'test'
+  ...
+# Subtest: vorschlaegeFuer liefert je Seite und Sprache genau drei Fragen
+ok 6 - vorschlaegeFuer liefert je Seite und Sprache genau drei Fragen
+  ---
+  duration_ms: 1.519922
+  type: 'test'
+  ...
+# Subtest: unbekannte Seiten fallen auf die Standardvorschläge zurück
+ok 7 - unbekannte Seiten fallen auf die Standardvorschläge zurück
+  ---
+  duration_ms: 0.775013
+  type: 'test'
+  ...
+# Subtest: englische Vorschläge unterscheiden sich von den deutschen
+ok 8 - englische Vorschläge unterscheiden sich von den deutschen
+  ---
+  duration_ms: 0.165248
+  type: 'test'
+  ...
+# Subtest: App.tsx bindet den Assistenten innerhalb des LanguageProvider ein
+ok 9 - App.tsx bindet den Assistenten innerhalb des LanguageProvider ein
+  ---
+  duration_ms: 0.140151
+  type: 'test'
+  ...
+# Subtest: App.tsx rendert den Assistenten nur außerhalb von Demo und Preview
+ok 10 - App.tsx rendert den Assistenten nur außerhalb von Demo und Preview
+  ---
+  duration_ms: 0.281102
+  type: 'test'
+  ...
+# Subtest: assistent.ts sendet page und language und setzt X-CSRF-Token bedingt
+ok 11 - assistent.ts sendet page und language und setzt X-CSRF-Token bedingt
+  ---
+  duration_ms: 5.892387
+  type: 'test'
+  ...
+# Subtest: das Widget trägt den Knopftext "Hilfe bekommen"
+ok 12 - das Widget trägt den Knopftext "Hilfe bekommen"
+  ---
+  duration_ms: 0.25932
+  type: 'test'
+  ...
+# Subtest: das Widget berechnet den Seiten-Slug beim Öffnen und beim Senden neu
+ok 13 - das Widget berechnet den Seiten-Slug beim Öffnen und beim Senden neu
+  ---
+  duration_ms: 0.232859
+  type: 'test'
+  ...
+# Subtest: das Widget rendert nichts, solange der Nutzer nicht eingeloggt ist
+ok 14 - das Widget rendert nichts, solange der Nutzer nicht eingeloggt ist
+  ---
+  duration_ms: 0.498849
+  type: 'test'
+  ...
+# Subtest: Karten bleiben neutral und verzichten auf Nieten und Streifen
+ok 15 - Karten bleiben neutral und verzichten auf Nieten und Streifen
+  ---
+  duration_ms: 1.400122
+  type: 'test'
+  ...
+# Subtest: die animierte Gold-Aura der Shell ist entfernt
+ok 16 - die animierte Gold-Aura der Shell ist entfernt
+  ---
+  duration_ms: 0.18017
+  type: 'test'
+  ...
+# Subtest: die Shell rendert keine BackgroundBlobs mehr
+ok 17 - die Shell rendert keine BackgroundBlobs mehr
+  ---
+  duration_ms: 0.650417
+  type: 'test'
+  ...
+# Subtest: Raster und neutrale Grundtöne bleiben dezent
+ok 18 - Raster und neutrale Grundtöne bleiben dezent
+  ---
+  duration_ms: 0.59274
+  type: 'test'
+  ...
+# Subtest: das Raster wird nicht zu den Raendern hin ausgeblendet
+ok 19 - das Raster wird nicht zu den Raendern hin ausgeblendet
+  ---
+  duration_ms: 0.330907
+  type: 'test'
+  ...
+# Subtest: Gold bleibt an der Kartenkante, Tiefe entsteht durch neutralen Schatten
+ok 20 - Gold bleibt an der Kartenkante, Tiefe entsteht durch neutralen Schatten
+  ---
+  duration_ms: 0.200921
+  type: 'test'
+  ...
+# Subtest: Avatar und Icon-Kacheln tragen keinen Gold-Glow mehr, nur den feinen Ring
+ok 21 - Avatar und Icon-Kacheln tragen keinen Gold-Glow mehr, nur den feinen Ring
+  ---
+  duration_ms: 0.206931
+  type: 'test'
+  ...
+# Subtest: App.tsx importiert die Shell und wickelt jede der sieben Routen darin ein
+ok 22 - App.tsx importiert die Shell und wickelt jede der sieben Routen darin ein
+  ---
+  duration_ms: 25.532247
+  type: 'test'
+  ...
+# Subtest: Deadlock weltweit nutzt die bereits veröffentlichte Analyse-Route statt eines separaten Caddy-Pfads
+ok 23 - Deadlock weltweit nutzt die bereits veröffentlichte Analyse-Route statt eines separaten Caddy-Pfads
+  ---
+  duration_ms: 0.643967
+  type: 'test'
+  ...
+# Subtest: keine Seite setzt einen eigenen Gesamtrahmen mehr
+ok 24 - keine Seite setzt einen eigenen Gesamtrahmen mehr
+  ---
+  duration_ms: 163.119641
+  type: 'test'
+  ...
+# Subtest: die Shell trägt den Marken-Hintergrund, volle Breite, Sidebar-Spalte und den Main-Slot
+ok 25 - die Shell trägt den Marken-Hintergrund, volle Breite, Sidebar-Spalte und den Main-Slot
+  ---
+  duration_ms: 0.522605
+  type: 'test'
+  ...
+# Subtest: Social Media nutzt dieselbe farbige Shell und Navigation wie Home und Uplink
+ok 26 - Social Media nutzt dieselbe farbige Shell und Navigation wie Home und Uplink
+  ---
+  duration_ms: 0.87908
+  type: 'test'
+  ...
+# Subtest: Studio-CSS bleibt im Inhalt und definiert keinen zweiten Dashboard-Rahmen
+ok 27 - Studio-CSS bleibt im Inhalt und definiert keinen zweiten Dashboard-Rahmen
+  ---
+  duration_ms: 0.628384
+  type: 'test'
+  ...
+# Subtest: der Shell-Profil-Hook gatet den Fetch gegen anonyme und Admin-Sitzungen ohne eigenes Konto
+ok 28 - der Shell-Profil-Hook gatet den Fetch gegen anonyme und Admin-Sitzungen ohne eigenes Konto
+  ---
+  duration_ms: 0.525469
+  type: 'test'
+  ...
+# Subtest: App.tsx gatet die Pricing-Sidebar gegen den Auth-Status
+ok 29 - App.tsx gatet die Pricing-Sidebar gegen den Auth-Status
+  ---
+  duration_ms: 0.237557
+  type: 'test'
+  ...
+# Subtest: der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite
+not ok 30 - der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite
+  ---
+  duration_ms: 55.352795
+  type: 'test'
+  location: '/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/tests/dashboardShell.test.ts:1:4863'
+  failureType: 'testCodeFailure'
+  error: |-
+    AnalyticsDashboard darf keine eigene Gesamt-Maximalbreite tragen: max-w-4xl
+    + actual - expected
+    
+    + [
+    +   'max-w-4xl'
+    + ]
+    - []
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual:
+    0: 'max-w-4xl'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/nathanael/.worktrees/tb-gold-glanz-baseline-20261001/bot/dashboard_v2/tests/dashboardShell.test.ts:137:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: App.tsx reicht die Demo-Entscheidung an die Shell durch
+ok 31 - App.tsx reicht die Demo-Entscheidung an die Shell durch
+  ---
+  duration_ms: 7.899522
+  type: 'test'
+  ...
+# Subtest: DashboardShell laesst ohne Sidebar-Freigabe Sidebar und Profil-Hook aus
+ok 32 - DashboardShell laesst ohne Sidebar-Freigabe Sidebar und Profil-Hook aus
+  ---
+  duration_ms: 0.529485
+  type: 'test'
+  ...
+# Subtest: App.tsx traegt keine AuthBadge-Zeile mehr ueber dem Analyse-Kopf
+ok 33 - App.tsx traegt keine AuthBadge-Zeile mehr ueber dem Analyse-Kopf
+  ---
+  duration_ms: 0.117687
+  type: 'test'
+  ...
+# Subtest: die Sidebar bleibt beim Scrollen mit ruhigem Abstand am Viewport
+ok 34 - die Sidebar bleibt beim Scrollen mit ruhigem Abstand am Viewport
+  ---
+  duration_ms: 0.153
+  type: 'test'
+  ...
+# Subtest: eine gueltige Zahl loest onDaysChange aus und leert danach das Eingabefeld
+ok 35 - eine gueltige Zahl loest onDaysChange aus und leert danach das Eingabefeld
+  ---
+  duration_ms: 1.872542
+  type: 'test'
+  ...
+# Subtest: ein Wert unter der Untergrenze wird auf 7 geklemmt
+ok 36 - ein Wert unter der Untergrenze wird auf 7 geklemmt
+  ---
+  duration_ms: 0.219539
+  type: 'test'
+  ...
+# Subtest: mehr als ein Jahr wird uebernommen und erst bei zehn Jahren geklemmt
+ok 37 - mehr als ein Jahr wird uebernommen und erst bei zehn Jahren geklemmt
+  ---
+  duration_ms: 0.172619
+  type: 'test'
+  ...
+# Subtest: ein leeres Feld aendert nichts und bleibt leer
+ok 38 - ein leeres Feld aendert nichts und bleibt leer
+  ---
+  duration_ms: 0.238037
+  type: 'test'
+  ...
+# Subtest: der gleiche Wert loest kein onDaysChange aus
+ok 39 - der gleiche Wert loest kein onDaysChange aus
+  ---
+  duration_ms: 0.176334
+  type: 'test'
+  ...
+# Subtest: das Tage-Feld faengt Enter ab, uebernimmt und gibt den Fokus frei
+ok 40 - das Tage-Feld faengt Enter ab, uebernimmt und gibt den Fokus frei
+  ---
+  duration_ms: 0.342905
+  type: 'test'
+  ...
+# Subtest: die Uebernahme klemmt, meldet nur echte Aenderungen und faengt leere Eingaben ab
+ok 41 - die Uebernahme klemmt, meldet nur echte Aenderungen und faengt leere Eingaben ab
+  ---
+  duration_ms: 0.249475
+  type: 'test'
+  ...
+# Subtest: eine manuell eingegebene 365 bleibt am Tage-Feld sichtbar ausgewaehlt
+ok 42 - eine manuell eingegebene 365 bleibt am Tage-Feld sichtbar ausgewaehlt
+  ---
+  duration_ms: 0.223406
+  type: 'test'
+  ...
+# Subtest: das Tage-Feld bietet mehr als ein Jahr ohne native Spinner an
+ok 43 - das Tage-Feld bietet mehr als ein Jahr ohne native Spinner an
+  ---
+  duration_ms: 0.343255
+  type: 'test'
+  ...
+# Subtest: der aktuelle Zeitraum ist nur Placeholder und echte Eingabe ist weiss
+ok 44 - der aktuelle Zeitraum ist nur Placeholder und echte Eingabe ist weiss
+  ---
+  duration_ms: 0.466611
+  type: 'test'
+  ...
+# Subtest: falls back to the live API base for non-allowlisted runtime config values
+ok 45 - falls back to the live API base for non-allowlisted runtime config values
+  ---
+  duration_ms: 1.182325
+  type: 'test'
+  ...
+# Subtest: requires both demo route and demo namespace for effective demo mode
+ok 46 - requires both demo route and demo namespace for effective demo mode
+  ---
+  duration_ms: 0.406551
+  type: 'test'
+  ...
+# Subtest: does not treat demoMode alone as a valid demo runtime
+ok 47 - does not treat demoMode alone as a valid demo runtime
+  ---
+  duration_ms: 0.169274
+  type: 'test'
+  ...
+# Subtest: cookie-based dashboard requests stay same-origin without token bootstrapping
+ok 48 - cookie-based dashboard requests stay same-origin without token bootstrapping
+  ---
+  duration_ms: 390.380663
+  type: 'test'
+  ...
+1..48
+# tests 48
+# suites 0
+# pass 44
+# fail 4
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4491.257187

@@ -16,14 +16,3 @@ export function resolveSocialMediaChannel(
   if (loginHint && channel.login.toLowerCase() !== loginHint.trim().toLowerCase()) return undefined;
   return channel;
 }
-
-export function globalTimezoneUrl(twitchUserId: string | undefined): string {
-  const params = new URLSearchParams({ twitch_user_id: twitchUserId ?? '' });
-  return `/twitch/verwaltung?${params}#konto`;
-}
-
-export function globalTimezoneOwner(search: string, authenticatedUserId: string | undefined): string | undefined {
-  const params = new URLSearchParams(search);
-  const owner = params.has('twitch_user_id') ? params.get('twitch_user_id') : authenticatedUserId;
-  return owner && /^\d+$/.test(owner) ? owner : undefined;
-}

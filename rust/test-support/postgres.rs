@@ -1,9 +1,15 @@
-//! Tatsächliche isolierte PostgreSQL-Tests ohne ENV, Zugangsdaten oder Live-DB.
 use std::{
     process::{Child, Command, Stdio},
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
+
+mod postmaster {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-support/postmaster.rs"
+    ));
+}
 
 static SLOTS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 
@@ -17,12 +23,13 @@ impl Drop for Process {
 
 pub(crate) struct TestPostgres {
     pub pool: sqlx::PgPool,
-    _process: Process,
-    _directory: tempfile::TempDir,
+    _postmaster: postmaster::Postmaster,
+    _directory: postmaster::RamDir,
     _slot: tokio::sync::OwnedSemaphorePermit,
 }
 
 impl TestPostgres {
+    #[allow(dead_code)]
     pub async fn start() -> Self {
         Self::start_with_preload(false).await
     }
@@ -39,10 +46,7 @@ impl TestPostgres {
             .acquire_owned()
             .await
             .expect("Testslot");
-        let directory = tempfile::Builder::new()
-            .prefix("uplink-api-pg-")
-            .tempdir()
-            .expect("Privates Testverzeichnis");
+        let directory = postmaster::RamDir::new("tb");
         let data = directory.path().join("data");
         let mut init = Process(
             Command::new("/usr/lib/postgresql/16/bin/initdb")
@@ -63,35 +67,21 @@ impl TestPostgres {
             assert!(Instant::now() < deadline, "initdb überschreitet Startfrist");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let process = Process(
-            Command::new("/usr/lib/postgresql/16/bin/postgres")
-                .arg("-D")
-                .arg(&data)
-                .args(["-h", "", "-k"])
-                .arg(directory.path())
-                .args([
-                    "-c",
-                    if timescaledb {
-                        "shared_preload_libraries=timescaledb"
-                    } else {
-                        "shared_preload_libraries="
-                    },
-                ])
-                .args([
-                    "-c",
-                    "unix_socket_permissions=0700",
-                    "-c",
-                    "shared_buffers=16MB",
-                    "-c",
-                    "max_connections=32",
-                    "-c",
-                    "fsync=off",
-                ])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("Isolierter PostgreSQL-Start"),
+        let postmaster = postmaster::Postmaster::start(
+            &data,
+            directory.path(),
+            &[
+                if timescaledb {
+                    "shared_preload_libraries=timescaledb"
+                } else {
+                    "shared_preload_libraries="
+                },
+                "unix_socket_permissions=0700",
+                "shared_buffers=16MB",
+                "max_connections=32",
+                "fsync=off",
+            ],
+            None,
         );
         let options = sqlx::postgres::PgConnectOptions::new()
             .host(directory.path().to_str().unwrap())
@@ -115,7 +105,7 @@ impl TestPostgres {
         };
         Self {
             pool,
-            _process: process,
+            _postmaster: postmaster,
             _directory: directory,
             _slot: slot,
         }

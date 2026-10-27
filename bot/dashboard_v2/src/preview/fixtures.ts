@@ -9,6 +9,7 @@ import type { CatalogPlan } from '@/types/billing';
 import { DEFAULT_LAYOUT, type ClipApprovalRecord, type PostingPlan } from '../types/socialMedia';
 import type { SocialClipMitPosting, PlatformStatus } from '@/api/socialMedia';
 import { aiPreviewConsent, aiPreviewJob, type AiPreviewScenario } from '../components/socialmedia/ai/preview';
+import { onPublicTour } from '../publicTour';
 
 const SOCIAL_WORKSPACE_PREVIEW = import.meta.env?.MODE === 'preview' || import.meta.env?.MODE === undefined;
 const NOW_ISO = '2026-04-22T09:30:00Z';
@@ -90,6 +91,45 @@ const BILLING_CATALOG_FIXTURE: { plans: CatalogPlan[] } = {
       is_current: true,
     },
     {
+      id: 'studio',
+      name: 'Studio',
+      tier: 'extended',
+      price_monthly: 12,
+      description: 'Pipeline, Import, VOD, drei Plattformen, Vorlagen und Freigabe-Autopilot.',
+      monthly_gross_cents: 1200,
+      yearly_gross_cents: 12000,
+      recommended: false,
+      buchbar: false,
+      is_current: false,
+      features: ['Pipeline', 'Import', 'VOD', 'Drei Plattformen', 'Vorlagen', 'Freigabe-Autopilot'],
+    },
+    {
+      id: 'studio_ki',
+      name: 'Studio KI',
+      tier: 'extended',
+      price_monthly: 15,
+      description: 'Transkription, Titel, Hashtags und Vollautomatik.',
+      monthly_gross_cents: 1500,
+      yearly_gross_cents: 15000,
+      recommended: true,
+      buchbar: false,
+      is_current: false,
+      features: ['Transkription', 'Titel', 'Hashtags', 'Vollautomatik'],
+    },
+    {
+      id: 'studio_cut',
+      name: 'Studio Schnitt',
+      tier: 'extended',
+      price_monthly: 20,
+      description: 'KI-Videoschnitt mit 12 Schnitten im Monat.',
+      monthly_gross_cents: 2000,
+      yearly_gross_cents: 20000,
+      recommended: false,
+      buchbar: false,
+      is_current: false,
+      features: ['KI-Videoschnitt', '12 Schnitte im Monat'],
+    },
+    {
       id: 'pro',
       name: 'Creator Pro',
       tier: 'extended',
@@ -115,7 +155,7 @@ const BILLING_CATALOG_FIXTURE: { plans: CatalogPlan[] } = {
   ],
 };
 
-const INTERNAL_HOME_FIXTURE: InternalHomeData = {
+export const INTERNAL_HOME_FIXTURE: InternalHomeData = {
   greeting: 'Willkommen in der lokalen Preview',
   twitchLogin: 'midcore_live',
   displayName: 'Local Preview Creator',
@@ -389,7 +429,7 @@ function socialApproval(platforms: ClipApprovalRecord['approved_platforms'], app
 
 export const SOCIAL_CLIPS_FIXTURE: SocialClipMitPosting[] = [
   { title: 'Die letzte Sekunde: Lash hält den Patron', status: 'awaiting_approval', approval: socialApproval([], false) },
-  { title: 'Bebop dreht den Teamfight am Markt', status: 'approved', approval: socialApproval(['youtube']), scheduled_at: { youtube: '2026-10-12T16:00:00Z' }, upload_states: { youtube: 'pending', tiktok: 'waiting_tiktok_approval' } },
+  { title: 'Bebop dreht den Teamfight am Markt', status: 'approved', approval: socialApproval(['youtube']), scheduled_at: { youtube: '2026-10-12T16:00:00Z' }, upload_states: { youtube: 'pending', tiktok: 'waiting_connection' } },
   { title: 'Ein ruhiger Moment vor dem nächsten Push', status: 'pending', enrichment_status: 'transcribing' },
   { title: 'Paradox rettet den Rückzug', status: 'published_partial', approval: socialApproval(['tiktok']), upload_states: { tiktok: 'inbox' } },
   { title: 'Haze im Finale: Upload gespeichert, privat auf YouTube', status: 'published_all', approval: socialApproval(['youtube']), platform_status: { youtube: true, tiktok: false, instagram: false }, youtube_visibility: 'private', upload_states: { youtube: 'completed' } },
@@ -405,7 +445,7 @@ export const SOCIAL_CLIPS_FIXTURE: SocialClipMitPosting[] = [
   ...entry,
 })) as SocialClipMitPosting[];
 
-export const SOCIAL_PLATFORMS_FIXTURE: PlatformStatus[] = ['youtube', 'tiktok', 'instagram'].map((platform) => ({
+const SOCIAL_STANDARD_PLATFORMS_FIXTURE: PlatformStatus[] = ['youtube', 'tiktok', 'instagram'].map((platform) => ({
   platform, connected: platform !== 'instagram', expired: false, username: platform === 'instagram' ? null : 'preview_creator',
   automatically_renewed: true, uses_global_fallback: platform === 'tiktok',
   capabilities: { upload: true, statistics: platform !== 'tiktok', upload_mode: 'direct', reason: null },
@@ -413,6 +453,12 @@ export const SOCIAL_PLATFORMS_FIXTURE: PlatformStatus[] = ['youtube', 'tiktok', 
     required_upload_scopes: platform === 'youtube' ? ['https://www.googleapis.com/auth/youtube.upload'] : platform === 'tiktok' ? ['video.publish'] : [], missing_upload_scopes: platform === 'youtube' ? [] : platform === 'tiktok' ? ['video.publish'] : null,
     channel_account_required: platform === 'tiktok' },
 }));
+
+export const SOCIAL_PLATFORMS_FIXTURE: PlatformStatus[] = [...SOCIAL_STANDARD_PLATFORMS_FIXTURE, {
+  platform: 'youtube_vod', connected: false, expired: false, username: null,
+  automatically_renewed: true, uses_global_fallback: false,
+  capabilities: { upload: true, statistics: true, upload_mode: 'direct', reason: null },
+}];
 
 const SOCIAL_PLAN_FIXTURE: PostingPlan = {
   streamer_login: 'midcore_live', approval_mode: 'manual', approval_modes: ['manual', 'veto_window', 'full_auto'],
@@ -427,14 +473,18 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
   const pathname = url.pathname;
   const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
   if ((init.method ?? 'GET').toUpperCase() !== 'GET') {
-    const error = { error: 'preview_read_only', message: 'Die lokale Vorschau speichert, verbindet und veröffentlicht nichts.' };
+    const tour = onPublicTour();
+    const error = {
+      error: tour ? 'demo_readonly' : 'preview_read_only',
+      message: tour ? 'In der Demo kannst du nichts ändern.' : 'Die lokale Vorschau speichert, verbindet und veröffentlicht nichts.',
+    };
     if (SOCIAL_WORKSPACE_PREVIEW && scenario === 'legacy-save-pending') {
       const body = new ReadableStream({ start(controller) {
         setTimeout(() => { controller.enqueue(new TextEncoder().encode(JSON.stringify(error))); controller.close(); }, 2000);
       } });
       return new Response(body, { status: 409, headers: { 'Content-Type': 'application/json' } });
     }
-    return json(error, 409);
+    return json(error, tour ? 403 : 409);
   }
   if (SOCIAL_WORKSPACE_PREVIEW && pathname.startsWith('/twitch/social-media/api/ai/')) {
     const owner = url.searchParams.get('twitch_user_id');
@@ -457,7 +507,7 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
     return json({ error: 'preview_fixture_missing' }, 404);
   }
   const streamer = SOCIAL_WORKSPACE_PREVIEW && url.searchParams.get('twitch_user_id') === '987654321' ? 'preview_second' : 'midcore_live';
-  if (pathname.endsWith('/access/me')) return json({ allowed: true, streamer: 'midcore_live', isAdmin: true });
+  if (pathname.endsWith('/access/me')) return json({ allowed: true, streamer: 'midcore_live', isAdmin: !onPublicTour() });
   if (pathname.endsWith('/access')) return json({ items: [{ twitch_user_id: '123456789', streamer_login: 'midcore_live', granted: true }] });
   if (pathname.endsWith('/platforms/status')) {
     if (scenario === 'accounts-error') return json({ error: 'platform_status_failed' }, 503);
@@ -483,24 +533,225 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
   return json({ error: 'preview_fixture_missing', message: 'Für diese Ansicht gibt es noch keine lokalen Vorschau-Daten.' }, 404);
 }
 
+function internalHomeApiFixture(): unknown {
+  const tour = onPublicTour();
+  const displayName = tour ? 'MidCore Live' : 'Local Preview Creator';
+  return {
+    profile: {
+      twitch_login: 'midcore_live',
+      twitch_user_id: '123456789',
+      display_name: displayName,
+    },
+    status: {
+      oauth: {
+        connected: true,
+        status: 'connected',
+        granted_scopes: [
+          'channel:manage:raids',
+          'moderator:read:followers',
+          'channel:read:subscriptions',
+        ],
+        missing_scopes: [],
+        reconnect_url: '/twitch/dashboard',
+        profile_url: '/twitch/dashboard',
+        last_checked_at: NOW_ISO,
+      },
+      discord: {
+        connected: true,
+        status: 'connected',
+        connect_url: '/twitch/verwaltung',
+        last_checked_at: NOW_ISO,
+      },
+      steam: { connected: true, status: 'connected', connect_url: '/twitch/verwaltung' },
+      raid_status: { state: 'active', read_only: true },
+    },
+    kpis: {
+      streams_count: 18,
+      avg_viewers: 126,
+      follower_delta: 214,
+      bot_bans_keyword_count: 7,
+    },
+    recent_streams: [
+      {
+        started_at: '2026-04-21T17:00:00Z',
+        ended_at: '2026-04-21T20:10:00Z',
+        duration_seconds: 11400,
+        avg_viewers: 142,
+        peak_viewers: 221,
+        follower_delta: 34,
+        title: 'Deadlock Ranked | Community',
+      },
+      {
+        started_at: '2026-04-19T18:15:00Z',
+        ended_at: '2026-04-19T21:00:00Z',
+        duration_seconds: 9900,
+        avg_viewers: 118,
+        peak_viewers: 184,
+        follower_delta: 21,
+        title: 'Deadlock Ranked + Community Review',
+      },
+    ],
+    bot_activity: {
+      events: [
+        {
+          event_type: 'ops.note',
+          timestamp: NOW_ISO,
+          status_label: 'Demo',
+          target_login: 'midcore_live',
+          summary: 'Diese Ansicht zeigt Beispieldaten. Nichts davon ist ein echter Stream.',
+          severity: 'info',
+          source: 'demo',
+        },
+      ],
+    },
+    changelog: {
+      can_write: false,
+      max_entries: 10,
+      entries: [
+        {
+          id: 'demo-log-1',
+          entry_date: '2026-04-22',
+          title: 'Dashboard-Rundgang',
+          content: 'Das ist eine Demo mit Beispieldaten. Du kannst dich umsehen, nichts wird gespeichert.',
+          created_at: NOW_ISO,
+        },
+      ],
+    },
+    generated_at: NOW_ISO,
+  };
+}
+
+const CHALLENGES_ME_FIXTURE = {
+  twitch_user_id: '123456789',
+  next_reset_at: '2026-05-01T00:00:00Z',
+  generated_at: NOW_ISO,
+  timezone: 'Europe/Berlin',
+  streamer: 'midcore_live',
+  quests: [
+    { key: 'stream_hours', text: '8 Stunden streamen', progress: 5, goal: 8, completed: false },
+    { key: 'raid_out', text: '3 Raids senden', progress: 3, goal: 3, completed: true },
+  ],
+  quest_assignment_status: 'assigned',
+  streak: { freeze_used_this_month: false, current: 4, longest: 11 },
+  level: { level: 6, total_points: 420, current_threshold: 350, next_threshold: 500 },
+  next_goal: { missing_points: 80, fastest_route: 'Noch 3 Stunden streamen' },
+  achievements: [
+    {
+      key: 'hours',
+      name: 'Stunden auf Sendung',
+      progress: 42,
+      tiers: [
+        { target: 10, unlocked: true },
+        { target: 50, unlocked: false },
+      ],
+    },
+  ],
+  with_us: { people_brought_in_who_stayed: 6, community_hours: 18, received_raids: 4 },
+  season: { next_reset_at: '2026-05-01T00:00:00Z', month: '2026-04', points: 420, rank: 12, active_partners: 48 },
+};
+
+const CHALLENGES_VIEWERS_FIXTURE = {
+  generated_at: NOW_ISO,
+  streamer: 'midcore_live',
+  recruiters: [{ twitch_user_id: '555', display_name: 'ViewerAlpha', qualified_invites: 3 }],
+};
+
+const EFFORT_LEADERBOARD_FIXTURE = {
+  month: '2026-04',
+  entries: [
+    { rank: 1, twitch_login: 'midcore_live', points: 420, raid_boost: true, is_self: true },
+    { rank: 2, twitch_login: 'partner_one', points: 390, raid_boost: false, is_self: false },
+  ],
+  own_position: { rank: 1, twitch_login: 'midcore_live', points: 420, raid_boost: true, is_self: true },
+};
+
+const VIEWER_LEADERBOARD_FIXTURE = {
+  window: { days: 30 },
+  categories: [
+    {
+      key: 'deadlock',
+      title: 'Deadlock',
+      count: 2,
+      entries: [
+        { rank: 1, streamer: 'midcore_live', avg_viewers: 126, max_viewers: 221, samples: 18 },
+        { rank: 2, streamer: 'partner_one', avg_viewers: 98, max_viewers: 160, samples: 14 },
+      ],
+      own_position: { rank: 1, streamer: 'midcore_live', avg_viewers: 126, max_viewers: 221, samples: 18 },
+    },
+  ],
+};
+
 export function getPreviewApiFixture(
   endpoint: string,
   _params: Record<string, string | number | boolean> = {}
 ): unknown | undefined {
   if (endpoint === '/auth-status') {
-    const partner = SOCIAL_WORKSPACE_PREVIEW && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fixture') === 'partner';
-    return partner ? { ...AUTH_STATUS_FIXTURE, isAdmin: false, isLocalhost: false, adminMode: false, adminEligible: false, level: 'partner', canViewAllStreamers: false } : AUTH_STATUS_FIXTURE;
+    const tour = onPublicTour();
+    const partner = tour || (SOCIAL_WORKSPACE_PREVIEW && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fixture') === 'partner');
+    if (partner) {
+      return {
+        ...AUTH_STATUS_FIXTURE,
+        isAdmin: false,
+        isLocalhost: false,
+        adminMode: false,
+        adminEligible: false,
+        level: 'partner',
+        canViewAllStreamers: false,
+        displayName: tour ? 'MidCore Live' : AUTH_STATUS_FIXTURE.displayName,
+        partnerStatus: 'active',
+        canAccessAnalyticsDashboard: true,
+        plan: {
+          planId: 'studio_ki',
+          planName: 'Studio KI',
+          tier: 'extended',
+          isExtended: true,
+          expiresAt: null,
+          source: tour ? 'demo' : 'local_preview',
+          entitlements: [
+            'analytics',
+            'chat.lurker_tax',
+            'chat.promos.disable',
+            'raid.priority',
+            'social.studio',
+            'social.auto_post',
+            'social.captions',
+          ],
+        },
+      };
+    }
+    return AUTH_STATUS_FIXTURE;
   }
   if (endpoint === '/feedback/counts') return { total: 0, unread: 0 };
   if (endpoint === '/streamers') return [{ login: 'midcore_live', twitchUserId: '123456789', isPartner: true }, ...(SOCIAL_WORKSPACE_PREVIEW ? [{ login: 'preview_second', twitchUserId: '987654321', isPartner: true }] : [])];
-  if (endpoint === '/billing/catalog') return BILLING_CATALOG_FIXTURE;
-  if (endpoint === '/internal-home') return {
-    ...INTERNAL_HOME_FIXTURE,
-    profile: {
-      twitch_login: INTERNAL_HOME_FIXTURE.twitchLogin,
-      display_name: INTERNAL_HOME_FIXTURE.displayName,
-    },
-  };
+  if (endpoint === '/billing/catalog') {
+    const tour = onPublicTour();
+    if (!tour) return BILLING_CATALOG_FIXTURE;
+    return {
+      plans: BILLING_CATALOG_FIXTURE.plans.map((plan) => ({
+        ...plan,
+        is_current: plan.id === 'studio_ki',
+      })),
+    };
+  }
+  if (endpoint === '/internal-home') return internalHomeApiFixture();
+  if (endpoint === '/title/insights') return getPreviewTitleInsights();
+  if (endpoint === '/title/settings') {
+    return {
+      style_preference: 'Direkt, trocken, eher ein Satz als Keyword-Liste. Keine übertriebenen Emojis.',
+      experimental_auto_set: false,
+      never_words: [],
+      style_summary: 'Ø ca. 72 Zeichen; Emojis sind untypisch; häufiger Trenner |; eher ruhige Satzzeichen.',
+      oauth_connected: true,
+      oauth_url: '/twitch/raid/auth?scope_profile=title&source=title_generator',
+      model: 'glm-5.3-flash',
+    };
+  }
+  if (endpoint === '/feedback' && onPublicTour()) return { items: [], next: null };
+  if (endpoint === '/challenges/me') return CHALLENGES_ME_FIXTURE;
+  if (endpoint === '/challenges/viewers') return CHALLENGES_VIEWERS_FIXTURE;
+  if (endpoint === '/leaderboard/effort') return EFFORT_LEADERBOARD_FIXTURE;
+  if (endpoint === '/leaderboard') return VIEWER_LEADERBOARD_FIXTURE;
+  if (endpoint === '/public/network') return { streamers: [{ login: 'midcore_live' }] };
   if (endpoint === '/roadmap') return ROADMAP_FIXTURE;
   if (endpoint === '/ads-schedule') return ADS_SCHEDULE_FIXTURE;
   if (endpoint === '/chat-hype-timeline') return CHAT_HYPE_TIMELINE_FIXTURE;
@@ -670,17 +921,155 @@ const ENGAGEMENT_SETTINGS_FIXTURE = {
   actorLogin: 'midcore_live',
 };
 
-/**
- * Fixture zu einem absoluten Pfad. `undefined` heisst: kein Fixture, der
- * Aufruf geht wie sonst ins Netz.
- *
- * Schreibende Aufrufe bekommen absichtlich die unveraenderte Zielliste
- * zurueck. Ein Preview ohne Server kann nichts speichern, und eine erfundene
- * Bestaetigung waere schlimmer als keine: sie zeigte einen Zustand, den es
- * nirgends gibt.
- */
+const DONO_GOAL_FIXTURE = {
+  login: 'preview',
+  configured: true,
+  title: 'Neues Setup für den Stream',
+  goal: 300,
+  currency: 'EUR',
+  count_from: '2026-10-01T00:00:00+00:00',
+  se_channel_id: '5b2e2007760aeb3b1c7a3f4d',
+  connected: true,
+};
+
+const COMMAND_NAME_FIXTURES = [
+  ['raid', '!raid', 'raids', 'Raids', 'Startet einen Raid auf den nächsten Partnerkanal.'],
+  ['lurk', '!lurk', 'chat', 'Chat', 'Meldet dich als stillen Zuschauer an.'],
+  ['clip', '!clip', 'chat', 'Chat', 'Schneidet die letzten Sekunden als Clip.'],
+  ['rank', '!rank', 'deadlock', 'Deadlock', 'Zeigt deinen aktuellen Rang.'],
+].map(([command, name, group, groupLabel, summary]) => ({
+  command,
+  default_name: name,
+  default_aliases: [],
+  custom_name: null,
+  effective_name: name,
+  effective_aliases: [],
+  custom_aliases: command === 'clip' ? ['!moment'] : [],
+  group,
+  group_label: groupLabel,
+  summary,
+}));
+
+const STREAMER_SETTINGS_FIXTURES: Record<string, unknown> = {
+  '/twitch/api/v2/streamer/moderation/settings': {
+    global_ban_enabled: true,
+    scam_pitch_enabled: true,
+    spam_autoban_enabled: true,
+    sus_invite_enabled: false,
+  },
+  '/twitch/api/v2/streamer/scam-guard/settings': {
+    enabled: true,
+    mode: 'timeout',
+    threshold: 0.9,
+    suggestion_floor: 0.7,
+  },
+  '/twitch/api/v2/streamer/sub-reminder-settings': { enabled: true, available: true },
+  '/twitch/api/v2/streamer/greeting-settings': { greeting_reply_enabled: true },
+  '/twitch/api/v2/streamer/follow-hint-settings': {
+    enabled: true,
+    message: '',
+    default_message: '@{user} Schön, dass du zum ersten Mal im Chat bist! Wenn dir der Stream gefällt, lass doch gern einen Follow da 💜',
+    max_chars: 300,
+  },
+  '/twitch/api/v2/streamer/silent-settings': { silent_ban: false, silent_raid: true },
+  '/twitch/api/v2/streamer/stat-command-settings': {
+    commands: {
+      rank: true,
+      wins: true,
+      winrate: true,
+      mmr: true,
+      live: true,
+      lastmatch: true,
+      streak: false,
+      mostplayed: true,
+    },
+  },
+  '/twitch/api/v2/streamer/lurker-tax-settings': {
+    lurker_tax_enabled: true,
+    has_moderator_read_chatters: true,
+    reward_present: true,
+  },
+  '/twitch/api/v2/streamer/lurk-command-settings': { lurk_command_enabled: true },
+  '/twitch/api/v2/streamer/command-names': { commands: COMMAND_NAME_FIXTURES },
+  '/twitch/api/v2/streamer/clip-command-settings': {
+    clip_command_enabled: true,
+    clip_command_duration_seconds: 30,
+    clip_command_duration_configured: true,
+  },
+  '/twitch/api/v2/streamer/private-vod-clips': { enabled: false, jobs: [] },
+  '/twitch/api/v2/streamer/title-command-settings': { title_command_enabled: true },
+};
+
+const AUTOPILOT_SCHEDULE_FIXTURE = {
+  settings: {
+    enabled: true,
+    paused: false,
+    ai_editing_enabled: false,
+    lead_time_hours: 24,
+    timezone: 'Europe/Berlin',
+    schedule_slots: [
+      { weekday: 1, local_time: '18:00' },
+      { weekday: 3, local_time: '18:00' },
+      { weekday: 5, local_time: '17:00' },
+    ],
+    target_platforms: ['youtube', 'tiktok'],
+  },
+  persisted: true,
+  schedule_scope: 'shared',
+  distribution_policy: 'same_clip',
+  next_slot: '2026-04-24T15:00:00Z',
+  next_slots: { youtube: '2026-04-24T15:00:00Z', tiktok: '2026-04-24T15:00:00Z' },
+  jobs: [],
+  review_count: 0,
+  production_hold: null,
+  connected_platforms: ['youtube'],
+  test_run: null,
+};
+
+const AUTOPILOT_POLICY_FIXTURE = {
+  pipeline_mode: 'upload_text',
+  review_policy: 'required',
+  metadata_scope: 'shared',
+  text_defaults: {
+    shared: { title: '', description: '', hashtags: ['deadlock'] },
+    per_platform: {},
+  },
+  schedule_scope: 'shared',
+  platform_schedule_slots: {},
+  distribution_policy: 'same_clip',
+  policy_revision: 1,
+};
+
 export function getPreviewPathFixture(pathname: string): unknown | undefined {
+  if (pathname === '/twitch/social-media/api/autopilot/schedule') return AUTOPILOT_SCHEDULE_FIXTURE;
+  if (pathname === '/twitch/social-media/api/autopilot/policy') return AUTOPILOT_POLICY_FIXTURE;
+  if (pathname === '/twitch/api/v2/streamer/community-hints') {
+    return { enabled: true, can_disable: true };
+  }
+  if (pathname === '/twitch/api/v2/streamer/dono-goal') return DONO_GOAL_FIXTURE;
+  if (Object.hasOwn(STREAMER_SETTINGS_FIXTURES, pathname)) return STREAMER_SETTINGS_FIXTURES[pathname];
   if (pathname === '/twitch/api/v2/streamer/ad-manager') return AD_MANAGER_FIXTURE;
+  if (pathname === '/twitch/api/v2/streamer/ad-manager/history') {
+    return {
+      sessionStartedAt: '2026-04-22T08:00:00Z',
+      summary: {
+        blocksRun: 2,
+        blocksInWindow: 3,
+        budgetSecondsUsed: 180,
+        budgetSecondsPlanned: 270,
+        postponed: 1,
+      },
+      entries: [
+        {
+          at: '2026-04-22T08:55:00Z',
+          decision: 'commercial',
+          reason: 'budget',
+          blockSeconds: 90,
+          detail: null,
+        },
+      ],
+    };
+  }
   if (pathname === '/twitch/api/v2/engagement/settings') return ENGAGEMENT_SETTINGS_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/me') return UPLINK_ME_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/destinations') return UPLINK_DESTINATIONS_FIXTURE;

@@ -1,0 +1,13 @@
+[Unit]
+Description=Claude subscription relay for the Social AI editor
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/mkdir -p %h/.local/state/tb-claude-relay/work
+ExecStart=/home/nathanael/.local/bin/tb-claude-relay --socket /run/tb-claude-relay/relay.sock --socket-group twitchbot --claude-bin /home/nathanael/.local/bin/claude --work-dir %h/.local/state/tb-claude-relay/work --max-concurrency 2 --max-request-bytes 4194304 --max-timeout-ms 300000
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -77,6 +77,42 @@ async fn pool(name: &str) -> PgPool {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261015124000_social_pipeline_policy.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("pipeline policy migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261015180000_social_destination_slots.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261018120000_social_production_test_run.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261018130000_social_test_run_discard_release.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261018140000_social_test_run_revision_release.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261019130000_social_cleared_job_releases_clip.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     pool
 }
 
@@ -1161,4 +1197,125 @@ async fn filter_changes_and_deselection_preserve_running_work_and_exact_file_eve
     assert!(
         row.selected_at.is_some() && row.processed_at.is_some() && !row.selectable && !row.eligible
     );
+}
+
+#[tokio::test]
+async fn pipeline_projection_lists_each_owner_source_once_with_children_and_stable_counts() {
+    let pool = pool("pipeline").await;
+    autopilot_settings::save(
+        &pool,
+        "42",
+        &AutopilotSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    year(&pool, 2025).await;
+    assert_eq!(
+        register_recent(&pool, "42", &[clip("pooled", "2025-06-01T00:00:00Z")])
+            .await
+            .unwrap(),
+        (1, 1)
+    );
+    let pooled: i64 =
+        sqlx::query_scalar("SELECT id FROM twitch_clips_social_media WHERE clip_id = 'pooled'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let manual: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media
+        (clip_id, twitch_user_id, streamer_login, clip_url, source_kind, category_key, created_at)
+        VALUES ('manual', '42', 'channel', 'https://clips.test/manual', 'manual_upload', 'other', '2025-07-01T00:00:00Z')
+        RETURNING id").fetch_one(&pool).await.unwrap();
+    sqlx::query("INSERT INTO twitch_clips_social_media
+        (clip_id, twitch_user_id, streamer_login, clip_url, game_id, category_key, created_at, youtube_video_id)
+        VALUES ('foreign_game', '42', 'channel', 'https://clips.test/foreign', '1', 'other', '2025-08-01T00:00:00Z', 'yt-legacy'),
+            ('other_owner', '99', 'other', 'https://clips.test/other', '1', 'other', '2025-08-02T00:00:00Z', NULL)")
+        .execute(&pool).await.unwrap();
+    let slot = timestamp("2026-10-20T16:00:00Z");
+    let job = crate::production_jobs::insert(
+        &pool,
+        &crate::production_jobs::NewProductionJob {
+            twitch_user_id: "42".into(),
+            clip_id: pooled,
+            source: crate::production_jobs::JobSource::Manual,
+            requested_mode: Some(crate::production_jobs::ProductionMode::Static),
+            scheduled_at: Some(slot),
+            max_attempts: 3,
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    sqlx::query("INSERT INTO social_publication_reservations (twitch_user_id, platform, scheduled_at, job_id) VALUES ('42', 'youtube', $1, $2)")
+        .bind(slot).bind(job).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode) VALUES ('42', $1, $2, 'static')")
+        .bind(pooled).bind(job).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'youtube', 'completed')")
+        .bind(manual).execute(&pool).await.unwrap();
+
+    let page = pipeline_sources(&pool, "42", None, 50, 0).await.unwrap();
+    let ids: Vec<&str> = page.sources.iter().map(|s| s.clip_id.as_str()).collect();
+    assert_eq!(ids, ["pooled", "manual", "foreign_game"]);
+    assert_eq!(page.total, 3);
+    assert_eq!(
+        page.counts,
+        EligibilityCounts {
+            automatic: 1,
+            manual: 1,
+            legacy_non_deadlock_visible: 1
+        }
+    );
+    let [first, second, third] = &page.sources[..] else {
+        panic!("three sources expected");
+    };
+    assert_eq!(
+        (first.eligibility, first.pooled, first.auto_post),
+        (SourceEligibility::Automatic, true, true)
+    );
+    assert_eq!(first.jobs.len(), 1);
+    assert_eq!(
+        first.jobs[0].reservations,
+        vec![crate::production_jobs::autopilot_schedule::Reservation {
+            platform: "youtube".into(),
+            scheduled_at: slot
+        }]
+    );
+    assert_eq!(first.versions.len(), 1);
+    assert_eq!(first.versions[0].job_id, Some(job));
+    assert_eq!(
+        (second.eligibility, second.pooled, second.auto_post),
+        (SourceEligibility::Manual, false, false)
+    );
+    assert_eq!(second.destinations.len(), 1);
+    assert_eq!(second.destinations[0].status.as_deref(), Some("completed"));
+    assert_eq!(
+        (third.eligibility, third.auto_post),
+        (SourceEligibility::LegacyNonDeadlockVisible, false)
+    );
+    assert_eq!(third.legacy_publications.len(), 1);
+
+    let mut paged = Vec::new();
+    for offset in 0..4 {
+        let slice = pipeline_sources(&pool, "42", None, 1, offset)
+            .await
+            .unwrap();
+        assert_eq!(slice.total, 3);
+        paged.extend(slice.sources.into_iter().map(|s| s.clip_id));
+    }
+    assert_eq!(paged, ids);
+    let manual_only = pipeline_sources(&pool, "42", Some(SourceEligibility::Manual), 50, 0)
+        .await
+        .unwrap();
+    assert_eq!(manual_only.total, 1);
+    assert_eq!(manual_only.counts, page.counts);
+    assert_eq!(manual_only.sources[0].clip_id, "manual");
+    assert!(matches!(
+        pipeline_sources(&pool, "42", None, 0, 0).await,
+        Err(PoolError::InvalidFilter)
+    ));
+    let foreign = pipeline_sources(&pool, "99", None, 50, 0).await.unwrap();
+    assert_eq!(foreign.total, 1);
+    assert_eq!(foreign.sources[0].clip_id, "other_owner");
 }

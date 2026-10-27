@@ -160,7 +160,7 @@ async fn m4_pauses_conflicts_and_inactive_plan_drafts_control_real_admission() {
         .await
         .expect("stored policies");
     assert!(!report.plan_policies_active);
-    assert_eq!(report.global.initial_total_cap_micro_usd, 2_000_000);
+    assert_eq!(report.global.initial_total_cap_micro_usd, 20_000_000);
     assert_eq!(report.users[0].revision, 2);
     assert_eq!(report.global.updated_by, "discord:42");
     let admitted = begin_attempt(pool, &configuration.provider, &context())
@@ -261,7 +261,7 @@ async fn m4_monthly_reservations_are_atomic_and_keep_old_unknown_higher_debits()
         reservation + 1
     );
     drop(connection);
-    sqlx::query("UPDATE public.llm_usage SET estimated_micro_usd=2000000")
+    sqlx::query("UPDATE public.llm_usage SET estimated_micro_usd=20000000")
         .execute(pool)
         .await
         .expect("fixed shared cap");
@@ -416,7 +416,7 @@ async fn m5_global_monthly_cap_counts_only_this_month_across_users() {
         )
         .expect("reservation");
     assert_eq!(
-        admin_limits::save_global_control(pool, &global(1, Some(2_000_001)), "discord:42").await,
+        admin_limits::save_global_control(pool, &global(1, Some(20_000_001)), "discord:42").await,
         Err(LimitError::Invalid)
     );
     admin_limits::save_global_control(pool, &global(1, Some(reservation - 1)), "discord:42")

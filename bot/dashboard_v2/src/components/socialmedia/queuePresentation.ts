@@ -1,11 +1,13 @@
 import type { ClipListResponseMitPosting, SocialClipMitPosting } from '@/api/socialMedia';
 import type { SocialPlatform } from '@/types/socialMedia';
+import type { PipelineSource } from './pipelineApi';
 
-export type QueueStage = 'all' | 'new' | 'review' | 'planned' | 'posted' | 'failed' | 'archive';
+export type QueueStage = 'all' | 'new' | 'preparing' | 'review' | 'planned' | 'posted' | 'failed' | 'archive';
 export const QUEUE_FILTERS: Array<{ id: QueueStage; label: string }> = [
   { id: 'all', label: 'Alle' },
   { id: 'new', label: 'Neu' },
-  { id: 'review', label: 'Freigabe' },
+  { id: 'preparing', label: 'In Vorbereitung' },
+  { id: 'review', label: 'Prüfung' },
   { id: 'planned', label: 'Geplant' },
   { id: 'posted', label: 'Gepostet' },
   { id: 'failed', label: 'Fehler' },
@@ -46,7 +48,7 @@ export function queueStage(clip: SocialClipMitPosting): Exclude<QueueStage, 'all
   if (['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? ''))
     return clip.status === 'approved' || clip.status === 'publishing' ? 'planned' : 'review';
   if (clip.status === 'publishing' || queuedSlots(clip) > 0) return 'planned';
-  if (clip.status === 'awaiting_approval') return 'review';
+  if (clip.status === 'awaiting_approval' && !clip.pipeline_unified) return 'review';
   return 'new';
 }
 
@@ -77,12 +79,6 @@ export function filterQueue(
   );
 }
 
-/** Vollständiger, kanalgebundener Bestand. Kommt zwischen zwei Seitenabrufen
- * ein Clip dazu, verschieben sich die Offset-Seiten: Überlappungen und ein
- * gewachsenes total werden über Dedup nach clip_db_id toleriert, statt die
- * Ansicht abzubrechen. Abgebrochen wird erst, wenn eine Seite leer bleibt,
- * eine volle Seite keinen einzigen neuen Clip bringt (auch nach einem
- * Neuanlauf ab Seite 1) oder der 200-Seiten-Rahmen gesprengt wird. */
 export async function loadQueueSnapshot(
   loadPage: (page: number) => Promise<ClipListResponseMitPosting>,
   signal?: AbortSignal,
@@ -103,11 +99,156 @@ export async function loadQueueSnapshot(
     if (result.items.length < result.page_size)
       return { items: [...items.values()], total, page: 1, page_size: total };
     if (items.size > previous) continue;
-    // Volle Seite ohne Fortschritt: die Offset-Seiten sind am Bestand
-    // vorbeigerutscht. Ein Neuanlauf ab Seite 1 verankert sie neu.
     if (restarts >= 1) throw new Error('queue_changed');
     restarts += 1;
     page = 0;
   }
   throw new Error('queue_too_large');
+}
+
+const ACTIVE_DESTINATIONS = ['pending', 'processing', 'waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule', 'waiting_exact_file', 'inbox_pending', 'autopilot_preparing', 'autopilot_effect_started', 'autopilot_processing', 'autopilot_retry'];
+const DONE_DESTINATIONS = ['completed', 'inbox'];
+const FAILED_DESTINATIONS = ['failed', 'autopilot_failed', 'autopilot_uncertain'];
+
+function isDraftDestination(destination: PipelineSource['destinations'][number]): boolean {
+  return destination.platform === 'tiktok' && (destination.status === 'inbox' || destination.outcome_reason === 'tiktok_draft');
+}
+
+export function draftPlatforms(source: PipelineSource): string[] {
+  const published = publishedPlatforms(source);
+  return [...new Set(source.destinations
+    .filter((destination) => DONE_DESTINATIONS.includes(destination.status ?? '') && isDraftDestination(destination))
+    .map((destination) => destination.platform))]
+    .filter((platform) => !published.includes(platform));
+}
+
+export function draftSentAt(source: PipelineSource): string | null {
+  return source.destinations
+    .filter((destination) => DONE_DESTINATIONS.includes(destination.status ?? '') && isDraftDestination(destination))
+    .map((destination) => destination.completed_at)
+    .filter((at): at is string => Boolean(at))
+    .sort()
+    .at(-1) ?? null;
+}
+
+export function publishedPlatforms(source: PipelineSource): string[] {
+  return [...new Set([
+    ...source.destinations.filter((destination) => DONE_DESTINATIONS.includes(destination.status ?? '') && !isDraftDestination(destination)).map((destination) => destination.platform),
+    ...source.legacy_publications.map((publication) => publication.platform),
+  ])];
+}
+
+export function onlyDrafts(source: PipelineSource): boolean {
+  return publishedPlatforms(source).length === 0 && draftPlatforms(source).length > 0;
+}
+
+export function failedPlatforms(source: PipelineSource): string[] {
+  const done = [...publishedPlatforms(source), ...draftPlatforms(source)];
+  return [...new Set(source.destinations
+    .filter((destination) => FAILED_DESTINATIONS.includes(destination.status ?? '') && !done.includes(destination.platform))
+    .map((destination) => destination.platform))];
+}
+
+export function sourcePlatforms(source: PipelineSource): string[] {
+  return [...new Set([
+    ...source.destinations.map((destination) => destination.platform),
+    ...source.jobs.flatMap((job) => job.reservations.map((reservation) => reservation.platform)),
+    ...source.legacy_publications.map((publication) => publication.platform),
+  ])];
+}
+
+export function partialResult(source: PipelineSource): boolean {
+  return publishedPlatforms(source).length > 0 && failedPlatforms(source).length > 0;
+}
+
+function sourcePreparing(source: PipelineSource): boolean {
+  return source.jobs.some((job) => job.status === 'queued' || job.status === 'running')
+    || source.versions.some((version) => version.status === 'rendering');
+}
+
+function sourcePlanned(source: PipelineSource): boolean {
+  return source.destinations.some((destination) => ACTIVE_DESTINATIONS.includes(destination.status ?? 'pending'))
+    || source.versions.some((version) => ['approved', 'scheduled'].includes(version.status));
+}
+
+export function legacyUncertainPlatforms(source: PipelineSource): string[] {
+  return source.destinations
+    .filter((destination) => destination.produced_video_id === null && destination.status === 'uncertain')
+    .map((destination) => destination.platform);
+}
+
+function sourceHasReviewVideo(source: PipelineSource): boolean {
+  return source.versions.some((version) => version.status === 'review');
+}
+
+function sourceInReview(source: PipelineSource): boolean {
+  return sourceHasReviewVideo(source)
+    || source.destinations.some((destination) => destination.status === 'autopilot_held')
+    || legacyUncertainPlatforms(source).length > 0;
+}
+
+export function sourceStage(source: PipelineSource): Exclude<QueueStage, 'all'> {
+  if (source.discarded_at) return 'archive';
+  if (sourcePlanned(source)) return 'planned';
+  if (sourcePreparing(source)) return 'preparing';
+  if (sourceInReview(source)) return 'review';
+  if (failedPlatforms(source).length > 0 || (publishedPlatforms(source).length === 0 && draftPlatforms(source).length === 0 && source.jobs.some((job) => job.status === 'failed' || (job.status === 'review' && !sourceHasReviewVideo(source))))) return 'failed';
+  if (publishedPlatforms(source).length > 0 || draftPlatforms(source).length > 0 || source.published_at) return 'posted';
+  return 'new';
+}
+
+export function sourceMatchesStage(source: PipelineSource, stage: QueueStage): boolean {
+  return stage === 'all' || sourceStage(source) === stage;
+}
+
+export type CategoryFilter = 'all' | 'deadlock' | 'manual' | `game:${string}`;
+export const DEFAULT_CATEGORY: CategoryFilter = 'deadlock';
+
+export interface CategoryOption {
+  id: CategoryFilter;
+  gameName: string | null;
+  count: number;
+}
+
+export function sourceCategory(source: PipelineSource): Exclude<CategoryFilter, 'all'> {
+  if (source.eligibility === 'manual') return 'manual';
+  if (source.eligibility === 'automatic') return 'deadlock';
+  return `game:${source.game_id ?? ''}`;
+}
+
+export function categoryOptions(sources: PipelineSource[]): CategoryOption[] {
+  const games = new Map<CategoryFilter, CategoryOption>();
+  let deadlock = 0;
+  let manual = 0;
+  for (const source of sources) {
+    const category = sourceCategory(source);
+    if (category === 'deadlock') deadlock += 1;
+    else if (category === 'manual') manual += 1;
+    else {
+      const option = games.get(category) ?? { id: category, gameName: null, count: 0 };
+      option.count += 1;
+      option.gameName = option.gameName ?? source.game_name;
+      games.set(category, option);
+    }
+  }
+  const others = [...games.values()].sort((a, b) => b.count - a.count || (a.gameName ?? '').localeCompare(b.gameName ?? ''));
+  return [
+    { id: 'deadlock', gameName: 'Deadlock', count: deadlock },
+    ...others,
+    ...(manual > 0 ? [{ id: 'manual' as const, gameName: null, count: manual }] : []),
+    { id: 'all', gameName: null, count: sources.length },
+  ];
+}
+
+export function filterSources(
+  sources: PipelineSource[],
+  filter: { category: CategoryFilter; stage: QueueStage; search: string; platform: SocialPlatform | 'all' },
+  title: (source: PipelineSource) => string,
+) {
+  const needle = filter.search.trim().toLocaleLowerCase();
+  return sources.filter((source) =>
+    (filter.category === 'all' || sourceCategory(source) === filter.category)
+    && sourceMatchesStage(source, filter.stage)
+    && (filter.platform === 'all' || sourcePlatforms(source).includes(filter.platform))
+    && (!needle || `${title(source)} ${source.clip_id}`.toLocaleLowerCase().includes(needle)));
 }

@@ -1,3 +1,4 @@
+use super::super::stage_contract::PlanOrigin;
 use super::*;
 
 use crate::test_support::postgres;
@@ -63,6 +64,18 @@ async fn database() -> postgres::TestPostgres {
     .execute(&db.pool)
     .await
     .expect("publishing migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261015124000_social_pipeline_policy.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("pipeline policy migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261015180000_social_destination_slots.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("destination slot migration");
     sqlx::query("INSERT INTO social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value")
         .execute(&db.pool).await.expect("synthetic global consent");
     super::super::store::upsert_user_consent(&db.pool, "101", true, "fixture-owner")
@@ -146,6 +159,7 @@ async fn prepared(
             expected_twitch_clip_id: Some("fixture-original"),
             checkpoints: &checkpoints,
             brain_token: None,
+            downloader: None,
         },
         AiStage::Preparing,
     )
@@ -177,6 +191,8 @@ async fn prepared(
         subtitle_scale_percent: 100,
         revision_proposal: None,
         variants: Vec::new(),
+        overlay_title: Default::default(),
+        subtitles_enabled: true,
         plan: super::super::EditPlan {
             schema_version: 1,
             source_duration_ms: frozen.media.duration_ms,
@@ -185,6 +201,7 @@ async fn prepared(
                 end_ms: frozen.media.duration_ms,
                 reason: "Vollständiger Zusammenhang".into(),
             }],
+            hook: None,
             observed_highlights: vec![],
             significant_uncertainty: false,
             review_reasons: vec![],
@@ -209,6 +226,7 @@ async fn prepared(
         &runtime.limits.plan,
         &runtime.limits.copy,
         &analysis(&checkpoints).expect("persisted analysis"),
+        PlanOrigin::FirstPlan,
     )
     .expect("real deterministic plan validation");
     checkpoints.insert(
@@ -265,10 +283,20 @@ async fn analyzed_highlights_guard_fresh_and_resumed_plans_before_render_and_qa(
                 frozen.media.duration_ms,
                 &runtime.limits.plan,
                 &runtime.limits.copy,
-                &analyzed
+                &analyzed,
+                PlanOrigin::FirstPlan,
             ),
             Err(AiEditorError::Plan)
         ));
+        changed
+            .validate(
+                frozen.media.duration_ms,
+                &runtime.limits.plan,
+                &runtime.limits.copy,
+                &analyzed,
+                PlanOrigin::Revision,
+            )
+            .expect("requested revision cut overrides the highlight");
         checkpoints.insert(
             AiStage::Planning,
             StageCheckpoint::Planning {
@@ -298,6 +326,7 @@ async fn analyzed_highlights_guard_fresh_and_resumed_plans_before_render_and_qa(
                         expected_twitch_clip_id: Some("fixture-original"),
                         checkpoints: &checkpoints,
                         brain_token: None,
+                        downloader: None,
                     },
                     stage
                 )
@@ -316,6 +345,7 @@ async fn analyzed_highlights_guard_fresh_and_resumed_plans_before_render_and_qa(
             &runtime.limits.plan,
             &runtime.limits.copy,
             &analyzed,
+            PlanOrigin::FirstPlan,
         )
         .expect("full context and reaction preserved despite empty planner observations");
     let mut uncertain = analyzed;
@@ -327,7 +357,8 @@ async fn analyzed_highlights_guard_fresh_and_resumed_plans_before_render_and_qa(
             frozen.media.duration_ms,
             &runtime.limits.plan,
             &runtime.limits.copy,
-            &uncertain
+            &uncertain,
+            PlanOrigin::FirstPlan,
         )
         .is_err());
     let mut reviewed = original;
@@ -338,11 +369,40 @@ async fn analyzed_highlights_guard_fresh_and_resumed_plans_before_render_and_qa(
             frozen.media.duration_ms,
             &runtime.limits.plan,
             &runtime.limits.copy,
-            &uncertain
+            &uncertain,
+            PlanOrigin::FirstPlan,
         )
         .expect("uncertainty remains visible")
         .needs_review());
     lease.release().await.expect("release");
+}
+
+#[test]
+fn every_stage_schema_passes_the_structured_output_wire_contract() {
+    let root = tempfile::tempdir().expect("package root");
+    let runtime = runtime(root.path());
+    let limits = &runtime.limits;
+    let duration = limits.plan.max_source_duration_ms;
+    tb_llm::social_editor::check_schema(&analysis_schema(&limits.plan, duration))
+        .expect("analysis schema");
+    for multi_output in [false, true] {
+        for mut schema in [
+            planning_schema(&limits.plan, &limits.copy, duration),
+            super::super::stage_contract::revision_schema(&limits.plan, &limits.copy, duration),
+        ] {
+            if multi_output {
+                schema["properties"]["variants"]["maxItems"] =
+                    json!(limits.revisions.max_variants.saturating_sub(1));
+            } else {
+                super::super::stage_contract::drop_variants(&mut schema);
+                assert!(schema["properties"].get("variants").is_none());
+                assert!(!schema["required"]
+                    .as_array()
+                    .is_some_and(|names| names.iter().any(|name| name == "variants")));
+            }
+            tb_llm::social_editor::check_schema(&schema).expect("planning schema");
+        }
+    }
 }
 
 #[test]
@@ -373,7 +433,7 @@ async fn manual_resume_materializes_one_owned_version_and_preserves_frozen_layou
         .await
         .expect("default C1");
     assert!(!settings.enabled && !settings.ai_editing_enabled);
-    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
         .await
         .expect("manual create independent of autopilot");
     assert!(matches!(
@@ -427,6 +487,7 @@ async fn manual_resume_materializes_one_owned_version_and_preserves_frozen_layou
             expected_twitch_clip_id: Some("fixture-original"),
             checkpoints: &checkpoints,
             brain_token: None,
+            downloader: None,
         },
         AiStage::Rendering,
     )
@@ -440,7 +501,12 @@ async fn manual_resume_materializes_one_owned_version_and_preserves_frozen_layou
         .await
         .expect("durable proxy before checkpoint save");
     lease.release().await.expect("handover before worker");
-    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
     assert!(worker
         .process_next()
         .await
@@ -597,7 +663,7 @@ async fn failed_original_preview_still_expires_the_partial_owned_output() {
     let runtime = EditorRuntime::from_configuration(directory.path(), configuration)
         .expect("bounded failing preview configuration");
     let clip = source(&db.pool, &runtime).await;
-    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
         .await
         .expect("manual job");
     let mut lease = super::super::store::acquire_production_lease(&db.pool)
@@ -623,6 +689,7 @@ async fn failed_original_preview_still_expires_the_partial_owned_output() {
             expected_twitch_clip_id: Some("fixture-original"),
             checkpoints: &checkpoints,
             brain_token: None,
+            downloader: None,
         },
         AiStage::Rendering,
     )
@@ -706,10 +773,15 @@ async fn static_full_video_and_manual_ai_share_the_lease_and_busy_previews_remai
     let original = runtime.limits.source_root.join("fixture-original.mp4");
     let output = runtime.limits.output_root.join("static-fixture.mp4");
     let processor = crate::video_processor::VideoProcessor::default();
-    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
         .await
         .expect("queued manual AI");
-    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
     let mut lease = super::super::store::acquire_production_lease(&db.pool)
         .await
         .expect("lease")
@@ -808,7 +880,7 @@ async fn invalid_frozen_checkpoint_fails_visibly_without_starving_the_queue() {
     let directory = tempfile::tempdir().expect("package root");
     let runtime = runtime(directory.path());
     let clip = source(&db.pool, &runtime).await;
-    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
         .await
         .expect("manual job");
     let mut lease = super::super::store::acquire_production_lease(&db.pool)
@@ -845,7 +917,12 @@ async fn invalid_frozen_checkpoint_fails_visibly_without_starving_the_queue() {
     .await
     .expect("bounded but incompatible checkpoint");
     lease.release().await.expect("release");
-    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
     assert!(worker.process_next().await.is_err());
     let view = super::super::get_manual_job(&db.pool, &runtime, "101", job.id)
         .await
@@ -908,6 +985,7 @@ async fn c3_resume_reuses_the_pipeline_and_exact_durable_version_under_the_exist
             runtime: &runtime,
             lease: &mut lease,
             brain_token: None,
+            downloader: None,
         },
         job.clone(),
     )
@@ -937,6 +1015,7 @@ async fn c3_resume_reuses_the_pipeline_and_exact_durable_version_under_the_exist
             runtime: &runtime,
             lease: &mut lease,
             brain_token: None,
+            downloader: None,
         },
         job,
     )
@@ -970,7 +1049,7 @@ async fn expire_fixture(pool: &PgPool, video_id: i64) {
 }
 
 async fn usage_fixture(pool: &PgPool, identity: Identity) {
-    sqlx::query("INSERT INTO llm_usage (purpose,provider,model,attempt_state,tokens_in,tokens_out,latency_ms,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ('social_editor','anthropic','fixture-model','succeeded',11,7,23,'101',$1,'planning',20,10,'usage_priced_estimate')")
+    sqlx::query("INSERT INTO llm_usage (purpose,provider,model,attempt_state,tokens_in,tokens_out,cache_creation_input_tokens,cache_read_input_tokens,latency_ms,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ('social_editor','anthropic','fixture-model','succeeded',11,7,0,0,23,'101',$1,'planning',20,10,'usage_priced_estimate')")
         .bind(identity.namespace()).execute(pool).await.expect("synthetic existing provider ledger");
 }
 
@@ -987,7 +1066,7 @@ async fn expired_manual_media_retries_rebuild_without_replaying_provider_stages(
         let directory = tempfile::tempdir().expect("package root");
         let runtime = runtime(directory.path());
         let clip = source(&db.pool, &runtime).await;
-        let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+        let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
             .await
             .expect("manual job");
         let identity = Identity::Manual(job.id);
@@ -1021,6 +1100,7 @@ async fn expired_manual_media_retries_rebuild_without_replaying_provider_stages(
                 expected_twitch_clip_id: Some("fixture-original"),
                 checkpoints: &checkpoints,
                 brain_token: None,
+                downloader: None,
             },
             AiStage::Rendering,
         )
@@ -1052,6 +1132,7 @@ async fn expired_manual_media_retries_rebuild_without_replaying_provider_stages(
                         expected_twitch_clip_id: Some("fixture-original"),
                         checkpoints: &checkpoints,
                         brain_token: None,
+                        downloader: None,
                     },
                     AiStage::Validating,
                 )
@@ -1084,7 +1165,12 @@ async fn expired_manual_media_retries_rebuild_without_replaying_provider_stages(
             .await
             .expect("advertised retry accepted");
         lease.release().await.expect("worker handover");
-        let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+        let worker = super::super::ManualWorker::new(
+            db.pool.clone(),
+            runtime.clone(),
+            None,
+            std::sync::Arc::new(NoDownload),
+        );
         assert!(worker
             .process_next()
             .await
@@ -1194,6 +1280,7 @@ async fn expired_production_media_resumes_rebuild_and_reconcile_completed_checkp
                 expected_twitch_clip_id: None,
                 checkpoints: &checkpoints,
                 brain_token: None,
+                downloader: None,
             },
             AiStage::Rendering,
         )
@@ -1219,6 +1306,7 @@ async fn expired_production_media_resumes_rebuild_and_reconcile_completed_checkp
                         expected_twitch_clip_id: None,
                         checkpoints: &checkpoints,
                         brain_token: None,
+                        downloader: None,
                     },
                     AiStage::Validating,
                 )
@@ -1245,6 +1333,7 @@ async fn expired_production_media_resumes_rebuild_and_reconcile_completed_checkp
                 runtime: &runtime,
                 lease: &mut lease,
                 brain_token: None,
+                downloader: None,
             },
             job.clone(),
         )
@@ -1294,6 +1383,7 @@ async fn expired_production_media_resumes_rebuild_and_reconcile_completed_checkp
                 runtime: &runtime,
                 lease: &mut lease,
                 brain_token: None,
+                downloader: None,
             },
             job.clone(),
         )
@@ -1312,6 +1402,7 @@ async fn expired_production_media_resumes_rebuild_and_reconcile_completed_checkp
                     runtime: &runtime,
                     lease: &mut lease,
                     brain_token: None,
+                    downloader: None,
                 },
                 job.clone(),
             )
@@ -1344,7 +1435,7 @@ async fn expiry_after_queueing_does_not_spend_validation_attempts_when_rendering
     let directory = tempfile::tempdir().expect("package root");
     let runtime = runtime(directory.path());
     let clip = source(&db.pool, &runtime).await;
-    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
         .await
         .expect("job");
     let identity = Identity::Manual(job.id);
@@ -1364,6 +1455,7 @@ async fn expiry_after_queueing_does_not_spend_validation_attempts_when_rendering
             expected_twitch_clip_id: None,
             checkpoints: &checkpoints,
             brain_token: None,
+            downloader: None,
         },
         AiStage::Rendering,
     )
@@ -1387,7 +1479,12 @@ async fn expiry_after_queueing_does_not_spend_validation_attempts_when_rendering
         .expect("queue before expiry");
     expire_fixture(&db.pool, video.id).await;
     lease.release().await.expect("handover");
-    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
     assert!(matches!(
         worker.process_next().await,
         Err(AiEditorError::Attempts)
@@ -1423,7 +1520,7 @@ async fn revision_fixture(
     runtime: &EditorRuntime,
     clip: i64,
 ) -> (i64, ProducedVideo, BTreeMap<AiStage, StageCheckpoint>) {
-    let job = super::super::create_manual_job(pool, runtime, "101", clip)
+    let job = super::super::create_manual_job(pool, runtime, "101", clip, &NoDownload)
         .await
         .expect("manual root");
     let mut lease = super::super::store::acquire_production_lease(pool)
@@ -1441,10 +1538,15 @@ async fn revision_fixture(
             .expect("checkpoint");
     }
     lease.release().await.expect("release");
-    super::super::ManualWorker::new(pool.clone(), runtime.clone(), None)
-        .process_next()
-        .await
-        .expect("real render and validation");
+    super::super::ManualWorker::new(
+        pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    )
+    .process_next()
+    .await
+    .expect("real render and validation");
     let video = produced_video::find_ai_version(pool, "101", clip, Some(job.id), None)
         .await
         .expect("C2")
@@ -1463,6 +1565,18 @@ fn proposed_plan(
         .clone();
     if let StageCheckpoint::Planning { edit_plan, .. } = &mut checkpoint {
         edit_plan.insert("revision_proposal".into(),json!({"summary":"Einstieg prüfen","impact":"Der Zusammenhang bleibt erhalten.","reanalyze":reanalyze,"requires_confirmation":true,"estimated_provider_cost_usd":null}));
+        edit_plan.insert("subtitle_scale_percent".into(), json!(110));
+    }
+    checkpoint
+}
+
+fn unchanged_plan(checkpoints: &BTreeMap<AiStage, StageCheckpoint>) -> StageCheckpoint {
+    let mut checkpoint = checkpoints
+        .get(&AiStage::Planning)
+        .expect("parent plan")
+        .clone();
+    if let StageCheckpoint::Planning { edit_plan, .. } = &mut checkpoint {
+        edit_plan.insert("revision_proposal".into(),json!({"summary":"Der Text im Quellvideo lässt sich nicht entfernen.","impact":"Keine Änderung.","reanalyze":false,"requires_confirmation":false,"estimated_provider_cost_usd":null}));
     }
     checkpoint
 }
@@ -1561,7 +1675,8 @@ async fn revisions_preserve_parent_reuse_checkpoints_and_confirm_before_renderin
                 identity: Identity::Manual(child.id),
                 expected_twitch_clip_id: Some("fixture-original"),
                 checkpoints: &reused,
-                brain_token: None
+                brain_token: None,
+                downloader: None,
             },
             AiStage::Analyzing
         )
@@ -1579,7 +1694,12 @@ async fn revisions_preserve_parent_reuse_checkpoints_and_confirm_before_renderin
         .await
         .expect("awaiting");
     assert_eq!(awaiting.status, "awaiting_confirmation");
-    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
     assert!(!worker.process_next().await.expect("paused worker"));
     assert!(
         produced_video::find_ai_version(&db.pool, "101", clip, Some(child.id), None)
@@ -1732,6 +1852,52 @@ async fn revisions_preserve_parent_reuse_checkpoints_and_confirm_before_renderin
         && version.status == "published"
         && version.file_url.is_some()
         && version.original_url.is_none()));
+}
+
+#[tokio::test]
+async fn unchanged_revision_ends_without_a_new_version_and_keeps_its_summary() {
+    use super::super::revision;
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("root");
+    let runtime = runtime(directory.path());
+    let clip = source(&db.pool, &runtime).await;
+    let (root, parent, checkpoints) = revision_fixture(&db.pool, &runtime, clip).await;
+    let child = revision::create_revision(
+        &db.pool,
+        &runtime,
+        "101",
+        root,
+        parent.id,
+        "Entferne den eingebrannten Text",
+    )
+    .await
+    .expect("revision");
+    save_revision_plan(&db.pool, child.id, &unchanged_plan(&checkpoints)).await;
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
+    let _ = worker.process_next().await;
+    let job = super::super::get_manual_job(&db.pool, &runtime, "101", child.id)
+        .await
+        .expect("unchanged revision");
+    assert_eq!(job.status, "failed");
+    assert_eq!(job.failure_code.as_deref(), Some("revision_unchanged"));
+    assert!(!job.can_retry);
+    assert_eq!(
+        job.revision_proposal
+            .as_ref()
+            .map(|proposal| proposal.summary.as_str()),
+        Some("Der Text im Quellvideo lässt sich nicht entfernen.")
+    );
+    assert!(
+        produced_video::find_ai_version(&db.pool, "101", clip, Some(child.id), None)
+            .await
+            .expect("C2")
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -1902,7 +2068,8 @@ async fn c3_consent_failure_stays_review_without_static_fallback_or_manual_ident
                 pool: &db.pool,
                 runtime: &runtime,
                 lease: &mut lease,
-                brain_token: None
+                brain_token: None,
+                downloader: None,
             },
             job
         )
@@ -1940,7 +2107,7 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
     autopilot_settings::save(&db.pool, "101", &settings)
         .await
         .expect("explicit isolated opt-in");
-    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip, &NoDownload)
         .await
         .expect("job");
     let mut lease = super::super::store::acquire_production_lease(&db.pool)
@@ -1999,6 +2166,8 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
             plan: distinct,
             platforms: base.platforms.clone(),
             subtitle_scale_percent: 100,
+            overlay_title: Default::default(),
+            subtitles_enabled: true,
         });
     assert!(validate_variants(&plan, &json!({"multi_output_enabled":false}), &runtime).is_err());
     validate_variants(&plan, &frozen.publication, &runtime).expect("opt-in");
@@ -2007,6 +2176,7 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
         &runtime.limits.plan,
         &runtime.limits.copy,
         &analysis(&checkpoints).expect("persisted analysis"),
+        PlanOrigin::FirstPlan,
     )
     .expect("bounded variant");
     let mut duplicate = plan.clone();
@@ -2053,10 +2223,15 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
             .expect("checkpoint");
     }
     lease.release().await.expect("release");
-    super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None)
-        .process_next()
-        .await
-        .expect("actual multiple FFmpeg outputs");
+    super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    )
+    .process_next()
+    .await
+    .expect("actual multiple FFmpeg outputs");
     let view = super::super::get_manual_job(&db.pool, &runtime, "101", job.id)
         .await
         .expect("variants view");
@@ -2149,6 +2324,8 @@ async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or
             plan: alternate,
             platforms: plan.platforms.clone(),
             subtitle_scale_percent: 100,
+            overlay_title: Default::default(),
+            subtitles_enabled: true,
         });
     if let Some(StageCheckpoint::Planning { edit_plan, .. }) =
         checkpoints.get_mut(&AiStage::Planning)
@@ -2174,6 +2351,7 @@ async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or
             runtime: &runtime,
             lease: &mut lease,
             brain_token: None,
+            downloader: None,
         },
         job.clone(),
     )
@@ -2201,6 +2379,7 @@ async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or
             runtime: &runtime,
             lease: &mut lease,
             brain_token: None,
+            downloader: None,
         },
         job.clone(),
     )
@@ -2251,6 +2430,7 @@ async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or
             runtime: &runtime,
             lease: &mut lease,
             brain_token: None,
+            downloader: None,
         },
         job,
     )
@@ -2317,6 +2497,7 @@ async fn autopilot_revisions_replace_review_and_invalidate_old_file_approvals() 
             runtime: &runtime,
             lease: &mut lease,
             brain_token: None,
+            downloader: None,
         },
         job.clone(),
     )
@@ -2439,7 +2620,12 @@ async fn autopilot_revisions_replace_review_and_invalidate_old_file_approvals() 
     revision::decide_proposal(&db.pool, &runtime, "101", child.id, true)
         .await
         .expect("confirm held parent");
-    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    let worker = super::super::ManualWorker::new(
+        db.pool.clone(),
+        runtime.clone(),
+        None,
+        std::sync::Arc::new(NoDownload),
+    );
     assert!(worker.process_next().await.expect("revision render"));
     let completed = super::super::get_manual_job(&db.pool, &runtime, "101", child.id)
         .await
@@ -2632,4 +2818,1033 @@ async fn editor_options_default_off_and_save_without_touching_other_settings() {
         .await
         .expect("other user");
     assert!(!other.multi_output_enabled && !other.experimental_ai_layout);
+}
+
+struct NoDownload;
+
+#[async_trait::async_trait]
+impl crate::clip_prep_worker::ClipDownloader for NoDownload {
+    async fn download(&self, _url: &str, _destination: &Path) -> Result<(), String> {
+        Err("local production must not download media".into())
+    }
+}
+
+struct RegisteringDownloader;
+
+#[async_trait::async_trait]
+impl crate::clip_prep_worker::ClipDownloader for RegisteringDownloader {
+    async fn download(&self, _url: &str, dest: &Path) -> Result<(), String> {
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        tokio::fs::write(dest, b"fake-mp4")
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
+struct MissingTwitchDownloader;
+
+#[async_trait::async_trait]
+impl crate::clip_prep_worker::ClipDownloader for MissingTwitchDownloader {
+    async fn download(&self, _url: &str, _dest: &Path) -> Result<(), String> {
+        Err("HTTP Error 404: Unable to download webpage".into())
+    }
+}
+
+async fn clip_without_file(pool: &PgPool, twitch_clip_id: &str) -> i64 {
+    sqlx::raw_sql(
+        "ALTER TABLE twitch_clips_social_media ADD COLUMN IF NOT EXISTS downloaded_at TIMESTAMPTZ;
+        ALTER TABLE twitch_clips_social_media ADD COLUMN IF NOT EXISTS download_failed_at TIMESTAMPTZ;",
+    )
+    .execute(pool)
+    .await
+    .expect("download bookkeeping columns");
+    sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id,clip_url,clip_title,streamer_login,created_at,twitch_user_id,category_key,game_id) VALUES ($1,$2,'Fixture','fixture-one','2026-10-11T00:00:00Z','101','deadlock','fixture-game') RETURNING id")
+        .bind(twitch_clip_id)
+        .bind(format!("https://clips.twitch.tv/{twitch_clip_id}"))
+        .fetch_one(pool)
+        .await
+        .expect("clip without local file")
+}
+
+#[tokio::test]
+async fn load_source_downloads_missing_file_and_registers_it() {
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let clip = clip_without_file(&db.pool, "fixture-download").await;
+    let loaded = super::super::source::load_source(
+        &db.pool,
+        &runtime,
+        "101",
+        clip,
+        Some(&RegisteringDownloader),
+    )
+    .await
+    .expect("downloaded source");
+    assert!(loaded.path.exists());
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT local_file_path FROM twitch_clips_social_media WHERE id = $1")
+            .bind(clip)
+            .fetch_one(&db.pool)
+            .await
+            .expect("registered path");
+    let stored = stored.expect("local_file_path after download");
+    assert!(stored.ends_with(&format!("{clip}.mp4")));
+    assert_eq!(
+        tokio::fs::read(&loaded.path).await.expect("bytes"),
+        b"fake-mp4"
+    );
+}
+
+#[tokio::test]
+async fn load_source_maps_twitch_404_to_source_missing() {
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let clip = clip_without_file(&db.pool, "fixture-gone").await;
+    let error = match super::super::source::load_source(
+        &db.pool,
+        &runtime,
+        "101",
+        clip,
+        Some(&MissingTwitchDownloader),
+    )
+    .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("missing twitch clip"),
+    };
+    assert!(matches!(error, AiEditorError::SourceMissing));
+    assert!(error.is_source_fetch_failure());
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT local_file_path FROM twitch_clips_social_media WHERE id = $1")
+            .bind(clip)
+            .fetch_one(&db.pool)
+            .await
+            .expect("unchanged path");
+    assert!(stored.is_none());
+}
+
+#[tokio::test]
+async fn produce_download_failure_fails_job_and_unpins_clip() {
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let clip = clip_without_file(&db.pool, "fixture-fail-download").await;
+    sqlx::raw_sql(
+        "CREATE TABLE IF NOT EXISTS social_clip_pool (
+            twitch_user_id TEXT NOT NULL,
+            clip_id TEXT NOT NULL,
+            clip_db_id BIGINT,
+            selected_at TIMESTAMPTZ,
+            PRIMARY KEY (twitch_user_id, clip_id)
+        );
+        CREATE OR REPLACE FUNCTION social_clip_video_holds(clip BIGINT) RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT FALSE $$;",
+    )
+    .execute(&db.pool)
+    .await
+    .expect("pool unpin schema");
+    sqlx::query("INSERT INTO social_clip_pool (twitch_user_id, clip_id, clip_db_id, selected_at) VALUES ('101', 'fixture-fail-download', $1, clock_timestamp())")
+        .bind(clip)
+        .execute(&db.pool)
+        .await
+        .expect("pinned clip");
+    production_jobs::insert(
+        &db.pool,
+        &production_jobs::NewProductionJob {
+            twitch_user_id: "101".into(),
+            clip_id: clip,
+            source: production_jobs::JobSource::Manual,
+            requested_mode: Some(ProductionMode::Ai),
+            scheduled_at: None,
+            max_attempts: 2,
+        },
+    )
+    .await
+    .expect("test job");
+    let mut lease = super::super::store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    let job = production_jobs::claim_next(&db.pool)
+        .await
+        .expect("claim")
+        .expect("running job");
+    let error = match produce(
+        ProductionContext {
+            pool: &db.pool,
+            runtime: &runtime,
+            lease: &mut lease,
+            brain_token: None,
+            downloader: Some(&MissingTwitchDownloader),
+        },
+        job.clone(),
+    )
+    .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("download failure must stop produce"),
+    };
+    assert!(error.is_source_fetch_failure());
+    let current = production_jobs::get(&db.pool, "101", job.id)
+        .await
+        .expect("finished job")
+        .expect("owned job");
+    assert_eq!(current.status, "failed");
+    let selected: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT selected_at FROM social_clip_pool WHERE clip_db_id = $1")
+            .bind(clip)
+            .fetch_one(&db.pool)
+            .await
+            .expect("pool pin");
+    assert!(selected.is_none());
+    lease.release().await.expect("release");
+}
+
+struct CountingTwitchDownloader {
+    error: &'static str,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl crate::clip_prep_worker::ClipDownloader for CountingTwitchDownloader {
+    async fn download(&self, _url: &str, _dest: &Path) -> Result<(), String> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(self.error.into())
+    }
+}
+
+async fn produce_with_download_error(
+    pool: &PgPool,
+    runtime: &EditorRuntime,
+    twitch_clip_id: &str,
+    error: &'static str,
+) -> (AiEditorError, String, usize) {
+    let clip = clip_without_file(pool, twitch_clip_id).await;
+    production_jobs::insert(
+        pool,
+        &production_jobs::NewProductionJob {
+            twitch_user_id: "101".into(),
+            clip_id: clip,
+            source: production_jobs::JobSource::Manual,
+            requested_mode: Some(ProductionMode::Ai),
+            scheduled_at: None,
+            max_attempts: 2,
+        },
+    )
+    .await
+    .expect("production job");
+    let mut lease = super::super::store::acquire_production_lease(pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    let job = production_jobs::claim_next(pool)
+        .await
+        .expect("claim")
+        .expect("running job");
+    let downloader = CountingTwitchDownloader {
+        error,
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let error = match produce(
+        ProductionContext {
+            pool,
+            runtime,
+            lease: &mut lease,
+            brain_token: None,
+            downloader: Some(&downloader),
+        },
+        job.clone(),
+    )
+    .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("download failure must stop produce"),
+    };
+    let status = production_jobs::get(pool, "101", job.id)
+        .await
+        .expect("finished job")
+        .expect("owned job")
+        .status;
+    lease.release().await.expect("release");
+    (
+        error,
+        status,
+        downloader.calls.load(std::sync::atomic::Ordering::SeqCst),
+    )
+}
+
+#[tokio::test]
+async fn twitch_503_retries_within_stage_attempts_while_gone_clips_fail_at_once() {
+    let db = database().await;
+    sqlx::raw_sql(
+        "CREATE TABLE IF NOT EXISTS social_clip_pool (
+            twitch_user_id TEXT NOT NULL,
+            clip_id TEXT NOT NULL,
+            clip_db_id BIGINT,
+            selected_at TIMESTAMPTZ,
+            PRIMARY KEY (twitch_user_id, clip_id)
+        );
+        CREATE OR REPLACE FUNCTION social_clip_video_holds(clip BIGINT) RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT FALSE $$;",
+    )
+    .execute(&db.pool)
+    .await
+    .expect("pool unpin schema");
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let (error, status, calls) = produce_with_download_error(
+        &db.pool,
+        &runtime,
+        "fixture-twitch-503",
+        "ERROR: [twitch:clips] abc: HTTP Error 503: Service Unavailable",
+    )
+    .await;
+    assert!(matches!(error, AiEditorError::SourceDownload), "{error}");
+    assert_eq!(
+        calls,
+        usize::try_from(runtime.limits.stage_attempts).expect("attempts")
+    );
+    assert!(calls > 1);
+    assert_eq!(status, "failed");
+    let (error, status, calls) = produce_with_download_error(
+        &db.pool,
+        &runtime,
+        "fixture-twitch-410",
+        "ERROR: [twitch:clips] abc: HTTP Error 410: Gone",
+    )
+    .await;
+    assert!(matches!(error, AiEditorError::SourceMissing), "{error}");
+    assert_eq!(calls, 1);
+    assert_eq!(status, "failed");
+}
+
+async fn unified_ai_channel(
+    pool: &PgPool,
+    review_policy: autopilot_settings::ReviewPolicy,
+) -> chrono::DateTime<chrono::Utc> {
+    use chrono::Datelike;
+    let slot: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT date_trunc('minute', clock_timestamp()) + INTERVAL '5 minutes'")
+            .fetch_one(pool)
+            .await
+            .expect("future database slot");
+    production_jobs::autopilot_schedule::save_schedule(
+        pool,
+        "101",
+        &production_jobs::autopilot_schedule::SchedulePatch {
+            enabled: Some(true),
+            ai_editing_enabled: Some(false),
+            timezone: Some("UTC".into()),
+            schedule_slots: Some(vec![autopilot_settings::ScheduleSlot {
+                weekday: slot.weekday().number_from_monday() as u8,
+                local_time: slot.format("%H:%M").to_string(),
+            }]),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("automatic schedule");
+    let mut settings = autopilot_settings::load(pool, "101")
+        .await
+        .expect("settings");
+    settings.publish_mode = autopilot_settings::PublishMode::FullAuto;
+    autopilot_settings::save(pool, "101", &settings)
+        .await
+        .expect("legacy full auto");
+    let mut policy = autopilot_settings::load_policy(pool, "101")
+        .await
+        .expect("policy");
+    policy.pipeline_mode = autopilot_settings::PipelineMode::AiEdit;
+    policy.review_policy = review_policy;
+    autopilot_settings::save_policy(pool, "101", &policy)
+        .await
+        .expect("AI edit policy");
+    sqlx::query("INSERT INTO social_pipeline_cutover (twitch_user_id, state, migration_version) VALUES ('101', 'unified', 1)")
+        .execute(pool)
+        .await
+        .expect("unified owner");
+    slot
+}
+
+#[tokio::test]
+async fn unified_ai_mode_follows_the_frozen_review_policy_instead_of_legacy_full_auto() {
+    use autopilot_settings::ReviewPolicy;
+    for review_policy in [
+        ReviewPolicy::Required,
+        ReviewPolicy::Off,
+        ReviewPolicy::VetoUntilDeadline,
+    ] {
+        let db = database().await;
+        let directory = tempfile::tempdir().expect("package root");
+        let runtime = runtime(directory.path());
+        let clip = source(&db.pool, &runtime).await;
+        let slot = unified_ai_channel(&db.pool, review_policy).await;
+        let job = production_jobs::insert(
+            &db.pool,
+            &production_jobs::NewProductionJob {
+                twitch_user_id: "101".into(),
+                clip_id: clip,
+                source: production_jobs::JobSource::Autopilot,
+                requested_mode: None,
+                scheduled_at: Some(slot),
+                max_attempts: 2,
+            },
+        )
+        .await
+        .expect("automatic AI job");
+        let mut lease = super::super::store::acquire_production_lease(&db.pool)
+            .await
+            .expect("lease")
+            .expect("free");
+        let checkpoints = prepared(
+            &db.pool,
+            &runtime,
+            &mut lease,
+            clip,
+            Identity::Production(job.id),
+        )
+        .await;
+        let state = serde_json::to_value(ProductionState {
+            checkpoints,
+            attempts: BTreeMap::new(),
+        })
+        .expect("state");
+        sqlx::query("UPDATE social_production_jobs SET metadata = jsonb_build_object('ai_editor', $2::jsonb) WHERE id = $1")
+            .bind(job.id)
+            .bind(state)
+            .execute(&db.pool)
+            .await
+            .expect("provider stages already completed");
+        lease.release().await.expect("release before runner");
+        let worker = crate::autopilot_runner::AutopilotWorker::new(
+            db.pool.clone(),
+            crate::autopilot_runner::WorkerConfig::from_media_runtime(
+                runtime.media(),
+                Some(runtime.clone()),
+                None,
+            ),
+            std::sync::Arc::new(NoDownload),
+            crate::video_processor::VideoProcessor::new(
+                "unavailable-ffmpeg",
+                "unavailable-ffprobe",
+            ),
+        )
+        .expect("runner");
+        assert!(worker.run_once().await.expect("AI production"));
+        let done = production_jobs::get(&db.pool, "101", job.id)
+            .await
+            .expect("job")
+            .expect("owned job");
+        assert_eq!(done.status, "completed");
+        assert_eq!(done.mode, Some(ProductionMode::Ai));
+        assert_eq!(
+            done.policy_snapshot.map(|policy| policy.review_policy),
+            Some(review_policy)
+        );
+        let video = produced_video::find_ai_version(&db.pool, "101", clip, None, Some(job.id))
+            .await
+            .expect("version read")
+            .expect("AI version");
+        assert_eq!(video.status, "review");
+        assert_eq!(video.review_reasons, json!([]));
+        assert_eq!(video.needs_review, review_policy == ReviewPolicy::Required);
+        assert_eq!(
+            video.policy_snapshot.map(|policy| policy.review_policy),
+            Some(review_policy)
+        );
+        assert_eq!(
+            video.metadata["veto_deadline"],
+            if review_policy == ReviewPolicy::VetoUntilDeadline {
+                json!(slot)
+            } else {
+                json!(null)
+            }
+        );
+    }
+}
+
+#[test]
+fn transcript_end_within_decoder_drift_is_clamped_to_clip() {
+    let raw = |start: f64, end: f64| tb_engagement::transcribe::TranscriptSegment {
+        start_seconds: start,
+        end_seconds: end,
+        text: "Er wollte mich aber auch ne".into(),
+    };
+    let fitted = fit_segments(&[raw(47.84, 49.84), raw(49.84, 51.32)], 51_314, 400)
+        .expect("decoder drift stays within the configured tolerance");
+    assert_eq!(fitted.last().map(|segment| segment.end_ms), Some(51_314));
+    let tail = fit_segments(&[raw(51.32, 51.4)], 51_314, 400).expect("tail inside drift");
+    assert!(tail.is_empty());
+    assert!(matches!(
+        fit_segments(&[raw(50.0, 52.0)], 51_314, 400),
+        Err(AiEditorError::Transcription)
+    ));
+}
+
+#[test]
+fn foreign_script_speech_is_not_subtitled() {
+    assert!(!latin_script("아, 너 괜찮은데?"));
+    assert!(latin_script("Are you good?"));
+    assert!(latin_script("Schön, weiß ich, Übermut bei 370 HP!"));
+    assert!(!subtitle_language(Some("ko")));
+    assert!(subtitle_language(Some("de")) && subtitle_language(Some("en")));
+    assert!(subtitle_language(None));
+    let segments = vec![
+        TranscriptSegment {
+            start_ms: 100,
+            end_ms: 2000,
+            text: "아, 너 괜찮은데?".into(),
+        },
+        TranscriptSegment {
+            start_ms: 2000,
+            end_ms: 3000,
+            text: "Let's go".into(),
+        },
+    ];
+    let kept = speech_segments(&segments);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].text, "Let's go");
+}
+
+#[test]
+fn prompts_carry_the_channel_login_and_the_name_rule() {
+    let context = streamer_context("luckymakkydead");
+    assert_eq!(context["twitch_login"], "luckymakkydead");
+    assert!(context["rule"]
+        .as_str()
+        .is_some_and(|rule| rule.contains("name nobody")));
+}
+
+fn planning_fixture(reason: &str, overlay: serde_json::Value) -> Planning {
+    serde_json::from_value(json!({
+        "plan": {
+            "schema_version": 1,
+            "source_duration_ms": 11_833,
+            "kept_intervals": [{ "start_ms": 0, "end_ms": 11_833, "reason": reason }],
+            "hook": null,
+            "observed_highlights": [],
+            "significant_uncertainty": false,
+            "review_reasons": [],
+            "layout": "existing_stable"
+        },
+        "platforms": {},
+        "overlay_title": overlay
+    }))
+    .expect("planning fixture")
+}
+
+#[test]
+fn revision_without_output_change_is_detected() {
+    use super::super::revision::changes_output;
+    let base = planning_fixture(
+        "Ganzer Kampf",
+        json!({ "mode": "clip_title", "text": null }),
+    );
+    let reworded = planning_fixture(
+        "Kampf bleibt",
+        json!({ "mode": "clip_title", "text": null }),
+    );
+    assert!(!changes_output(&base, &reworded, "EZ OUTPLAYED"));
+    let same_text = planning_fixture("Kampf", json!({ "mode": "custom", "text": "EZ OUTPLAYED" }));
+    assert!(!changes_output(&base, &same_text, "EZ OUTPLAYED"));
+    let removed = planning_fixture("Kampf", json!({ "mode": "none", "text": null }));
+    assert!(changes_output(&base, &removed, "EZ OUTPLAYED"));
+    assert_eq!(removed.overlay_title.resolve("EZ OUTPLAYED"), "");
+}
+
+#[test]
+fn stored_plans_without_caption_switch_keep_their_captions() {
+    let stored = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
+    assert!(stored.subtitles_enabled);
+    let variant: super::super::stage_contract::VariantPlan = serde_json::from_value(json!({
+        "plan": serde_json::to_value(&stored.plan).expect("plan"),
+        "platforms": {},
+        "subtitle_scale_percent": 100
+    }))
+    .expect("stored variant");
+    assert!(variant.subtitles_enabled && variant.planning().subtitles_enabled);
+}
+
+#[test]
+fn caption_switch_is_a_required_boolean_in_every_plan_schema() {
+    let root = tempfile::tempdir().expect("package root");
+    let runtime = runtime(root.path());
+    let limits = &runtime.limits;
+    for schema in [
+        planning_schema(&limits.plan, &limits.copy, 11_833),
+        super::super::stage_contract::revision_schema(&limits.plan, &limits.copy, 11_833),
+    ] {
+        for scope in [&schema, &schema["properties"]["variants"]["items"]] {
+            assert_eq!(scope["properties"]["subtitles_enabled"]["type"], "boolean");
+            assert!(scope["required"]
+                .as_array()
+                .is_some_and(|names| names.iter().any(|name| name == "subtitles_enabled")));
+        }
+    }
+}
+
+#[test]
+fn revision_instruction_maps_caption_and_text_wording_to_the_right_fields() {
+    let instruction = super::super::revision::REVISION_INSTRUCTION;
+    for wording in [
+        "Untertitel, Untertitel entfernen, subtitle, subtitles, caption, captions or the spoken words mean the speech captions: set subtitles_enabled=false",
+        "Titel, title, hook title, Überschrift or the big text at the start mean overlay_title",
+        "Kein Text, ohne Text, alle Texte entfernen, no text, remove every text or remove all text mean both: set subtitles_enabled=false and overlay_title.mode=none",
+        "Ambiguous wording about subtitles or captions always targets the speech captions and never the title",
+    ] {
+        assert!(instruction.contains(wording), "{wording}");
+    }
+    assert!(!instruction.contains("explain in German in the summary"));
+}
+
+fn revised(base: &Planning, subtitles_enabled: bool, overlay: serde_json::Value) -> Planning {
+    let mut next = base.clone();
+    next.subtitles_enabled = subtitles_enabled;
+    next.overlay_title = serde_json::from_value(overlay).expect("overlay");
+    next
+}
+
+#[test]
+fn revision_summary_lists_only_the_real_plan_difference() {
+    use super::super::revision::{changes_output, revision_summary};
+    let title = "Dunked on her ahh";
+    let base = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
+    let summary = |next: &Planning| revision_summary(&base, next, title, 512);
+    let captions_off = revised(&base, false, json!({ "mode": "clip_title", "text": null }));
+    assert!(changes_output(&base, &captions_off, title));
+    assert_eq!(summary(&captions_off), "Geändert: Untertitel ausgeblendet.");
+    let no_text = revised(&base, false, json!({ "mode": "none", "text": null }));
+    assert!(changes_output(&base, &no_text, title));
+    assert_eq!(
+        summary(&no_text),
+        "Geändert: Untertitel ausgeblendet und Titel „Dunked on her ahh“ entfernt. Der Kanalname bleibt als Quellenangabe eingeblendet."
+    );
+    let title_only = revised(&base, true, json!({ "mode": "none", "text": null }));
+    assert_eq!(
+        summary(&title_only),
+        "Geändert: Titel „Dunked on her ahh“ entfernt."
+    );
+    let mut resized_hidden = no_text.clone();
+    resized_hidden.subtitle_scale_percent = 140;
+    assert!(!changes_output(&no_text, &resized_hidden, title));
+    assert_eq!(
+        revision_summary(&captions_off, &captions_off, title, 512),
+        "Am Video wurde nichts geändert."
+    );
+    assert_eq!(
+        revision_summary(&no_text, &resized_hidden, title, 512),
+        "Am Video wurde nichts geändert. Der Kanalname bleibt als Quellenangabe eingeblendet."
+    );
+    assert_eq!(
+        revision_summary(&base, &no_text, title, 108),
+        "Geändert: Untertitel ausgeblendet und Titel geändert. Der Kanalname bleibt als Quellenangabe eingeblendet."
+    );
+    assert_eq!(
+        revision_summary(&base, &no_text, title, 60),
+        "Geändert: Untertitel ausgeblendet und Titel geändert."
+    );
+}
+
+#[test]
+fn revision_summary_stays_valid_for_every_limit_and_title() {
+    use super::super::revision::revision_summary;
+    let title = "Erste Zeile\nzweite\tZeile\u{7}";
+    let base = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
+    let no_text = revised(&base, false, json!({ "mode": "none", "text": null }));
+    assert_eq!(
+        revision_summary(
+            &base,
+            &revised(&base, true, json!({ "mode": "none", "text": null })),
+            title,
+            512
+        ),
+        "Geändert: Titel „Erste Zeile zweite Zeile“ entfernt."
+    );
+    let unchanged = [
+        "Am Video wurde nichts geändert. Der Kanalname bleibt als Quellenangabe eingeblendet.",
+        "Nichts geändert. Der Kanalname bleibt als Quellenangabe eingeblendet.",
+        "Am Video wurde nichts geändert.",
+        "Nichts geändert.",
+    ];
+    for limit in 1..=200 {
+        for (before, after) in [(&base, &no_text), (&base, &base), (&no_text, &no_text)] {
+            let text = revision_summary(before, after, title, limit);
+            assert!(
+                !text.trim().is_empty()
+                    && text.len() <= limit
+                    && !text.chars().any(char::is_control),
+                "{limit}: {text:?}"
+            );
+            if std::ptr::eq(before, after) {
+                assert!(
+                    unchanged.iter().any(|full| full.starts_with(&text)),
+                    "{limit}: {text:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn disabled_captions_render_without_speech_burn_in() {
+    let root = tempfile::tempdir().expect("package root");
+    let runtime = runtime(root.path());
+    let title = "Dunked on her ahh";
+    let base = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
+    let validated = super::super::validate_plan(base.plan.clone(), 11_833, &runtime.limits.plan)
+        .expect("valid plan");
+    let source = [SourceSubtitle {
+        segment: SubtitleSegment {
+            start: 2.0,
+            end: 3.0,
+            text: "Yeah".into(),
+        },
+        language: Some("en".into()),
+    }];
+    let mapped = super::super::rebase_subtitles(&validated, &source, &runtime.limits.plan)
+        .expect("speech cues");
+    let ass = |planning: &Planning| {
+        super::super::validation::build_scaled_subtitle_ass(
+            &validated,
+            burned_subtitles(planning, &mapped),
+            &planning.overlay_title.resolve(title),
+            "luckymakkydead",
+            0,
+            planning.subtitle_scale_percent,
+        )
+        .expect("ASS")
+    };
+    let speech = |ass: &str| {
+        ass.lines()
+            .filter(|line| line.starts_with("Dialogue:") && line.contains(",Default,"))
+            .count()
+    };
+    let with_captions = ass(&base);
+    assert!(speech(&with_captions) > 0 && with_captions.contains("Yeah"));
+    let captions_off = ass(&revised(
+        &base,
+        false,
+        json!({ "mode": "clip_title", "text": null }),
+    ));
+    assert_eq!(speech(&captions_off), 0);
+    assert!(!captions_off.contains("Yeah") && captions_off.contains(",Hook,"));
+    let no_text = ass(&revised(
+        &base,
+        false,
+        json!({ "mode": "none", "text": null }),
+    ));
+    let dialogue = no_text
+        .lines()
+        .filter(|line| line.starts_with("Dialogue:"))
+        .collect::<Vec<_>>();
+    assert!(
+        dialogue.len() == 1
+            && dialogue[0].contains(",Channel,")
+            && dialogue[0].ends_with("@luckymakkydead"),
+        "{dialogue:?}"
+    );
+}
+
+#[path = "acceptance_tests.rs"]
+mod acceptance;
+
+fn whole_clip_highlight() -> Analysis {
+    Analysis {
+        highlights: vec![TimelineEntry {
+            start_ms: 0,
+            end_ms: 11_833,
+            description: "Ganzer Kampf".into(),
+        }],
+        uncertainty: vec![],
+        analysis_notes: vec![],
+    }
+}
+
+fn publishable_fixture() -> Planning {
+    let mut planning = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
+    planning.platforms = crate::posting_plan::PLATFORMS
+        .iter()
+        .map(|platform| {
+            (
+                (*platform).into(),
+                super::super::stage_contract::PublicationCopy {
+                    title: "Fixture".into(),
+                    description: "Fixture".into(),
+                    hashtags: vec!["#Deadlock".into()],
+                },
+            )
+        })
+        .collect();
+    planning
+}
+
+fn trimmed_revision() -> Planning {
+    let mut trimmed = publishable_fixture();
+    trimmed.plan.kept_intervals[0].start_ms = 3_000;
+    trimmed.plan.hook = Some(super::super::KeptInterval {
+        start_ms: 1_000,
+        end_ms: 4_500,
+        reason: "Vorschau".into(),
+    });
+    trimmed.fit_revision_cut();
+    trimmed
+}
+
+#[test]
+fn requested_revision_cut_overrides_the_analysis_highlight() {
+    let root = tempfile::tempdir().expect("package root");
+    let runtime = runtime(root.path());
+    let trimmed = trimmed_revision();
+    let hook = trimmed
+        .plan
+        .hook
+        .as_ref()
+        .expect("hook kept inside the cut");
+    assert_eq!((hook.start_ms, hook.end_ms), (3_000, 4_500));
+    trimmed
+        .check(
+            11_833,
+            &runtime.limits.plan,
+            &runtime.limits.copy,
+            &whole_clip_highlight(),
+            PlanOrigin::Revision,
+        )
+        .expect("streamer cut is accepted");
+}
+
+#[test]
+fn autonomous_cut_into_the_analysis_highlight_stays_rejected() {
+    let root = tempfile::tempdir().expect("package root");
+    let runtime = runtime(root.path());
+    let rejection = trimmed_revision()
+        .check(
+            11_833,
+            &runtime.limits.plan,
+            &runtime.limits.copy,
+            &whole_clip_highlight(),
+            PlanOrigin::FirstPlan,
+        )
+        .expect_err("first plan keeps the highlight");
+    assert!(rejection.answer().contains("Höhepunkt"));
+}
+
+#[test]
+fn rejected_revision_plan_yields_an_answer() {
+    use super::super::revision::rejected_proposal;
+    let root = tempfile::tempdir().expect("package root");
+    let runtime = runtime(root.path());
+    let mut too_short = publishable_fixture();
+    too_short.plan.kept_intervals[0].start_ms = 11_500;
+    let rejection = too_short
+        .check(
+            11_833,
+            &runtime.limits.plan,
+            &runtime.limits.copy,
+            &whole_clip_highlight(),
+            PlanOrigin::Revision,
+        )
+        .expect_err("almost nothing left");
+    let failure = PlanFailure::from(rejection);
+    let proposal = rejected_proposal(&failure.answer(), runtime.limits.plan.max_text_bytes);
+    assert!(proposal.summary.starts_with(&failure.answer()));
+    assert!(proposal
+        .summary
+        .ends_with("Die bisherige Fassung bleibt unverändert."));
+    assert!(!proposal.requires_confirmation);
+}
+
+#[test]
+fn trimmed_revision_names_the_cut_and_the_new_length() {
+    let base = planning_fixture("Kampf", json!({ "mode": "clip_title", "text": null }));
+    let mut later = base.clone();
+    later.plan.kept_intervals[0].start_ms = 3_000;
+    assert_eq!(
+        super::super::revision::revision_summary(&base, &later, "EZ", 512),
+        "Geändert: Start 3 Sekunden später, jetzt 8,8 s lang."
+    );
+    let mut nudged = base.clone();
+    nudged.plan.kept_intervals[0].start_ms = 50;
+    assert_eq!(
+        super::super::revision::revision_summary(&base, &nudged, "EZ", 512),
+        "Geändert: Schnitt geändert, jetzt 11,8 s lang."
+    );
+}
+
+fn sentence(bytes: usize) -> String {
+    let words = "Der Streamer ruft laut nach dem Push, das Team gewinnt den Kampf über die Mitte und betäubt einen Gegner in der Luft. ";
+    let mut text = String::new();
+    for character in words.chars().cycle() {
+        if text.len() + character.len_utf8() > bytes {
+            break;
+        }
+        text.push(character);
+    }
+    text
+}
+
+fn sixty_second_snapshot(runtime: &EditorRuntime) -> PreparingSnapshot {
+    let skills = [
+        SkillId::EditingStrategy,
+        SkillId::VideoLayout,
+        SkillId::Subtitles,
+        SkillId::Copywriting,
+        SkillId::FeedbackLearning,
+    ]
+    .into_iter()
+    .map(|id| {
+        let skill = super::super::skill_snapshot(id);
+        FrozenSkill {
+            id,
+            version: skill.version.to_owned(),
+            sha256: skill.sha256,
+            text: skill.text.to_owned(),
+        }
+    })
+    .collect();
+    PreparingSnapshot {
+        source: SourceIdentity {
+            twitch_clip_id: "BrainyBlazingRaisinWutFace-vqwlEdcwwhp-Sj9K".into(),
+            path: PathBuf::from("clips/130466.mp4"),
+            sha256: "f".repeat(64),
+            bytes: 58_127_472,
+            login: "luckymakkydead".into(),
+            title: "Clip des Streams".into(),
+        },
+        media: MediaInfo {
+            duration_ms: 60_010,
+            width: 1920,
+            height: 1080,
+            has_audio: true,
+        },
+        configuration: runtime.configuration.clone(),
+        skills,
+        layout: Some(
+            json!({"mode": "blur_pad", "source": {"width": 1920, "height": 1080}, "version": 1, "cam_crop": {"h": 380, "w": 380, "x": 1500, "y": 50}, "game_crop": {"h": 1080, "w": 1087, "x": 408, "y": 0}, "cam_enabled": false, "cam_position": {"h": 600, "w": 1080, "x": 0, "y": 0}}),
+        ),
+        publication: json!({"language": "de", "template": {"hashtags": null, "description_template": null}, "multi_output_enabled": false, "experimental_ai_layout": false}),
+    }
+}
+
+fn sixty_second_analysis() -> Analysis {
+    serde_json::from_value(json!({
+        "highlights": [
+            {"start_ms": 0, "end_ms": 60_010, "description": sentence(200)},
+            {"start_ms": 32_000, "end_ms": 40_000, "description": sentence(160)},
+            {"start_ms": 50_500, "end_ms": 53_000, "description": sentence(150)}
+        ],
+        "uncertainty": [sentence(130), sentence(100), sentence(120), sentence(90)],
+        "analysis_notes": [sentence(250), sentence(150), sentence(260), sentence(140), sentence(130), sentence(90)]
+    }))
+    .expect("analysis fixture")
+}
+
+fn sixty_second_segments() -> Vec<TranscriptSegment> {
+    (0..10)
+        .map(|index| TranscriptSegment {
+            start_ms: index * 6_000,
+            end_ms: index * 6_000 + 2_000,
+            text: sentence(30),
+        })
+        .collect()
+}
+
+fn sixty_second_parent() -> Planning {
+    let copy = |title: usize, description: usize| json!({"title": sentence(title), "description": sentence(description), "hashtags": ["#Deadlock", "#Gaming", "#Twitch"]});
+    serde_json::from_value(json!({
+        "plan": {
+            "schema_version": 1,
+            "source_duration_ms": 60_010,
+            "kept_intervals": [{"start_ms": 0, "end_ms": 60_010, "reason": sentence(200)}],
+            "hook": {"start_ms": 50_500, "end_ms": 53_000, "reason": sentence(130)},
+            "observed_highlights": [
+                {"start_ms": 0, "end_ms": 60_010, "observation": sentence(150)},
+                {"start_ms": 32_000, "end_ms": 40_000, "observation": sentence(150)},
+                {"start_ms": 50_500, "end_ms": 53_000, "observation": sentence(150)}
+            ],
+            "significant_uncertainty": true,
+            "review_reasons": [sentence(130), sentence(100), sentence(120), sentence(90)],
+            "layout": "existing_stable"
+        },
+        "platforms": {
+            "tiktok": copy(40, 100),
+            "youtube": copy(60, 140),
+            "instagram": copy(40, 100)
+        },
+        "overlay_title": {"mode": "custom", "text": "Teamkampf und Luftkampf"},
+        "subtitles_enabled": true
+    }))
+    .expect("parent plan fixture")
+}
+
+fn sixty_second_revision(
+    runtime: &EditorRuntime,
+    analysis: &Analysis,
+) -> Result<EditorRequest, AiEditorError> {
+    let frozen = sixty_second_snapshot(runtime);
+    let segments = sixty_second_segments();
+    let parent = sixty_second_parent();
+    let request = super::super::revision::RevisionRequest {
+        feedback: "Fang bitte 3 Sekunden später an.".into(),
+        parent_version_id: 1,
+        confirmed: false,
+        reanalysis_confirmed: false,
+    };
+    let evidence = PlanningEvidence {
+        analysis,
+        language: &Some("de".into()),
+        segments: speech_segments(&segments),
+        audio_levels: planning_audio_json(super::super::AudioLevels {
+            step_ms: super::super::media::AUDIO_LEVEL_STEP_MS,
+            rms_dbfs: vec![-34; 241],
+        }),
+        revision: Some((&request, &parent)),
+    };
+    let skills = [
+        SkillId::EditingStrategy,
+        SkillId::VideoLayout,
+        SkillId::Subtitles,
+        SkillId::Copywriting,
+        SkillId::FeedbackLearning,
+    ];
+    planning_request(&frozen, runtime, &skills, &evidence, &[], json!({}))
+}
+
+#[test]
+fn sixty_second_revision_request_fits_the_provider_limit_with_margin() {
+    let root = tempfile::tempdir().expect("root");
+    let runtime = runtime(root.path());
+    let limit = runtime.configuration.provider.max_text_bytes;
+    let request = sixty_second_revision(&runtime, &sixty_second_analysis())
+        .expect("a 60 s revision must fit the provider text limit");
+    let bytes = request.system.len() + request.text.len();
+    assert!(
+        bytes + 256 <= limit,
+        "{bytes} of {limit} bytes leaves no margin"
+    );
+}
+
+#[test]
+fn oversized_request_fails_as_request_too_large_instead_of_provider_unavailable() {
+    let root = tempfile::tempdir().expect("root");
+    let runtime = runtime(root.path());
+    let mut analysis = sixty_second_analysis();
+    let limits = &runtime.limits.plan;
+    analysis.analysis_notes = (0..limits.max_review_reasons)
+        .map(|_| sentence(limits.max_text_bytes))
+        .collect();
+    analysis
+        .validate(60_010, limits)
+        .expect("oversized analysis stays within the plan limits");
+    let error = sixty_second_revision(&runtime, &analysis).err();
+    assert!(matches!(error, Some(AiEditorError::RequestTooLarge)));
+    let error = AiEditorError::RequestTooLarge;
+    assert!(!error.is_transient());
+    assert_eq!(
+        super::super::service::failure(&error, AiStage::Planning).code(),
+        "request_too_large"
+    );
 }

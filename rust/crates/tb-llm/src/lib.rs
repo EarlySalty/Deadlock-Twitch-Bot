@@ -40,6 +40,7 @@ pub mod ledger;
 pub mod model_resolver;
 pub mod selection;
 pub mod social_editor;
+pub mod video_observer;
 
 #[cfg(feature = "local-eval")]
 pub mod local_eval;

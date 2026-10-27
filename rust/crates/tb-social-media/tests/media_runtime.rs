@@ -376,7 +376,7 @@ fn social_ai_section_keeps_optional_services_disabled_and_the_shared_cap() {
     let runtime = root.editor().expect("fixture runtime");
     assert_eq!(
         runtime.configuration.provider.initial_total_cap_micro_usd,
-        2_000_000
+        20_000_000
     );
     assert!(runtime.limits.brain.is_none());
     assert!(runtime.limits.stt.settings.language.is_none());
@@ -455,4 +455,24 @@ fn absolute_roots_and_canonical_package_resolution_are_preserved() {
     );
     assert_eq!(media.source_root, media.package_root.join("clips"));
     assert_eq!(editor.media().source_root, media.source_root);
+}
+
+#[test]
+fn stt_job_uses_the_real_release_binary_behind_the_current_link() {
+    let base = tempfile::tempdir().expect("deploy base");
+    let release = base.path().join("releases").join("abc123");
+    let binary = release.join("rust/target/release/tb-stt-server");
+    std::fs::create_dir_all(binary.parent().expect("binary dir")).expect("release tree");
+    std::fs::write(&binary, b"").expect("stt binary");
+    let current = base.path().join("current");
+    std::os::unix::fs::symlink(&release, &current).expect("current link");
+    let editor = EditorRuntime::load(&current, &section(&document())).expect("release runtime");
+    assert_eq!(
+        editor.limits.stt.binary,
+        current.join("rust/target/release/tb-stt-server")
+    );
+    assert_eq!(
+        editor.limits.stt.job_config().expect("stt job").binary,
+        binary.canonicalize().expect("canonical binary")
+    );
 }

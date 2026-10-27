@@ -1,6 +1,7 @@
 import { withCookieCredentials } from './core';
 import { mainDomainOAuthUrl } from '../i18n/oauthLinks';
 import { isPreviewLocalhost, PREVIEW_SOCIAL_ROUTE } from '@/preview/routes';
+import { onPublicTour } from '@/publicTour';
 import { getPreviewSocialResponse } from '@/preview/fixtures';
 import { fetchAuthStatus } from './auth';
 import type {
@@ -40,6 +41,7 @@ export interface ArchivedVod {
   status_label: string;
   display_status: 'youtube_uploaded' | 'youtube_confirmed' | 'youtube_processing' | 'youtube_unavailable' | 'youtube_error' | 'drive_uploaded' | 'uploading' | 'downloading' | 'waiting' | 'partial' | 'failed' | 'unknown';
   youtube_complete: boolean;
+  youtube_platform?: 'youtube' | 'youtube_vod';
   youtube_verified_complete?: boolean;
   can_check_youtube?: boolean;
   youtube_check?: {
@@ -104,7 +106,9 @@ export class SocialMediaForbiddenError extends SocialMediaApiError {
 }
 
 async function socialRequest(path: string, init: RequestInit = {}): Promise<Response> {
-  if (isPreviewLocalhost()) return getPreviewSocialResponse(path, init);
+  if (isPreviewLocalhost() || onPublicTour()) {
+    return getPreviewSocialResponse(path, init);
+  }
   return fetch(path, withCookieCredentials(init));
 }
 
@@ -144,6 +148,13 @@ export interface SocialMediaAccess {
   allowed: boolean;
   streamer: string | null;
   isAdmin: boolean;
+  requested?: boolean;
+}
+
+export interface SocialMediaAccessRequest {
+  twitch_user_id: string;
+  twitch_login: string;
+  requested_at: string;
 }
 
 /** Ein Eintrag der Freigabe-Liste (Admin-Sicht). */
@@ -171,6 +182,19 @@ export async function setPartnerAccess(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ twitch_user_id: twitchUserId, granted }),
   });
+}
+
+export async function requestSocialMediaAccess(): Promise<void> {
+  await fetchJson('/twitch/social-media/api/access/request', { method: 'POST' });
+}
+
+export async function fetchAccessRequests(): Promise<SocialMediaAccessRequest[]> {
+  const data = await fetchJson<{ items: SocialMediaAccessRequest[] }>('/twitch/social-media/api/access/requests');
+  return data.items ?? [];
+}
+
+export async function rejectAccessRequest(twitchUserId: string): Promise<void> {
+  await fetchJson(`/twitch/social-media/api/access/requests/${encodeURIComponent(twitchUserId)}`, { method: 'DELETE' });
 }
 
 export async function fetchStreamerLayout(twitchUserId: string | undefined): Promise<StreamerLayoutResponse> {
@@ -266,7 +290,7 @@ export async function getPreviewStatus(clipDbId: number): Promise<ClipPreviewSta
 }
 
 export function previewFileUrl(clipDbId: number): string {
-  if (isPreviewLocalhost()) return 'data:video/mp4;base64,';
+  if (isPreviewLocalhost() || onPublicTour()) return 'data:video/mp4;base64,';
   return `${ADMIN_PREFIX}/clips/${clipDbId}/preview/file`;
 }
 
@@ -491,7 +515,7 @@ export interface ClipContestResult {
  * lesbarer Satz zurück, deshalb hier ohne `fetchJson`.
  */
 export async function submitClipToContest(clipDbId: number): Promise<ClipContestResult> {
-  const auth = isPreviewLocalhost() ? null : await fetchAuthStatus();
+  const auth = isPreviewLocalhost() || onPublicTour() ? null : await fetchAuthStatus();
   const csrf = auth?.csrfToken ?? auth?.csrf_token;
   const response = await socialRequest(
     `/twitch/social-media/api/clips/${clipDbId}/clip-contest`,
@@ -730,7 +754,9 @@ export async function fetchPlatformStatus(
 }
 
 export function oauthStartUrl(platform: string, twitchUserId: string | undefined): string {
-  if (isPreviewLocalhost()) return `${PREVIEW_SOCIAL_ROUTE}?view=konten#preview-read-only`;
+  if (isPreviewLocalhost() || onPublicTour()) {
+    return `${PREVIEW_SOCIAL_ROUTE}?view=konten#preview-read-only`;
+  }
   const qs = buildQuery({ twitch_user_id: twitchUserId });
   return mainDomainOAuthUrl(`/twitch/social-media/oauth/start/${platform}${qs}`);
 }

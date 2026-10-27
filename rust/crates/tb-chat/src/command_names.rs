@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 use crate::catalog::{catalog, CommandInfo};
 
 pub const MAX_COMMAND_NAME_LEN: usize = 32;
+pub const MAX_EXTRA_NAMES: usize = 5;
+
+pub type ExtraNames = BTreeMap<String, Vec<String>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandNameValidationError {
@@ -99,32 +102,56 @@ pub fn effective_aliases(
     }
 }
 
-/// Löst den im Chat geschriebenen Trigger auf den kanonischen Katalogeintrag
-/// auf. Ein eigener Name ersetzt kanonischen Namen + Standard-Aliase nur für
-/// genau diesen Kanal.
+pub fn primary_names(entry: &CommandInfo, overrides: &BTreeMap<String, String>) -> Vec<String> {
+    match valid_override(overrides, entry) {
+        Some(custom) => vec![custom],
+        None => std::iter::once(entry.name)
+            .chain(entry.aliases.iter().copied())
+            .map(str::to_string)
+            .collect(),
+    }
+}
+
+pub fn extra_names(
+    entry: &CommandInfo,
+    overrides: &BTreeMap<String, String>,
+    extras: &ExtraNames,
+) -> Vec<String> {
+    let primary = primary_names(entry, overrides);
+    let mut names: Vec<String> = Vec::new();
+    for name in extras.get(key(entry)).into_iter().flatten() {
+        let Ok(name) = normalize_saved_name(name) else {
+            continue;
+        };
+        if !primary.contains(&name) && !names.contains(&name) && names.len() < MAX_EXTRA_NAMES {
+            names.push(name);
+        }
+    }
+    names
+}
+
 pub fn resolve_command(
     typed: &str,
     overrides: &BTreeMap<String, String>,
+    extras: &ExtraNames,
 ) -> Option<&'static CommandInfo> {
     let typed = typed.to_ascii_lowercase();
-    catalog().iter().find(|entry| {
-        if let Some(custom) = valid_override(overrides, entry) {
-            typed == custom
-        } else {
-            typed == entry.name || entry.aliases.contains(&typed.as_str())
-        }
-    })
+    catalog()
+        .iter()
+        .find(|entry| primary_names(entry, overrides).contains(&typed))
+        .or_else(|| {
+            catalog()
+                .iter()
+                .find(|entry| extra_names(entry, overrides, extras).contains(&typed))
+        })
 }
 
-/// Prüft, ob ein neuer eigener Name mit einem aktuell aktiven Namen eines
-/// anderen Befehls kollidiert. Der eigene bisherige Eintrag wird ignoriert.
 pub fn conflicting_command(
     command_key: &str,
     candidate: &str,
     overrides: &BTreeMap<String, String>,
+    extras: &ExtraNames,
 ) -> Option<&'static CommandInfo> {
-    // Auch Katalognamen und vorhandene Overrides können `_` oder `-` tragen.
-    // Neue Nutzereingaben sind bereits vor diesem Aufruf streng validiert.
     let candidate = normalize_saved_name(candidate).ok()?;
     catalog().iter().find(|entry| {
         if key(entry) == command_key {
@@ -133,11 +160,8 @@ pub fn conflicting_command(
         if entry.name == "!dldc" && candidate == "!dldc" {
             return true;
         }
-        if let Some(custom) = valid_override(overrides, entry) {
-            candidate == custom
-        } else {
-            candidate == entry.name || entry.aliases.contains(&candidate.as_str())
-        }
+        primary_names(entry, overrides).contains(&candidate)
+            || extra_names(entry, overrides, extras).contains(&candidate)
     })
 }
 
@@ -168,6 +192,10 @@ pub(crate) fn warn_read_failure(error: &sqlx::Error) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn none() -> ExtraNames {
+        ExtraNames::new()
+    }
 
     #[test]
     fn stat_commands_custom_names_normalisiert_ergonomisch_und_lehnt_unsichere_namen_ab() {
@@ -213,47 +241,84 @@ mod tests {
         assert_eq!(community_command.name, "!dldc");
         assert_eq!(effective_name(community_command, &overrides), "!dldc");
         assert_eq!(effective_aliases(community_command, &overrides), &["!dlde"]);
-        assert!(resolve_command("!discord", &overrides).is_none());
-        assert!(conflicting_command("raid", "!discord", &overrides).is_none());
+        assert!(resolve_command("!discord", &overrides, &none()).is_none());
+        assert!(conflicting_command("raid", "!discord", &overrides, &none()).is_none());
         overrides.insert("discord".into(), "!community".into());
         assert_eq!(effective_name(community_command, &overrides), "!community");
         assert!(effective_aliases(community_command, &overrides).is_empty());
         assert_eq!(
-            resolve_command("!community", &overrides).map(|entry| entry.name),
+            resolve_command("!community", &overrides, &none()).map(|entry| entry.name),
             Some("!dldc")
         );
         for trigger in ["!discord", "!dldc", "!dlde"] {
-            assert!(resolve_command(trigger, &overrides).is_none());
+            assert!(resolve_command(trigger, &overrides, &none()).is_none());
         }
-        assert!(conflicting_command("discord", "!community", &overrides).is_none());
+        assert!(conflicting_command("discord", "!community", &overrides, &none()).is_none());
         assert_eq!(
-            conflicting_command("raid", "!dldc", &overrides).map(key),
+            conflicting_command("raid", "!dldc", &overrides, &none()).map(key),
             Some("discord")
         );
-        assert!(conflicting_command("discord", "!dldc", &overrides).is_none());
+        assert!(conflicting_command("discord", "!dldc", &overrides, &none()).is_none());
         assert_eq!(
-            conflicting_command("raid", "!community", &overrides).map(key),
+            conflicting_command("raid", "!community", &overrides, &none()).map(key),
             Some("discord")
         );
         assert_eq!(
-            resolve_command("!raid", &overrides).map(|c| c.name),
+            resolve_command("!raid", &overrides, &none()).map(|c| c.name),
             Some("!raid")
         );
         assert_eq!(
-            resolve_command("!traid", &overrides).map(|c| c.name),
+            resolve_command("!traid", &overrides, &none()).map(|c| c.name),
             Some("!raid")
         );
 
         overrides.insert("raid".into(), "!dachraid".into());
         assert_eq!(
-            resolve_command("!dachraid", &overrides).map(|c| c.name),
+            resolve_command("!dachraid", &overrides, &none()).map(|c| c.name),
             Some("!raid")
         );
-        assert!(resolve_command("!raid", &overrides).is_none());
-        assert!(resolve_command("!traid", &overrides).is_none());
+        assert!(resolve_command("!raid", &overrides, &none()).is_none());
+        assert!(resolve_command("!traid", &overrides, &none()).is_none());
         assert_eq!(
-            resolve_command("!ping", &overrides).map(|c| c.name),
+            resolve_command("!ping", &overrides, &none()).map(|c| c.name),
             Some("!ping")
+        );
+    }
+
+    #[test]
+    fn zusatznamen_loesen_auf_und_blockieren_fremde_namen() {
+        let mut overrides = BTreeMap::new();
+        let mut extras = ExtraNames::new();
+        extras.insert(
+            "discord".into(),
+            vec![
+                "!dc".into(),
+                "Discord".into(),
+                "!dldc".into(),
+                "kaputt name".into(),
+            ],
+        );
+        let community = entry_by_key("discord").unwrap();
+        assert_eq!(
+            extra_names(community, &overrides, &extras),
+            ["!dc", "!discord"]
+        );
+        for trigger in ["!dc", "!discord", "!dldc", "!dlde"] {
+            assert_eq!(
+                resolve_command(trigger, &overrides, &extras).map(key),
+                Some("discord"),
+                "{trigger}"
+            );
+        }
+        assert_eq!(
+            conflicting_command("raid", "!dc", &overrides, &extras).map(key),
+            Some("discord")
+        );
+        assert!(conflicting_command("discord", "!dc", &overrides, &extras).is_none());
+        overrides.insert("ping".into(), "!dc".into());
+        assert_eq!(
+            resolve_command("!dc", &overrides, &extras).map(key),
+            Some("ping")
         );
     }
 
@@ -262,11 +327,11 @@ mod tests {
         let mut overrides = BTreeMap::new();
         overrides.insert("raid".into(), "kaputt name".into());
         assert_eq!(
-            resolve_command("!raid", &overrides).map(|c| c.name),
+            resolve_command("!raid", &overrides, &none()).map(|c| c.name),
             Some("!raid")
         );
         assert_eq!(
-            resolve_command("!traid", &overrides).map(|c| c.name),
+            resolve_command("!traid", &overrides, &none()).map(|c| c.name),
             Some("!raid")
         );
     }
@@ -281,13 +346,13 @@ mod tests {
             Err(CommandNameValidationError::InvalidCharacters)
         );
         assert_eq!(
-            resolve_command("!mein_raid", &overrides).map(|c| c.name),
+            resolve_command("!mein_raid", &overrides, &none()).map(|c| c.name),
             Some("!raid")
         );
-        assert!(resolve_command("!raid", &overrides).is_none());
+        assert!(resolve_command("!raid", &overrides, &none()).is_none());
         overrides.insert("raid".into(), "!mein-raid".into());
         assert_eq!(
-            resolve_command("!mein-raid", &overrides).map(|c| c.name),
+            resolve_command("!mein-raid", &overrides, &none()).map(|c| c.name),
             Some("!raid")
         );
     }
@@ -296,14 +361,14 @@ mod tests {
     fn stat_commands_custom_names_kollisionspruefung_beruecksichtigt_effektive_namen() {
         let mut overrides = BTreeMap::new();
         assert_eq!(
-            conflicting_command("raid", "!ping", &overrides).map(|c| c.name),
+            conflicting_command("raid", "!ping", &overrides, &none()).map(|c| c.name),
             Some("!ping")
         );
         overrides.insert("ping".into(), "!pong".into());
-        assert!(conflicting_command("raid", "!ping", &overrides).is_none());
+        assert!(conflicting_command("raid", "!ping", &overrides, &none()).is_none());
         overrides.insert("wins".into(), "!siege".into());
         assert_eq!(
-            conflicting_command("raid", "!siege", &overrides).map(|c| c.name),
+            conflicting_command("raid", "!siege", &overrides, &none()).map(|c| c.name),
             Some("!wins")
         );
     }
@@ -314,7 +379,8 @@ mod tests {
         overrides.insert("connect".into(), "!raid_history".into());
         overrides.insert("raid_history".into(), "!meinehistorie".into());
         assert_eq!(
-            conflicting_command("raid_history", "!raid_history", &overrides).map(|c| c.name),
+            conflicting_command("raid_history", "!raid_history", &overrides, &none())
+                .map(|c| c.name),
             Some("!connect")
         );
     }

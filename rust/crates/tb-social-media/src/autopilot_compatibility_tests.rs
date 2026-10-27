@@ -81,6 +81,18 @@ async fn fixture(schema: &str) -> PgPool {
     .execute(&pool)
     .await
     .expect("actual M0 migration");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20261015124000_social_pipeline_policy.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("pipeline policy migration");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20261015180000_social_destination_slots.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("destination slot migration");
     pool
 }
 
@@ -606,7 +618,7 @@ async fn legacy_and_produced_reservations_share_owner_lock_in_both_orders() {
         .await
         .expect("shared daily slots");
         let legacy_id = clip(&pool, "legacy", "owner").await;
-        sqlx::query("INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms) VALUES ($1, 'approved', '[\"youtube\"]')")
+        sqlx::query("INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms) VALUES ($1, 'approved', '[\"tiktok\"]')")
             .bind(legacy_id as i32).execute(&pool).await.expect("legacy approval");
         let produced_clip = clip(&pool, "produced", "owner").await;
         let dir = tempfile::tempdir().expect("render fixture");

@@ -515,7 +515,10 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                 .started_at_iso
                 .as_deref()
                 .and_then(crate::stream::parse_dt_utc),
-            now,
+            ended_at: request
+                .ended_at_iso
+                .as_deref()
+                .and_then(crate::stream::parse_dt_utc),
         });
         let referral_url = self.referral_url(&login);
         let view_spec = serde_json::json!({

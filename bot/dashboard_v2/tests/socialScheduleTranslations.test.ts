@@ -3,9 +3,12 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import ts from 'typescript';
 import { dictionaryFor, translate } from '../src/i18n/dictionary';
+import { PLAN_EN, planText } from '../src/components/socialmedia/pipelinePlan';
 
-const source = readFileSync(new URL('../src/components/socialmedia/autopilot/schedule-queue/ScheduleQueuePanel.tsx', import.meta.url), 'utf8');
-const tree = ts.createSourceFile('ScheduleQueuePanel.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const source = readFileSync(new URL('../src/components/socialmedia/PipelinePlanControls.tsx', import.meta.url), 'utf8');
+const tree = ts.createSourceFile('PipelinePlanControls.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const logic = ts.createSourceFile('pipelinePlan.ts', readFileSync(new URL('../src/components/socialmedia/pipelinePlan.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+const panel = readFileSync(new URL('../src/components/socialmedia/autopilot/schedule-queue/ScheduleQueuePanel.tsx', import.meta.url), 'utf8');
 
 function descendants(node: ts.Node): ts.Node[] {
   const nodes = [node];
@@ -14,24 +17,32 @@ function descendants(node: ts.Node): ts.Node[] {
 }
 
 const nodes = descendants(tree);
+const placeholders = (value: string) => [...value.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort();
+const logicNodes = descendants(logic);
+const planDeclaration = logicNodes.find(node => ts.isVariableDeclaration(node) && node.name.getText(logic) === 'PLAN_EN');
+const englishValues = new Set(planDeclaration ? descendants(planDeclaration).filter(ts.isPropertyAssignment).map(node => node.initializer) : []);
+const untranslated = new Set(['YouTube', 'TikTok', 'Instagram', 'Hashtags', 'Server-Fehler', 'zwischenzeitlich geändert']);
 
-test('schedule presentation keys cover dynamic status, holds, failures and accessibility labels', () => {
-  const dictionary = dictionaryFor('en');
-  const keys = nodes.filter(ts.isStringLiteral).filter(node => /[äöüß]|^[A-Z][a-z]|\{(?:number|title)\}/.test(node.text) && !node.text.includes('/') && node.text !== 'Server-Fehler');
+test('plan editor text has an English entry with matching placeholders', () => {
+  const keys = [...nodes, ...logicNodes].filter(ts.isStringLiteral).filter(node => !englishValues.has(node)).map(node => node.text)
+    .filter(text => /[äöüß]|^[A-Z][a-z]|\{\w+\}/.test(text) && !text.includes('/') && !untranslated.has(text));
+  assert.ok(planDeclaration);
   assert.ok(keys.length > 60);
+  const english = planText('en');
+  const german = planText('de');
   for (const key of keys) {
-    assert.ok(Object.hasOwn(dictionary, key.text), key.text);
-    assert.equal(translate('de', key.text), key.text);
-    const placeholders = (value: string) => [...value.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort();
-    assert.deepEqual(placeholders(dictionary[key.text]), placeholders(key.text));
+    assert.ok(Object.hasOwn(PLAN_EN, key), key);
+    assert.equal(german(key), key);
+    assert.notEqual(english(key), key);
+    assert.deepEqual(placeholders(PLAN_EN[key]), placeholders(key), key);
   }
-  const weekdayDeclaration = nodes.find(node => ts.isVariableDeclaration(node) && node.name.getText(tree) === 'WEEKDAYS');
-  assert.ok(weekdayDeclaration && ts.isVariableDeclaration(weekdayDeclaration) && weekdayDeclaration.initializer && ts.isArrayLiteralExpression(weekdayDeclaration.initializer));
-  assert.equal(weekdayDeclaration.initializer.elements.length, 7);
-  for (const day of weekdayDeclaration.initializer.elements) {
-    assert.ok(ts.isStringLiteral(day));
-    assert.notEqual(translate('en', day.text), day.text);
-  }
+  for (const day of ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']) assert.notEqual(english(day), day);
+  assert.equal(english('{day} {time} ist doppelt.', { day: 'Montag', time: '08:00' }), 'Montag 08:00 is listed twice.');
+});
+
+test('schedule panel mounts only the plan editor without the old queue card', () => {
+  assert.ok(panel.includes('<PipelinePlanControls'));
+  for (const legacy of ['Produktionswarteschlange', 'Als Nächstes', 'Auftrag entfernen', 'QueueCard', 'modeSlot']) assert.ok(!panel.includes(legacy), legacy);
 });
 
 test('production queue failure messages are covered by the selected-language dictionary', () => {
@@ -52,13 +63,13 @@ test('production queue failure messages are covered by the selected-language dic
   }
 });
 
-test('schedule timestamps use the selected locale rather than a fixed German locale', () => {
+test('plan timestamps use the selected locale rather than a fixed German locale', () => {
   const formatters = nodes.filter(ts.isNewExpression).filter(node => node.expression.getText(tree) === 'Intl.DateTimeFormat');
   assert.equal(formatters.length, 1);
   assert.equal(formatters[0].arguments?.[0].getText(tree), 'locale');
   const calls = nodes.filter(ts.isCallExpression).filter(node => node.expression.getText(tree) === 'slotLabel');
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.ok(calls.every(call => call.arguments[2].getText(tree) === 'locale'));
   const rawText = nodes.filter(ts.isJsxText).map(node => node.text.trim()).filter(Boolean);
-  assert.deepEqual(rawText, [':', '·']);
+  assert.deepEqual(rawText, []);
 });

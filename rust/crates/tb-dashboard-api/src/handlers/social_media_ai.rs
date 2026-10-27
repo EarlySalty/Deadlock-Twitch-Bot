@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tb_social_media::{
     ai_editor::{self, store, AiEditorError, EditorRuntime},
+    clip_prep_worker::ClipDownloader,
     produced_video,
 };
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -42,6 +43,9 @@ impl AiRuntime {
             .ok_or_else(|| ApiError::from(AiEditorError::Configuration))
     }
 }
+
+#[derive(Clone)]
+pub struct AiSourceDownloader(pub Arc<dyn ClipDownloader>);
 
 pub fn routes(runtime: AiRuntime) -> Router<PgPool> {
     Router::new()
@@ -119,6 +123,9 @@ impl IntoResponse for ApiError {
 
 impl From<AiEditorError> for ApiError {
     fn from(error: AiEditorError) -> Self {
+        if matches!(error, AiEditorError::PipelineBusy) {
+            return response_error(StatusCode::CONFLICT, "pipeline_busy");
+        }
         let status = match error {
             AiEditorError::Input => StatusCode::BAD_REQUEST,
             AiEditorError::Publishing(ref error) => match error {
@@ -129,7 +136,10 @@ impl From<AiEditorError> for ApiError {
                 | produced_video::ProducedVideoError::NoPlatforms => StatusCode::BAD_REQUEST,
                 _ => StatusCode::CONFLICT,
             },
-            AiEditorError::NotFound | AiEditorError::Source => StatusCode::NOT_FOUND,
+            AiEditorError::NotFound
+            | AiEditorError::Source
+            | AiEditorError::SourceMissing
+            | AiEditorError::SourceUnreadable => StatusCode::NOT_FOUND,
             AiEditorError::Consent => StatusCode::FORBIDDEN,
             AiEditorError::Conflict | AiEditorError::Attempts => StatusCode::CONFLICT,
             AiEditorError::Configuration | AiEditorError::Storage => {
@@ -253,25 +263,39 @@ async fn channel(
         .map_err(|response| ApiError(Box::new(response)))
 }
 
-async fn consent_view(pool: &PgPool, owner: &str) -> Result<Value, ApiError> {
+async fn consent_view(pool: &PgPool, runtime: &AiRuntime, owner: &str) -> Result<Value, ApiError> {
     let external_ai_consent = store::get_user_consent(pool, owner).await?;
     let global_allowed = tb_llm::social_editor::global_consent(pool)
         .await
         .map_err(AiEditorError::from)?;
-    Ok(json!({ "external_ai_consent": external_ai_consent, "global_allowed": global_allowed }))
+    let provider_access = match runtime.0.as_deref() {
+        Some(runtime) => Some(
+            tb_llm::social_editor::probe_access(&runtime.configuration)
+                .await
+                .as_str(),
+        ),
+        None => None,
+    };
+    Ok(json!({
+        "external_ai_consent": external_ai_consent,
+        "global_allowed": global_allowed,
+        "provider_access": provider_access,
+    }))
 }
 
 pub async fn consent_get(
     State(pool): State<PgPool>,
+    Extension(runtime): Extension<AiRuntime>,
     auth: DashboardAuthLevel,
     Query(query): Query<ChannelQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let owner = channel(&pool, &auth, query.twitch_user_id.as_deref()).await?;
-    Ok(Json(consent_view(&pool, &owner).await?))
+    Ok(Json(consent_view(&pool, &runtime, &owner).await?))
 }
 
 pub async fn consent_put(
     State(pool): State<PgPool>,
+    Extension(runtime): Extension<AiRuntime>,
     auth: DashboardAuthLevel,
     Json(input): Json<ConsentInput>,
 ) -> Result<Json<Value>, ApiError> {
@@ -288,7 +312,7 @@ pub async fn consent_put(
         }
     };
     store::upsert_user_consent(&pool, &owner, input.external_ai_consent, actor).await?;
-    Ok(Json(consent_view(&pool, &owner).await?))
+    Ok(Json(consent_view(&pool, &runtime, &owner).await?))
 }
 
 pub async fn options_get(
@@ -340,12 +364,19 @@ pub async fn jobs_create(
     State(pool): State<PgPool>,
     auth: DashboardAuthLevel,
     Extension(runtime): Extension<AiRuntime>,
+    Extension(downloader): Extension<AiSourceDownloader>,
     Json(input): Json<CreateInput>,
 ) -> Result<Json<Value>, ApiError> {
     let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
-    Ok(Json(
-        json!({ "job": ai_editor::create_manual_job(&pool, runtime.required()?, &owner, input.clip_db_id).await? }),
-    ))
+    let job = ai_editor::create_manual_job(
+        &pool,
+        runtime.required()?,
+        &owner,
+        input.clip_db_id,
+        downloader.0.as_ref(),
+    )
+    .await?;
+    Ok(Json(json!({ "job": job })))
 }
 
 pub async fn job_get(

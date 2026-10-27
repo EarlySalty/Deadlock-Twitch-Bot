@@ -1,0 +1,128 @@
+import { lazy, Suspense, useState, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { ArrowRight, Coins, Send, TriangleAlert } from 'lucide-react';
+import { useLanguage } from '@/context/LanguageContext';
+import type { SocialClipMitPosting } from '@/api/socialMedia';
+import type { ScheduleQueueSnapshot } from './autopilot/schedule-queue';
+import type { PublishSnapshot } from './autopilot/publish-review/api';
+import type { AiJobView } from './ai/api';
+import { platformIconUrl } from './platformIcon';
+import { clipName, failedItems, type FailedItem } from './failedItems';
+import { WorkspaceDialog } from './WorkspaceDialog';
+import type { SocialMediaViewTarget } from './labels';
+import type { QueueStage } from './queuePresentation';
+
+const AnalyticsTab = lazy(() => import('./AnalyticsTab').then(module => ({ default: module.AnalyticsTab })));
+
+type Translate = (key: string, params?: Record<string, string | number>) => string;
+type Navigate = (view: SocialMediaViewTarget, stage?: QueueStage) => void;
+
+interface RecentItem { key: string; title: string; at: string | null; platforms: string[] }
+
+function recentPublications(publish: PublishSnapshot | undefined, clips: SocialClipMitPosting[] | undefined, t: Translate): RecentItem[] {
+  const produced = (publish?.videos ?? []).flatMap(video => {
+    const platforms = video.event?.destinations.filter(destination => destination.state === 'published' && destination.reason !== 'tiktok_draft').map(destination => destination.platform) ?? [];
+    return platforms.length === 0 ? [] : [{ key: `video-${video.id}`, title: clipName(clips, video.clip_id, t('Video {id}', { id: video.id })), at: video.event?.completed_at ?? video.event?.executed_at ?? null, platforms }];
+  });
+  const legacy = (clips ?? []).filter(clip => clip.status === 'published_all').map(clip => ({
+    key: `clip-${clip.clip_db_id}`, title: clip.generated_title?.trim() || clip.title || clip.clip_id, at: null,
+    platforms: Object.entries(clip.platform_status).filter(([, done]) => done).map(([platform]) => platform),
+  }));
+  return [...produced.sort((a, b) => Date.parse(b.at ?? '') - Date.parse(a.at ?? '')), ...legacy];
+}
+
+function aiUsage(jobs: AiJobView[]) {
+  return jobs.reduce((sum, job) => ({
+    cost: sum.cost + (job.measured_provider_cost_usd ?? job.estimated_provider_cost_usd ?? 0),
+    estimated: sum.estimated || (job.measured_provider_cost_usd === null && job.estimated_provider_cost_usd !== null),
+    tokens: sum.tokens + (job.input_tokens ?? 0) + (job.output_tokens ?? 0),
+    jobs: sum.jobs + 1,
+  }), { cost: 0, estimated: false, tokens: 0, jobs: 0 });
+}
+
+function Tile({ icon: Icon, title, children, footer }: { icon: typeof Send; title: string; children: ReactNode; footer?: ReactNode }) {
+  return <section className="studio-tile">
+    <header className="studio-tile-head"><Icon className="h-4 w-4" aria-hidden /><h2>{title}</h2></header>
+    <div className="studio-tile-body">{children}</div>
+    {footer}
+  </section>;
+}
+
+function RecentTile({ items, onNavigate }: { items: RecentItem[]; onNavigate: Navigate }) {
+  const { t, locale } = useLanguage();
+  return <Tile icon={Send} title={t('Zuletzt veröffentlicht')}
+    footer={<button type="button" className="studio-overview-link" onClick={() => onNavigate('clips', 'posted')}>{t('Alle veröffentlichten Clips')}<ArrowRight className="h-4 w-4" aria-hidden /></button>}>
+    {items.length === 0 ? <p className="studio-overview-empty">{t('Noch nichts veröffentlicht.')}</p>
+      : <ul className="studio-tile-list">{items.slice(0, 3).map(item => <li key={item.key}>
+        <span className="studio-tile-item-title" title={item.title}>{item.title}</span>
+        <span className="studio-tile-item-meta">
+          {item.platforms.map(platform => <img key={platform} className="studio-overview-platform" src={platformIconUrl(platform)} width="16" height="16" alt={platform} />)}
+          {item.at && <span>{new Date(item.at).toLocaleDateString(locale, { day: '2-digit', month: '2-digit' })}</span>}
+        </span>
+      </li>)}</ul>}
+  </Tile>;
+}
+
+function topReasons(items: FailedItem[]): { reason: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item.reason, (counts.get(item.reason) ?? 0) + 1);
+  return [...counts].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count).slice(0, 3);
+}
+
+function FailedTile({ items, onNavigate }: { items: FailedItem[]; onNavigate: Navigate }) {
+  const { t } = useLanguage();
+  return <Tile icon={TriangleAlert} title={t('Fehlgeschlagen')}
+    footer={<button type="button" className="studio-overview-link" onClick={() => onNavigate('clips', 'failed')}>{t('Alle Fehler ansehen')}<ArrowRight className="h-4 w-4" aria-hidden /></button>}>
+    <p className="studio-tile-value">{items.length}</p>
+    {items.length === 0 ? <p className="studio-overview-empty">{t('Keine Fehler.')}</p>
+      : <ul className="studio-tile-list studio-tile-top-reasons" aria-label={t('Häufigste Gründe')}>{topReasons(items).map(entry => <li key={entry.reason}>
+        <span className="studio-tile-item-reason" title={entry.reason}>{entry.reason}</span>
+        <span className="studio-tile-item-meta">{entry.count}×</span>
+      </li>)}</ul>}
+  </Tile>;
+}
+
+function CostSummary({ owner }: { owner: string }) {
+  const { t, locale } = useLanguage();
+  const jobs = useQuery({ queryKey: ['social-ai', 'jobs', owner], queryFn: async ({ signal }) => (await import('./ai/api')).fetchAiJobs(owner, signal), retry: false, refetchInterval: 30000 });
+  if (jobs.isError) return <p className="studio-overview-empty">{t('Nicht abrufbar')}</p>;
+  if (!jobs.data) return <p className="studio-overview-empty">{t('Wird geladen')}</p>;
+  const usage = aiUsage(jobs.data);
+  return <>
+    <p className="studio-tile-value">{new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(usage.cost)}</p>
+    <p className="studio-tile-detail">{t('{tokens} Tokens · {count} KI-Aufträge', { tokens: usage.tokens.toLocaleString(locale), count: usage.jobs })}</p>
+    {usage.estimated && <p className="studio-tile-detail">{t('Teilweise geschätzt')}</p>}
+  </>;
+}
+
+function CostTile({ owner, streamer, isAdmin, statisticsPlatforms }: { owner?: string; streamer: string; isAdmin: boolean; statisticsPlatforms: string[] }) {
+  const { t } = useLanguage();
+  const [open, setOpen] = useState(false);
+  return <Tile icon={Coins} title={t('KI-Kosten & Nutzung')}
+    footer={<button type="button" className="studio-overview-link" disabled={!streamer} onClick={() => setOpen(true)}>{t('Details')}<ArrowRight className="h-4 w-4" aria-hidden /></button>}>
+    {owner ? <CostSummary owner={owner} /> : <p className="studio-overview-empty">{t('Bitte einen Kanal auswählen.')}</p>}
+    {open && <WorkspaceDialog eyebrow={t('Kennzahlen')} title={t('Auswertung')} onClose={() => setOpen(false)}>
+      <Suspense fallback={<p role="status">{t('Wird geladen')}</p>}>
+        <AnalyticsTab streamer={streamer} twitchUserId={owner} isAdmin={isAdmin} statisticsPlatforms={statisticsPlatforms} />
+      </Suspense>
+    </WorkspaceDialog>}
+  </Tile>;
+}
+
+export function StudioOverviewTiles({ schedule, publish, clips, owner, streamer, isAdmin, statisticsPlatforms, onNavigate }: {
+  schedule: ScheduleQueueSnapshot | undefined;
+  publish: PublishSnapshot | undefined;
+  clips: SocialClipMitPosting[] | undefined;
+  owner?: string;
+  streamer: string;
+  isAdmin: boolean;
+  statisticsPlatforms: string[];
+  onNavigate: Navigate;
+}) {
+  const { t } = useLanguage();
+  return <div className="studio-tiles">
+    <RecentTile items={recentPublications(publish, clips, t)} onNavigate={onNavigate} />
+    <FailedTile items={failedItems(schedule, publish, clips, t)} onNavigate={onNavigate} />
+    <CostTile owner={owner} streamer={streamer} isAdmin={isAdmin} statisticsPlatforms={statisticsPlatforms} />
+  </div>;
+}

@@ -1,7 +1,38 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { dashboardDestination, navigateDashboard, subscribeNavigation } from '../src/navigation';
+import { dashboardDestination, navigateDashboard, subscribeNavigation, tourLinkHref } from '../src/navigation';
+
+test('public tour paths stay inside dashboard navigation', () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      location: { href: 'https://dashboard.example/twitch/rundgang', origin: 'https://dashboard.example' },
+    },
+  });
+  try {
+    assert.ok(dashboardDestination('/twitch/rundgang'));
+    assert.ok(dashboardDestination('/twitch/rundgang/analyse'));
+    assert.ok(dashboardDestination('/twitch/rundgang/social-media'));
+    assert.equal(dashboardDestination('/twitch/auth/logout'), null);
+  } finally {
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
+
+test('live dashboard links stay inside the public tour', () => {
+  const tour = 'https://dashboard.example/twitch/rundgang/analyse';
+  assert.equal(tourLinkHref('/twitch/analyse?tab=growth', tour), 'https://dashboard.example/twitch/rundgang/analyse?tab=growth');
+  assert.equal(tourLinkHref('/twitch/dashboard#changelog', tour), 'https://dashboard.example/twitch/rundgang#changelog');
+  assert.equal(tourLinkHref('/twitch/feedback', tour), 'https://dashboard.example/twitch/rundgang/feedback');
+  assert.equal(tourLinkHref('/twitch/auth/login?next=%2Ftwitch%2Fdashboard', tour), null);
+  assert.equal(tourLinkHref('/twitch/dashboard-v2', tour), null);
+  assert.equal(tourLinkHref('/twitch/rundgang/uplink', tour), null);
+  assert.equal(tourLinkHref('https://other.example/twitch/analyse', tour), null);
+  assert.equal(tourLinkHref('/twitch/analyse', 'https://dashboard.example/twitch/analyse'), null);
+});
 
 test('dashboard navigation retains the document only for owned unmodified links', () => {
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');

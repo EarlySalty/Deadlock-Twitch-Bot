@@ -770,24 +770,8 @@ mod tests {
         sqlx::PgPool,
         crate::auth::session::DashboardAuthState,
     ) {
-        let database = crate::test_database::Database::new().await;
-        let schema = crate::auth::session::test_schema_name("auth_level");
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
-            .execute(&database.pool)
-            .await
-            .expect("auth test schema must be created");
-
-        let opts = database
-            .pool
-            .connect_options()
-            .as_ref()
-            .clone()
-            .options([("search_path", schema.as_str())]);
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(2)
-            .connect_with(opts)
-            .await
-            .expect("auth test schema pool must connect");
+        let database = crate::guild_onboarding::tests::fixture().await;
+        let pool = database.pool.clone();
         sqlx::query(
             r#"
             CREATE TABLE dashboard_sessions (
@@ -802,23 +786,6 @@ mod tests {
         .execute(&pool)
         .await
         .expect("auth dashboard_sessions table must be created");
-        sqlx::query(
-            r#"
-            CREATE TABLE twitch_partners (
-                id BIGINT PRIMARY KEY,
-                twitch_login TEXT NOT NULL,
-                twitch_user_id TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'active',
-                technical_pause_reason TEXT,
-                admin_archived_at TEXT,
-                departnered_at TEXT,
-                partnered_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            "#,
-        )
-        .execute(&pool)
-        .await
-        .expect("auth twitch_partners table must be created");
         let state = crate::auth::session::DashboardAuthState::new(
             pool.clone(),
             "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string(),
@@ -833,6 +800,16 @@ mod tests {
         .bind(id)
         .bind(login)
         .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
+             VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(login)
         .execute(pool)
         .await
         .unwrap();
@@ -1234,7 +1211,7 @@ mod tests {
 
     #[test]
     fn master_session_ist_nur_mit_admin_kontext_oder_mode_cookie_admin() {
-        let user_view = master_session_auth(false, false);
+        let user_view = master_owner_identity(master_session_auth(false, false), "42".into());
         assert!(matches!(
             &user_view,
             DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"

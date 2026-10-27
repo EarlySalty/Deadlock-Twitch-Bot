@@ -20,8 +20,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use sqlx::PgPool;
 
 use crate::token_lifecycle::{
-    discord_user_id_for, BotBanStatus, BotBanStatusProbe, TokenLifecycleNotifier, BOT_SECTION_URL,
-    TOKEN_ERROR_CHANNEL_ID,
+    discord_user_id_for, BotBanStatus, BotBanStatusProbe, DmPurpose, TokenLifecycleNotifier,
+    BOT_SECTION_URL, TOKEN_ERROR_CHANNEL_ID,
 };
 use crate::util::mask_log_identifier as mask;
 
@@ -447,7 +447,9 @@ impl<N: TokenLifecycleNotifier> DeadlockPauseReactor<N> {
                 discord_user_id_for(&self.pool, twitch_user_id, twitch_login).await
             {
                 let text = user_dm_deadlock_pause_text(twitch_login, self.pause_days);
-                self.notifier.send_user_dm(&discord_user_id, &text).await;
+                self.notifier
+                    .send_user_dm(&discord_user_id, &text, DmPurpose::Proactive)
+                    .await;
             }
         }
         let (title, description) = admin_deadlock_pause_text(twitch_login, twitch_user_id, zurueck);
@@ -606,7 +608,12 @@ mod tests {
             self.admin_embeds.fetch_add(1, Ordering::SeqCst);
             true
         }
-        async fn send_user_dm(&self, _discord_user_id: &str, content: &str) -> bool {
+        async fn send_user_dm(
+            &self,
+            _discord_user_id: &str,
+            content: &str,
+            _purpose: DmPurpose,
+        ) -> bool {
             self.dms.lock().unwrap().push(content.to_string());
             true
         }
@@ -639,8 +646,7 @@ mod tests {
     }
 
     fn test_db_url() -> Option<String> {
-        crate::test_database::database_url()
-            .filter(|v| !v.trim().is_empty())
+        crate::test_database::database_url().filter(|v| !v.trim().is_empty())
     }
 
     async fn setup_db(schema: &str) -> PgPool {

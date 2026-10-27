@@ -78,10 +78,15 @@ EOF
     assert_contains_once 'local deadlock twitchdash peer' "$rule_file"
     assert_precedes 'local deadlock twitchbot peer' 'local all twitchbot reject' "$rule_file"
     assert_precedes 'local deadlock twitchdash peer' 'local all twitchdash reject' "$rule_file"
-    install_local_peer_before_reject "$rule_file" deadlock twitchbot
+    install_local_peer_before_reject "$rule_file" deadlock twitchbot map=twitch_central_reader
     install_local_peer_before_reject "$rule_file" deadlock twitchdash
-    assert_contains_once 'local deadlock twitchbot peer' "$rule_file"
+    assert_contains_once 'local deadlock twitchbot peer map=twitch_central_reader' "$rule_file"
+    [[ $(rg --count '^local deadlock twitchbot ' "$rule_file") == 1 ]]
     assert_contains_once 'local deadlock twitchdash peer' "$rule_file"
+    assert_precedes 'local deadlock twitchbot peer map=twitch_central_reader' 'local all twitchbot reject' "$rule_file"
+    install_local_peer_before_reject "$rule_file" deadlock twitchbot map=twitch_central_reader
+    assert_contains_once 'local deadlock twitchbot peer map=twitch_central_reader' "$rule_file"
+    [[ $(rg --count '^local deadlock twitchbot ' "$rule_file") == 1 ]]
 
     restore_peer_files "$main_file" "$rule_file" "$ident_file" "$backup_dir"
     assert_unchanged "$original_main" "$main_file"

@@ -70,6 +70,7 @@ pub struct BotOperations {
     /// Takt für ersetzbare Community-Tageswerte, in Sekunden.
     pub community_points_aggregation_interval_seconds: u64,
     pub lfg_pitch_enabled: bool,
+    pub impersonation_guard_enabled: bool,
     pub golive_tips_enabled: bool,
     pub irc_lurker_enabled: bool,
     pub outreach_shadow_enabled: bool,
@@ -114,6 +115,7 @@ impl Default for BotOperations {
             chat_persist_all_games: true,
             community_points_aggregation_interval_seconds: 300,
             lfg_pitch_enabled: true,
+            impersonation_guard_enabled: true,
             golive_tips_enabled: false,
             irc_lurker_enabled: false,
             outreach_shadow_enabled: false,

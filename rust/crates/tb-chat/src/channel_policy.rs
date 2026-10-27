@@ -14,6 +14,7 @@ const DENIED_REASON: &str = "channel_policy_denied";
 pub enum PolicyContext {
     Standard(Arc<dyn PartnerRoster>),
     Raid(Arc<dyn PartnerRoster>),
+    ImpersonationWarning,
 }
 
 pub struct ChannelPolicyChatApi {
@@ -37,6 +38,7 @@ impl ChannelPolicyChatApi {
             PolicyContext::Raid(roster) => {
                 action.allowed_for_raid() && roster.is_operational_partner_channel(channel).await
             }
+            PolicyContext::ImpersonationWarning => matches!(action, WriteAction::SendMessage),
         };
         if allowed {
             return Ok(());
@@ -222,6 +224,14 @@ impl ChatApi for ChannelPolicyChatApi {
 
     async fn resolve_user_id(&self, login: &str) -> Result<Option<String>, String> {
         self.inner.resolve_user_id(login).await
+    }
+
+    async fn user_follows(
+        &self,
+        broadcaster_id: &str,
+        user_id: &str,
+    ) -> Result<Option<bool>, String> {
+        self.inner.user_follows(broadcaster_id, user_id).await
     }
 
     async fn bot_user_id(&self) -> String {

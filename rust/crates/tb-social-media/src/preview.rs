@@ -33,8 +33,6 @@ pub(crate) async fn invalidate_preview(
 ) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE twitch_clips_social_media SET preview_status = CASE WHEN preview_status IN ('pending', 'rendering') THEN 'pending' ELSE NULL END, preview_path = NULL, preview_error = NULL, preview_updated_at = clock_timestamp() WHERE id = $1")
         .bind(clip_db_id).execute(&mut *connection).await?;
-    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'waiting_tiktok_approval', last_error = 'tiktok_preview_changed' WHERE clip_id = $1 AND platform = 'tiktok' AND status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule', 'failed') AND tiktok_publish_id IS NULL")
-        .bind(clip_db_id).execute(&mut *connection).await?;
     Ok(())
 }
 
@@ -78,7 +76,7 @@ async fn render_inputs_on(
     Ok(serde_json::json!({
         "clip_url": row["clip_url"], "local_file_path": row["local_file_path"],
         "streamer_login": row["streamer_login"], "clip_title": row["clip_title"],
-        "custom_title": row["custom_title"], "layout": layout.map(|value| value.to_override_json()),
+        "custom_title": row["custom_title"], "layout": layout.map(|value| value.to_override_json()), "render": "unbranded",
         "source": source,
     })
     .to_string())
@@ -631,7 +629,7 @@ mod tests {
             .fetch_all(&pool).await.unwrap();
         assert!(rows
             .iter()
-            .any(|row| row.0 == "tiktok" && row.1 == "waiting_tiktok_approval"));
+            .any(|row| row.0 == "tiktok" && row.1 == "pending"));
         assert!(rows
             .iter()
             .any(|row| row.0 == "tiktok" && row.1 == "completed"));

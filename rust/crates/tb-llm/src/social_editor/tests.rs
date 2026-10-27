@@ -36,7 +36,7 @@ async fn cumulative_usage_is_owner_scoped_and_unknown_attempts_never_form_partia
             && empty.estimated_provider_cost_usd.is_none()
             && empty.provider_latency_ms.is_none()
     );
-    sqlx::raw_sql("INSERT INTO public.llm_usage (ts,purpose,provider,model,attempt_state,social_ai_twitch_user_id,social_ai_job_id,tokens_in,tokens_out,estimated_micro_usd,cost_basis,latency_ms) VALUES ('test','social_editor','anthropic','model','failed','101','manual:1',100,20,800,'usage_priced_estimate',12), ('test','social_editor','anthropic','model','succeeded','101','manual:1',150,30,1200,'usage_priced_estimate',18), ('test','social_editor','anthropic','model','succeeded','202','manual:1',9000,9000,9000,'usage_priced_estimate',9000), ('test','social_editor','anthropic','model','succeeded','101','production:1',9000,9000,9000,'usage_priced_estimate',9000)")
+    sqlx::raw_sql("INSERT INTO public.llm_usage (ts,purpose,provider,model,attempt_state,social_ai_twitch_user_id,social_ai_job_id,tokens_in,tokens_out,cache_creation_input_tokens,cache_read_input_tokens,estimated_micro_usd,cost_basis,latency_ms) VALUES ('test','social_editor','anthropic','model','failed','101','manual:1',100,20,0,0,800,'usage_priced_estimate',12), ('test','social_editor','anthropic','model','succeeded','101','manual:1',150,30,0,0,1200,'usage_priced_estimate',18), ('test','social_editor','anthropic','model','succeeded','202','manual:1',9000,9000,0,0,9000,'usage_priced_estimate',9000), ('test','social_editor','anthropic','model','succeeded','101','production:1',9000,9000,0,0,9000,'usage_priced_estimate',9000)")
         .execute(pool).await.expect("durable attempts");
     let totals = job_usage(pool, "101", "manual:1")
         .await
@@ -70,12 +70,27 @@ async fn cumulative_usage_is_owner_scoped_and_unknown_attempts_never_form_partia
             && partial.estimated_provider_cost_usd.is_none()
     );
     assert_eq!(partial.provider_latency_ms, Some(39));
-    sqlx::query("UPDATE public.llm_usage SET tokens_in=50,tokens_out=10,estimated_micro_usd=400,cost_basis='usage_priced_estimate' WHERE id=$1").bind(pending).execute(pool).await.expect("recovery usage");
+    sqlx::query("UPDATE public.llm_usage SET tokens_in=50,tokens_out=10,cache_creation_input_tokens=0,cache_read_input_tokens=0,estimated_micro_usd=400,cost_basis='usage_priced_estimate' WHERE id=$1").bind(pending).execute(pool).await.expect("recovery usage");
     let recovered = job_usage(pool, "101", "manual:1")
         .await
         .expect("recovered totals");
     assert_eq!(recovered.input_tokens, Some(300));
     assert_eq!(recovered.estimated_provider_cost_usd, Some(0.0024));
+    sqlx::query("UPDATE public.llm_usage SET cache_creation_input_tokens=7800,cache_read_input_tokens=3700 WHERE id=$1").bind(pending).execute(pool).await.expect("cached usage");
+    let cached = job_usage(pool, "101", "manual:1")
+        .await
+        .expect("cached totals");
+    assert_eq!(cached.input_tokens, Some(11_800));
+    sqlx::query("UPDATE public.llm_usage SET cache_read_input_tokens=NULL WHERE id=$1")
+        .bind(pending)
+        .execute(pool)
+        .await
+        .expect("missing cache counter");
+    let missing = job_usage(pool, "101", "manual:1")
+        .await
+        .expect("missing cache totals");
+    assert_eq!(missing.input_tokens, None);
+    assert_eq!(missing.output_tokens, Some(60));
     sqlx::query("UPDATE public.llm_usage SET latency_ms=9007199254740991 WHERE id=$1")
         .bind(pending)
         .execute(pool)
@@ -296,6 +311,18 @@ impl DisposablePostgres {
             .execute(&pool)
             .await
             .expect("admin console limits migration");
+            sqlx::raw_sql(include_str!(
+                "../../../../migrations/20261020120000_social_ai_provider_rejected_unbilled.sql"
+            ))
+            .execute(&pool)
+            .await
+            .expect("rejected unbilled migration");
+            sqlx::raw_sql(include_str!(
+                "../../../../migrations/20261022190000_social_ai_subscription_included.sql"
+            ))
+            .execute(&pool)
+            .await
+            .expect("subscription included migration");
         }
         static LEDGER_IDENTITY: std::sync::Once = std::sync::Once::new();
         LEDGER_IDENTITY.call_once(|| {
@@ -617,6 +644,139 @@ async fn structured_provider_codes_are_bounded_and_saved_without_messages() {
 }
 
 #[tokio::test]
+async fn rejected_client_error_without_usage_is_unbilled_but_unknown_failures_stay_reserved() {
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+    let database = DisposablePostgres::start().await;
+    let pool = &database.pool;
+    let context = EditorContext {
+        twitch_user_id: "person".into(),
+        job_id: "job".into(),
+        stage: "analyzing".into(),
+    };
+    sqlx::query("INSERT INTO public.social_ai_user_consent(twitch_user_id,external_ai_consent) VALUES ($1,true)")
+        .bind(&context.twitch_user_id).execute(pool).await.expect("user consent");
+    sqlx::query("INSERT INTO public.social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb)")
+        .execute(pool).await.expect("global consent");
+    let mock = MockServer::start().await;
+    let mut configuration = config();
+    configuration.provider.endpoint = mock.uri();
+    configuration.provider.max_retries = 0;
+    let reservation = configuration
+        .provider
+        .pricing
+        .reservation(
+            u64::from(configuration.provider.max_input_tokens),
+            u64::from(configuration.provider.max_output_tokens),
+        )
+        .expect("reservation");
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({"type":"error","error":{"type":"invalid_request_error","message":"schema rejected"}})))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let rejected = complete_with_key(pool, &context, &configuration, &request(), "fake-key")
+        .await
+        .expect_err("rejected request");
+    assert_eq!(rejected.cost_basis, Some("provider_rejected_unbilled"));
+    assert_eq!(rejected.estimated_micro_usd, Some(0));
+    let saved: (Option<i64>, String) =
+        sqlx::query_as("SELECT estimated_micro_usd,cost_basis FROM public.llm_usage WHERE id=$1")
+            .bind(rejected.ledger_id.expect("ledger id"))
+            .fetch_one(pool)
+            .await
+            .expect("rejected ledger");
+    assert_eq!(saved, (Some(0), "provider_rejected_unbilled".into()));
+    let mut connection = pool.acquire().await.expect("accounting");
+    assert_eq!(
+        usage::consumption_on(&mut connection, None)
+            .await
+            .expect("rejected debit"),
+        0
+    );
+    drop(connection);
+    mock.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(
+            json!({"type":"error","error":{"type":"api_error","message":"unknown"}}),
+        ))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let unknown = complete_with_key(pool, &context, &configuration, &request(), "fake-key")
+        .await
+        .expect_err("server failure");
+    assert_eq!(unknown.cost_basis, Some("reserved_upper_bound"));
+    let mut connection = pool.acquire().await.expect("accounting");
+    assert_eq!(
+        usage::consumption_on(&mut connection, None)
+            .await
+            .expect("unknown debit"),
+        reservation
+    );
+}
+
+#[test]
+fn wire_schema_omits_constraints_structured_outputs_reject() {
+    let mut constrained = request();
+    constrained.json_schema = json!({"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":80},"moments":{"type":"array","minItems":2,"maxItems":4,"items":{"type":"integer","minimum":0,"maximum":9}}},"required":["title","moments"],"additionalProperties":false});
+    let body = build_body(&config().provider, &constrained).expect("body");
+    let wire = body["output_config"]["format"]["schema"].to_string();
+    for keyword in [
+        "minLength",
+        "maxLength",
+        "minItems",
+        "maxItems",
+        "minimum",
+        "maximum",
+    ] {
+        assert!(!wire.contains(&format!("\"{keyword}\":")), "{keyword}");
+    }
+    assert_eq!(
+        body["output_config"]["format"]["schema"]["required"],
+        json!(["title", "moments"])
+    );
+}
+
+#[test]
+fn wire_schema_rejects_shapes_structured_outputs_cannot_compile() {
+    let optional = (0..25)
+        .map(|n| (format!("field_{n}"), json!({"type":"string"})))
+        .collect::<serde_json::Map<_, _>>();
+    let too_optional =
+        json!({"type":"object","properties":optional,"required":[],"additionalProperties":false});
+    assert!(check_schema(&too_optional).is_err());
+    let unions = (0..17)
+        .map(|n| (format!("field_{n}"), json!({"type":["string","null"]})))
+        .collect::<serde_json::Map<_, _>>();
+    let names = unions.keys().cloned().collect::<Vec<_>>();
+    let too_many_unions =
+        json!({"type":"object","properties":unions,"required":names,"additionalProperties":false});
+    assert!(check_schema(&too_many_unions).is_err());
+    let object_enum = json!({"type":"object","properties":{"mode":{"enum":[{"a":1}]}},"required":["mode"],"additionalProperties":false});
+    assert!(check_schema(&object_enum).is_err());
+    let mut rejected = request();
+    rejected.json_schema = object_enum;
+    assert!(build_body(&config().provider, &rejected).is_err());
+    assert!(check_schema(&request().json_schema).is_ok());
+}
+
+#[test]
+fn provider_message_is_flattened_redacted_and_truncated() {
+    let body = json!({"type":"error","error":{"type":"invalid_request_error","message":format!("bad\n\tschema key \"sk-ant-api03-secret\" {}", "x".repeat(400))}});
+    let message = provider_error_message(body.to_string().as_bytes()).expect("message");
+    assert!(message.starts_with("bad schema key [redacted] x"));
+    assert!(!message.contains("sk-"));
+    assert!(!message.chars().any(char::is_control));
+    assert_eq!(message.chars().count(), MAX_PROVIDER_MESSAGE_CHARS);
+    assert_eq!(provider_error_message(b"not json"), None);
+}
+
+#[tokio::test]
 async fn failed_finalization_blocks_reservations_until_exact_recovery() {
     let database = DisposablePostgres::start().await;
     let pool = &database.pool;
@@ -895,6 +1055,7 @@ async fn consent_budget_and_native_mock_contract() {
     let mut configuration = config();
     let mock = MockServer::start().await;
     configuration.provider.endpoint = mock.uri();
+    configuration.provider.initial_total_cap_micro_usd = 2_000_000;
     let prompt = request();
     let response = json!({"model":configuration.provider.model,"stop_reason":"end_turn","content":[{"type":"text","text":"{\"title\":\"clip\"}"}],"usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}});
     Mock::given(method("POST"))
@@ -1047,4 +1208,362 @@ async fn consent_budget_and_native_mock_contract() {
             .len(),
         2
     );
+}
+
+fn provider_error(message: &str) -> Vec<u8> {
+    serde_json::to_vec(
+        &json!({"type": "error", "error": {"type": "invalid_request_error", "message": message}}),
+    )
+    .expect("error body")
+}
+
+#[test]
+fn access_problem_maps_provider_rejections() {
+    let unscoped = provider_error(
+        "API key is not scoped to a workspace. Please provide the anthropic-workspace-id header.",
+    );
+    let invalid = provider_error("The anthropic-workspace-id header must be a valid workspace ID.");
+    let other = provider_error("max_tokens: field required");
+    assert_eq!(
+        access_problem(StatusCode::BAD_REQUEST, &unscoped),
+        Some(ProviderAccess::WorkspaceRequired)
+    );
+    assert_eq!(
+        access_problem(StatusCode::BAD_REQUEST, &invalid),
+        Some(ProviderAccess::WorkspaceInvalid)
+    );
+    assert_eq!(access_problem(StatusCode::BAD_REQUEST, &other), None);
+    assert_eq!(access_problem(StatusCode::BAD_REQUEST, b"not json"), None);
+    assert_eq!(
+        access_problem(StatusCode::UNAUTHORIZED, b""),
+        Some(ProviderAccess::KeyRejected)
+    );
+    assert_eq!(
+        access_problem(StatusCode::FORBIDDEN, b""),
+        Some(ProviderAccess::KeyRejected)
+    );
+    assert_eq!(
+        access_problem(StatusCode::INTERNAL_SERVER_ERROR, &unscoped),
+        None
+    );
+}
+
+#[test]
+fn credential_fingerprint_changes_with_key_or_workspace() {
+    let base = credential_fingerprint(Some("key-a"), None);
+    assert_eq!(base, credential_fingerprint(Some("key-a"), None));
+    assert_ne!(base, credential_fingerprint(Some("key-b"), None));
+    assert_ne!(
+        base,
+        credential_fingerprint(Some("key-a"), Some("wrkspc_1"))
+    );
+    assert_ne!(base, credential_fingerprint(None, None));
+}
+
+fn relay_reply_validator() -> jsonschema::Validator {
+    schema::compile(&request().json_schema).expect("schema")
+}
+
+#[test]
+fn relay_replies_map_to_fallback_reasons_and_require_the_configured_model() {
+    let validator = relay_reply_validator();
+    let usage = json!({"input_tokens":10,"output_tokens":4,"cache_creation_input_tokens":0,"cache_read_input_tokens":0});
+    let ok = json!({"ok":true,"model":"m","structured_output":{"title":"clip"},"usage":usage,"duration_ms":5});
+    let reply =
+        subscription::interpret(ok.to_string().as_bytes(), &validator, "m").expect("relay success");
+    assert_eq!(reply.content["title"], "clip");
+    assert_eq!(
+        subscription::interpret(ok.to_string().as_bytes(), &validator, "other").err(),
+        Some(subscription::Failure::ModelMismatch)
+    );
+    let invalid = json!({"ok":true,"model":"m","structured_output":{"title":3},"usage":usage});
+    assert_eq!(
+        subscription::interpret(invalid.to_string().as_bytes(), &validator, "m").err(),
+        Some(subscription::Failure::InvalidResponse)
+    );
+    for (kind, expected) in [
+        ("limit", subscription::Failure::Limit),
+        ("timeout", subscription::Failure::Timeout),
+        ("busy", subscription::Failure::Busy),
+        ("invalid_request", subscription::Failure::Rejected),
+        ("cli_error", subscription::Failure::CliError),
+    ] {
+        let failed = json!({"ok":false,"kind":kind,"message":"x"});
+        assert_eq!(
+            subscription::interpret(failed.to_string().as_bytes(), &validator, "m").err(),
+            Some(expected)
+        );
+    }
+}
+
+async fn fake_relay(
+    reply: Value,
+) -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    tokio::task::JoinHandle<Value>,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let dir = tempfile::Builder::new()
+        .prefix("relay-")
+        .tempdir()
+        .expect("relay dir");
+    let socket = dir.path().join("relay.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("relay socket");
+    let handle = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("relay connection");
+        let mut reader = tokio::io::BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.expect("relay request");
+        let mut stream = reader.into_inner();
+        stream
+            .write_all(format!("{reply}\n").as_bytes())
+            .await
+            .expect("relay reply");
+        serde_json::from_str::<Value>(&line).expect("relay request json")
+    });
+    (dir, socket, handle)
+}
+
+async fn consenting_database() -> (DisposablePostgres, EditorContext) {
+    let database = DisposablePostgres::start().await;
+    let context = EditorContext {
+        twitch_user_id: "person".into(),
+        job_id: "job".into(),
+        stage: "caption".into(),
+    };
+    sqlx::query("INSERT INTO public.social_ai_user_consent(twitch_user_id,external_ai_consent) VALUES ($1,true)")
+        .bind(&context.twitch_user_id).execute(&database.pool).await.expect("person consent");
+    sqlx::query("INSERT INTO public.social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb)")
+        .execute(&database.pool).await.expect("global consent");
+    (database, context)
+}
+
+#[tokio::test]
+async fn subscription_success_is_ledgered_as_included_without_api_call() {
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+    let (database, context) = consenting_database().await;
+    let pool = &database.pool;
+    let mut configuration = config();
+    configuration.provider.initial_total_cap_micro_usd = 2_000_000;
+    let mock = MockServer::start().await;
+    configuration.provider.endpoint = mock.uri();
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&mock)
+        .await;
+    let model = configuration.provider.model.clone();
+    let (_dir, socket, relay) = fake_relay(json!({"ok":true,"model":model,"structured_output":{"title":"clip"},"usage":{"input_tokens":120,"output_tokens":30,"cache_creation_input_tokens":5,"cache_read_input_tokens":7},"duration_ms":40})).await;
+    configuration.provider.subscription_relay = Some(SubscriptionRelay {
+        socket,
+        request_timeout_ms: 5_000,
+    });
+    let response = complete_with_fallback(pool, &context, &configuration, &request(), || {
+        Some("fake-key".into())
+    })
+    .await
+    .expect("subscription response");
+    assert_eq!(response.provider, "claude_subscription");
+    assert_eq!(response.charge_micro_usd, 0);
+    assert_eq!(response.cost_basis, "subscription_included");
+    assert_eq!(response.content["title"], "clip");
+    let sent = relay.await.expect("relay task");
+    assert_eq!(sent["model"], json!(configuration.provider.model));
+    assert_eq!(sent["timeout_ms"], 5_000);
+    assert_eq!(sent["content"][1]["type"], "image");
+    let row = sqlx::query("SELECT provider,attempt_state,reserved_micro_usd,estimated_micro_usd,cost_basis,tokens_in,tokens_out,cache_creation_input_tokens,cache_read_input_tokens,error_code FROM public.llm_usage WHERE id=$1")
+        .bind(response.ledger_id).fetch_one(pool).await.expect("subscription ledger row");
+    assert_eq!(row.get::<String, _>("provider"), "claude_subscription");
+    assert_eq!(row.get::<String, _>("attempt_state"), "succeeded");
+    assert_eq!(row.get::<i64, _>("reserved_micro_usd"), 0);
+    assert_eq!(row.get::<Option<i64>, _>("estimated_micro_usd"), Some(0));
+    assert_eq!(row.get::<String, _>("cost_basis"), "subscription_included");
+    assert_eq!(row.get::<Option<i64>, _>("tokens_in"), Some(120));
+    assert_eq!(row.get::<Option<i64>, _>("tokens_out"), Some(30));
+    assert_eq!(
+        row.get::<Option<i64>, _>("cache_creation_input_tokens"),
+        Some(5)
+    );
+    assert_eq!(
+        row.get::<Option<i64>, _>("cache_read_input_tokens"),
+        Some(7)
+    );
+    assert_eq!(row.get::<Option<String>, _>("error_code"), None);
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM public.llm_usage")
+        .fetch_one(pool)
+        .await
+        .expect("row count");
+    assert_eq!(rows, 1);
+}
+
+#[tokio::test]
+async fn abandoned_subscription_attempt_does_not_disable_the_subscription_path() {
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+    let (database, context) = consenting_database().await;
+    let pool = &database.pool;
+    let mut configuration = config();
+    configuration.provider.initial_total_cap_micro_usd = 2_000_000;
+    let mock = MockServer::start().await;
+    configuration.provider.endpoint = mock.uri();
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&mock)
+        .await;
+    let stale = (Utc::now() - chrono::Duration::minutes(30))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+    let abandoned: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage (ts,purpose,provider,model,attempt_state,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ($1,'social_editor','claude_subscription','model','started',0,0,'subscription_included') RETURNING id")
+        .bind(&stale).fetch_one(pool).await.expect("abandoned row");
+    let model = configuration.provider.model.clone();
+    let (_dir, socket, relay) = fake_relay(json!({"ok":true,"model":model,"structured_output":{"title":"clip"},"usage":{"input_tokens":10,"output_tokens":5},"duration_ms":40})).await;
+    configuration.provider.subscription_relay = Some(SubscriptionRelay {
+        socket,
+        request_timeout_ms: 5_000,
+    });
+    let response = complete_with_fallback(pool, &context, &configuration, &request(), || {
+        Some("fake-key".into())
+    })
+    .await
+    .expect("subscription response after abandoned attempt");
+    relay.await.expect("relay task");
+    assert_eq!(response.provider, "claude_subscription");
+    let closed = sqlx::query("SELECT attempt_state,error_code FROM public.llm_usage WHERE id=$1")
+        .bind(abandoned)
+        .fetch_one(pool)
+        .await
+        .expect("closed row");
+    assert_eq!(closed.get::<String, _>("attempt_state"), "failed");
+    assert_eq!(
+        closed.get::<Option<String>, _>("error_code").as_deref(),
+        Some("Subscription/abandoned")
+    );
+}
+
+#[tokio::test]
+async fn fresh_unregistered_subscription_attempt_is_not_closed_early() {
+    let (database, context) = consenting_database().await;
+    let pool = &database.pool;
+    let mut configuration = config();
+    configuration.provider.initial_total_cap_micro_usd = 2_000_000;
+    let fresh = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+    let open: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage (ts,purpose,provider,model,attempt_state,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ($1,'social_editor','claude_subscription','model','started',0,0,'subscription_included') RETURNING id")
+        .bind(&fresh).fetch_one(pool).await.expect("fresh row");
+    sqlx::query("INSERT INTO public.llm_usage (ts,purpose,provider,model,attempt_state) VALUES ('test','social_editor','claude_subscription','model','legacy')")
+        .execute(pool).await.expect("non timestamp row");
+    let relay = SubscriptionRelay {
+        socket: std::path::PathBuf::from("/nonexistent/relay.sock"),
+        request_timeout_ms: 5_000,
+    };
+    configuration.provider.subscription_relay = Some(relay.clone());
+    let outcome =
+        super::subscription::attempt(pool, &context, &configuration, &request(), &relay).await;
+    assert!(matches!(
+        outcome,
+        Err(super::subscription::Outcome::Fallback("ledger"))
+    ));
+    let state: String =
+        sqlx::query_scalar("SELECT attempt_state FROM public.llm_usage WHERE id=$1")
+            .bind(open)
+            .fetch_one(pool)
+            .await
+            .expect("fresh row state");
+    assert_eq!(state, "started");
+}
+
+#[tokio::test]
+async fn subscription_limit_falls_back_to_the_api_path() {
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+    let (database, context) = consenting_database().await;
+    let pool = &database.pool;
+    let mut configuration = config();
+    configuration.provider.initial_total_cap_micro_usd = 2_000_000;
+    let mock = MockServer::start().await;
+    configuration.provider.endpoint = mock.uri();
+    let api_reply = json!({"model":configuration.provider.model,"stop_reason":"end_turn","content":[{"type":"text","text":"{\"title\":\"api\"}"}],"usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}});
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(api_reply))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let (_dir, socket, relay) =
+        fake_relay(json!({"ok":false,"kind":"limit","message":"usage_limit"})).await;
+    configuration.provider.subscription_relay = Some(SubscriptionRelay {
+        socket,
+        request_timeout_ms: 5_000,
+    });
+    let response = complete_with_fallback(pool, &context, &configuration, &request(), || {
+        Some("fake-key".into())
+    })
+    .await
+    .expect("api fallback response");
+    relay.await.expect("relay task");
+    assert_eq!(response.provider, "anthropic");
+    assert_eq!(response.content["title"], "api");
+    let failed = sqlx::query("SELECT attempt_state,error_code,reserved_micro_usd,cost_basis FROM public.llm_usage WHERE provider='claude_subscription'")
+        .fetch_one(pool).await.expect("failed subscription row");
+    assert_eq!(failed.get::<String, _>("attempt_state"), "failed");
+    assert_eq!(
+        failed.get::<Option<String>, _>("error_code").as_deref(),
+        Some("Subscription/limit")
+    );
+    assert_eq!(failed.get::<i64, _>("reserved_micro_usd"), 0);
+    assert_eq!(
+        failed.get::<String, _>("cost_basis"),
+        "subscription_included"
+    );
+    let api_state: String =
+        sqlx::query_scalar("SELECT attempt_state FROM public.llm_usage WHERE id=$1")
+            .bind(response.ledger_id)
+            .fetch_one(pool)
+            .await
+            .expect("api row");
+    assert_eq!(api_state, "succeeded");
+    assert_eq!(mock.received_requests().await.expect("requests").len(), 1);
+}
+
+#[tokio::test]
+async fn unreachable_relay_falls_back_to_the_api_path() {
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+    let (database, context) = consenting_database().await;
+    let pool = &database.pool;
+    let mut configuration = config();
+    configuration.provider.initial_total_cap_micro_usd = 2_000_000;
+    let mock = MockServer::start().await;
+    configuration.provider.endpoint = mock.uri();
+    let api_reply = json!({"model":configuration.provider.model,"stop_reason":"end_turn","content":[{"type":"text","text":"{\"title\":\"api\"}"}],"usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}});
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(api_reply))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let dir = tempfile::Builder::new()
+        .prefix("relay-")
+        .tempdir()
+        .expect("relay dir");
+    configuration.provider.subscription_relay = Some(SubscriptionRelay {
+        socket: dir.path().join("missing.sock"),
+        request_timeout_ms: 5_000,
+    });
+    let response = complete_with_fallback(pool, &context, &configuration, &request(), || {
+        Some("fake-key".into())
+    })
+    .await
+    .expect("api fallback response");
+    assert_eq!(response.provider, "anthropic");
+    let code: Option<String> = sqlx::query_scalar(
+        "SELECT error_code FROM public.llm_usage WHERE provider='claude_subscription'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("failed subscription row");
+    assert_eq!(code.as_deref(), Some("Subscription/unreachable"));
 }
