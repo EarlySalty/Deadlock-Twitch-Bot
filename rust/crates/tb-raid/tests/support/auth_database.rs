@@ -4,17 +4,19 @@ use sqlx::{
     PgPool,
 };
 use std::{
-    fs,
-    os::unix::fs::DirBuilderExt,
-    path::PathBuf,
-    process::{Child, Command, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    process::{Command, Stdio},
     time::{Duration, Instant},
 };
+mod postmaster {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-support/postmaster.rs"
+    ));
+}
 pub struct Database {
     pub pool: PgPool,
-    child: Child,
-    directory: PathBuf,
+    _postmaster: postmaster::Postmaster,
+    _directory: postmaster::RamDir,
 }
 impl Database {
     pub async fn new() -> Self {
@@ -23,19 +25,10 @@ impl Database {
         db
     }
     pub async fn empty() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let directory = PathBuf::from(format!(
-            "/tmp/uat-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&directory)
-            .unwrap();
+        let directory = postmaster::RamDir::new("tb-raid");
         let mut init = Command::new("/usr/lib/postgresql/16/bin/initdb")
             .args(["--auth=trust", "--username=auth_test", "--no-locale", "-D"])
-            .arg(directory.join("data"))
+            .arg(directory.path().join("data"))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -53,17 +46,14 @@ impl Database {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let child = Command::new("/usr/lib/postgresql/16/bin/postgres")
-            .arg("-D")
-            .arg(directory.join("data"))
-            .args(["-h", "", "-k"])
-            .arg(&directory)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        let postmaster = postmaster::Postmaster::start(
+            &directory.path().join("data"),
+            directory.path(),
+            &[],
+            None,
+        );
         let options = PgConnectOptions::new()
-            .host(directory.to_str().unwrap())
+            .host(directory.path().to_str().unwrap())
             .username("auth_test")
             .database("postgres");
         let pool = PgPoolOptions::new()
@@ -72,8 +62,8 @@ impl Database {
             .connect_lazy_with(options);
         let db = Self {
             pool,
-            child,
-            directory,
+            _postmaster: postmaster,
+            _directory: directory,
         };
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
@@ -112,16 +102,7 @@ impl Database {
         .await
         .unwrap();
     }
-    pub async fn close(mut self) {
+    pub async fn close(self) {
         self.pool.close().await;
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-impl Drop for Database {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = fs::remove_dir_all(&self.directory);
     }
 }

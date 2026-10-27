@@ -27,11 +27,12 @@ DB="sqlx_prepare"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODUS="${1:-}"
 
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
+cleanup() { docker rm -fv "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker run --rm -d \
   --name "$NAME" \
+  --tmpfs /var/lib/postgresql/data \
   -e POSTGRES_PASSWORD="$PASS" \
   -e POSTGRES_DB="$DB" \
   -p "127.0.0.1::5432" \

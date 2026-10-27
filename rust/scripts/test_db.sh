@@ -22,11 +22,11 @@ dsn_line() {
 
 case "${1:-}" in
   up)
-    docker rm -f "$NAME" >/dev/null 2>&1 || true
+    docker rm -fv "$NAME" >/dev/null 2>&1 || true
     # Port 0 = Docker sucht einen freien. Der frühere feste 5434 kollidierte mit
     # deadlock-central-postgres (Prod) — und die Tests fahren DROP SCHEMA CASCADE.
     docker run -d --rm --name "$NAME" -e POSTGRES_PASSWORD="$PASS" \
-      -p "127.0.0.1:0:5432" "$IMAGE" >/dev/null
+      --tmpfs /var/lib/postgresql/data -p "127.0.0.1:0:5432" "$IMAGE" >/dev/null
     echo -n "warte auf Postgres"
     # Das postgres-Image loggt "ready to accept connections" ZWEIMAL: zuerst fuer den
     # initdb-Temp-Server (nur Unix-Socket), dann fuer den echten TCP-Server. pg_isready
@@ -56,7 +56,7 @@ case "${1:-}" in
     dsn_line
     ;;
   down)
-    docker rm -f "$NAME" >/dev/null 2>&1 || true
+    docker rm -fv "$NAME" >/dev/null 2>&1 || true
     echo "Testcontainer entfernt."
     ;;
   *)
