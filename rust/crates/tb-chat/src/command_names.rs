@@ -102,7 +102,7 @@ pub fn effective_aliases(
     }
 }
 
-fn primary_names(entry: &CommandInfo, overrides: &BTreeMap<String, String>) -> Vec<String> {
+pub fn primary_names(entry: &CommandInfo, overrides: &BTreeMap<String, String>) -> Vec<String> {
     match valid_override(overrides, entry) {
         Some(custom) => vec![custom],
         None => std::iter::once(entry.name)

@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use tb_chat::catalog::catalog;
 use tb_chat::command_names::{
     conflicting_command, effective_aliases, effective_name, entry_by_key, extra_names, key,
-    normalize_custom_name, normalize_saved_name, CommandNameValidationError, ExtraNames,
-    MAX_EXTRA_NAMES,
+    normalize_custom_name, normalize_saved_name, primary_names, CommandNameValidationError,
+    ExtraNames, MAX_EXTRA_NAMES,
 };
 
 #[derive(Deserialize, Default)]
@@ -208,6 +208,9 @@ pub async fn post_handler(
         }
         overrides.remove(command_key);
     }
+    if let Some(taken) = own_extra_overlap(entry, &overrides, &extras) {
+        return conflict_error(&taken, entry);
+    }
 
     let result = if !user_id.is_empty() {
         sqlx::query(
@@ -287,6 +290,19 @@ async fn lock_names(
     }
 }
 
+fn own_extra_overlap(
+    entry: &tb_chat::catalog::CommandInfo,
+    overrides: &BTreeMap<String, String>,
+    extras: &ExtraNames,
+) -> Option<String> {
+    let primary = primary_names(entry, overrides);
+    extras
+        .get(key(entry))?
+        .iter()
+        .find(|name| primary.contains(name))
+        .cloned()
+}
+
 fn requested_aliases(raw: &[String]) -> Result<Vec<String>, Response> {
     let mut aliases: Vec<String> = Vec::new();
     for value in raw
@@ -359,6 +375,9 @@ pub async fn aliases_handler(
         extras.remove(command_key);
     } else {
         extras.insert(command_key.to_string(), aliases);
+    }
+    if let Some(taken) = own_extra_overlap(entry, &overrides, &extras) {
+        return conflict_error(&taken, entry);
     }
 
     let result = sqlx::query(
@@ -776,6 +795,25 @@ mod tests {
         )
         .await;
         assert_eq!(rename.status(), StatusCode::CONFLICT);
+
+        let (status, own) = save_aliases(pool, "clip", &["clip"]).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(own["conflict_command"], "clip");
+        let (status, _) = save_aliases(pool, "clip", &["moment"]).await;
+        assert_eq!(status, StatusCode::OK);
+        let rename_onto_extra = post_handler(
+            partner("42"),
+            State(pool.clone()),
+            Query(CommandNameQuery::default()),
+            Ok(Json(CommandNameUpdate {
+                command: "clip".into(),
+                name: Some("moment".into()),
+            })),
+        )
+        .await;
+        assert_eq!(rename_onto_extra.status(), StatusCode::CONFLICT);
+        let (status, _) = save_aliases(pool, "clip", &[]).await;
+        assert_eq!(status, StatusCode::OK);
 
         let (status, _) = save_aliases(pool, "clip", &["a1", "a2", "a3", "a4", "a5", "a6"]).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
