@@ -270,7 +270,7 @@ export function VerwaltungPage() {
 
   const chatTab = (
     <CommandNamesProvider>
-      <p className="text-xs text-text-secondary">{t("Namen ändern · speichert automatisch · nur Buchstaben und Zahlen")}</p>
+      <p className="text-xs text-text-secondary">{t("Namen ändern · mit + weitere Namen hinzufügen · speichert automatisch · nur Buchstaben und Zahlen")}</p>
       <SectionCard eyebrow={t("Chat-Interaktion & Clips")}>
         <GreetingSection />
         <FollowHintSection />

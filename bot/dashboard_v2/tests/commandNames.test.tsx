@@ -8,7 +8,10 @@ import {
   saveCommandName,
   validCommandNameInput,
   enqueueCommandNameSave,
+  applyNameSave,
+  applyAliasSave,
   type CommandNameSaveQueue,
+  type CommandNameSetting,
 } from '../src/api/commandNames';
 import { CommandNamesProvider, EditableCommandName } from '../src/components/verwaltung/CommandNameSection';
 
@@ -116,4 +119,13 @@ test('laufender Save und Rückkehr zum alten Namen werden in SQL-Reihenfolge ges
   assert.deepEqual(writes, ['abc', 'rank']);
   assert.equal(queue.savedName, 'rank');
   assert.equal(queue.queued, 0);
+});
+
+test('verspätete Umbenennungsantwort überschreibt gespeicherte Zusatznamen nicht', () => {
+  const row: CommandNameSetting = { command: 'clip', default_name: '!clip', default_aliases: [], custom_name: null, effective_name: '!clip', effective_aliases: [], custom_aliases: [], group: 'chat', group_label: 'Chat', summary: '' };
+  const afterAliases = applyAliasSave(row, { ok: true, command: 'clip', custom_aliases: ['!dc', '!discord'] });
+  const staleRename = { ok: true, command: 'clip', custom_name: '!moment', effective_name: '!moment', effective_aliases: [], custom_aliases: [] };
+  const result = applyNameSave(afterAliases, staleRename);
+  assert.equal(result.effective_name, '!moment');
+  assert.deepEqual(result.custom_aliases, ['!dc', '!discord']);
 });

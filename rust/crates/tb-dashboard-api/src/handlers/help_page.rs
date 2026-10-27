@@ -176,6 +176,7 @@ pub struct CommandsQuery {
 struct ChannelCommands {
     login: String,
     overrides: BTreeMap<String, String>,
+    extras: tb_chat::command_names::ExtraNames,
     flags: serde_json::Value,
 }
 
@@ -238,6 +239,8 @@ fn render_commands(query: &CommandsQuery, channel: Option<&ChannelCommands>) -> 
     let empty = BTreeMap::new();
     let active = channel.filter(|_| !standard);
     let overrides = active.map(|channel| &channel.overrides).unwrap_or(&empty);
+    let no_extras = tb_chat::command_names::ExtraNames::new();
+    let extras = active.map(|channel| &channel.extras).unwrap_or(&no_extras);
     for (group, commands) in tb_chat::catalog::grouped() {
         let commands: Vec<_> = commands
             .into_iter()
@@ -260,7 +263,14 @@ fn render_commands(query: &CommandsQuery, channel: Option<&ChannelCommands>) -> 
                 html_escape(&name),
                 html_escape(&summary)
             ));
-            let aliases = tb_chat::command_names::effective_aliases(command, overrides);
+            let aliases: Vec<String> =
+                tb_chat::command_names::effective_aliases(command, overrides)
+                    .iter()
+                    .map(|alias| alias.to_string())
+                    .chain(tb_chat::command_names::extra_names(
+                        command, overrides, extras,
+                    ))
+                    .collect();
             if !aliases.is_empty() {
                 body.push_str(&format!(
                     "<p class=\"aliases\">Auch möglich: {}</p>",
@@ -307,11 +317,11 @@ pub async fn commands_page(
             )
                 .into_response();
         }
-        let result = sqlx::query_as::<_, (Option<String>, sqlx::types::Json<BTreeMap<String, String>>, serde_json::Value)>(
-            "SELECT COALESCE(i.twitch_login, p.twitch_login), COALESCE(p.command_name_overrides, '{}'::jsonb), jsonb_build_object('stat', COALESCE(p.stat_command_settings, '{}'::jsonb), 'clip', COALESCE(p.clip_command_enabled, 1) <> 0, 'title', COALESCE(p.title_command_enabled, 1) <> 0, 'lurk', COALESCE(p.lurk_command_enabled, 1) <> 0) FROM twitch_streamer_identities i LEFT JOIN streamer_plans p ON p.twitch_user_id = i.twitch_user_id WHERE i.twitch_user_id = $1"
+        let result = sqlx::query_as::<_, (Option<String>, sqlx::types::Json<BTreeMap<String, String>>, sqlx::types::Json<tb_chat::command_names::ExtraNames>, serde_json::Value)>(
+            "SELECT COALESCE(i.twitch_login, p.twitch_login), COALESCE(p.command_name_overrides, '{}'::jsonb), COALESCE(p.command_name_aliases, '{}'::jsonb), jsonb_build_object('stat', COALESCE(p.stat_command_settings, '{}'::jsonb), 'clip', COALESCE(p.clip_command_enabled, 1) <> 0, 'title', COALESCE(p.title_command_enabled, 1) <> 0, 'lurk', COALESCE(p.lurk_command_enabled, 1) <> 0) FROM twitch_streamer_identities i LEFT JOIN streamer_plans p ON p.twitch_user_id = i.twitch_user_id WHERE i.twitch_user_id = $1"
         ).bind(id).fetch_optional(&pool).await;
         match result {
-            Ok(Some((login, overrides, flags))) => Some(ChannelCommands { login: login.filter(|login| !login.is_empty()).unwrap_or_else(|| "dieser Kanal".into()), overrides: overrides.0, flags }),
+            Ok(Some((login, overrides, extras, flags))) => Some(ChannelCommands { login: login.filter(|login| !login.is_empty()).unwrap_or_else(|| "dieser Kanal".into()), overrides: overrides.0, extras: extras.0, flags }),
             Ok(None) => return (StatusCode::NOT_FOUND, Html(page("Kanal unbekannt", "<p>Für diesen Kanal ist keine Befehlsliste verfügbar.</p><p><a href=\"/streamer/commands\">Standardbefehle ansehen</a></p>"))).into_response(),
             Err(error) => {
                 tracing::error!(%error, "Kanalbezogene Befehlsliste konnte nicht geladen werden");
@@ -349,6 +359,7 @@ mod tests {
                 ("rank".into(), "!rang".into()),
                 ("commands".into(), "!liste".into()),
             ]),
+            extras: BTreeMap::from([("discord".into(), vec!["!dc".into()])]),
             flags: serde_json::json!({"stat":{"wins":false},"clip":false}),
         };
         let query = CommandsQuery {
@@ -357,6 +368,7 @@ mod tests {
         };
         let html = render_commands(&query, Some(&channel));
         assert!(html.contains("<code>!community</code>"));
+        assert!(html.contains("Auch möglich: <code>!dc</code>"));
         assert!(!html.contains("<code>!dldc</code>"));
         assert!(!html.contains("<code>!dlde</code>"));
         assert!(html.contains("!rang me"));
@@ -391,7 +403,7 @@ mod tests {
     #[tokio::test]
     async fn registrierter_kanal_ohne_planzeile_bekommt_standardbefehle() {
         let database = crate::test_postgres::TestPostgres::start().await;
-        sqlx::raw_sql("CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT); CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, command_name_overrides JSONB, stat_command_settings JSONB, clip_command_enabled INTEGER, title_command_enabled INTEGER, lurk_command_enabled INTEGER); INSERT INTO twitch_streamer_identities VALUES ('42','nani'),('99','anders'); INSERT INTO streamer_plans VALUES ('99','anders','{\"discord\":\"!fremd\"}','{}',1,1,1)").execute(&database.pool).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT); CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, command_name_overrides JSONB, stat_command_settings JSONB, clip_command_enabled INTEGER, title_command_enabled INTEGER, lurk_command_enabled INTEGER, command_name_aliases JSONB); INSERT INTO twitch_streamer_identities VALUES ('42','nani'),('99','anders'); INSERT INTO streamer_plans VALUES ('99','anders','{\"discord\":\"!fremd\"}','{}',1,1,1)").execute(&database.pool).await.unwrap();
         let response = commands_page(
             Extension(database.pool.clone()),
             Query(CommandsQuery {

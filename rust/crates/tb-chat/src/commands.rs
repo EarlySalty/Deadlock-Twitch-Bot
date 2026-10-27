@@ -579,17 +579,25 @@ impl CommandEngine {
     async fn command_name_overrides(
         &self,
         broadcaster_id: &str,
-    ) -> Result<BTreeMap<String, String>, sqlx::Error> {
+    ) -> Result<(BTreeMap<String, String>, crate::command_names::ExtraNames), sqlx::Error> {
         if broadcaster_id.trim().is_empty() {
-            return Ok(BTreeMap::new());
+            return Ok(Default::default());
         }
-        let saved = sqlx::query_scalar::<_, DbJson<BTreeMap<String, String>>>(
-            "SELECT command_name_overrides FROM streamer_plans WHERE twitch_user_id = $1 LIMIT 1",
+        let saved = sqlx::query_as::<
+            _,
+            (
+                DbJson<BTreeMap<String, String>>,
+                DbJson<crate::command_names::ExtraNames>,
+            ),
+        >(
+            "SELECT command_name_overrides, command_name_aliases FROM streamer_plans WHERE twitch_user_id = $1 LIMIT 1",
         )
         .bind(broadcaster_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(saved.map(|value| value.0).unwrap_or_default())
+        Ok(saved
+            .map(|(overrides, extras)| (overrides.0, extras.0))
+            .unwrap_or_default())
     }
 
     /// Bekannte Automationsbots behalten ihren eingeschränkten Befehlszugang.
@@ -603,18 +611,18 @@ impl CommandEngine {
         if !typed.starts_with('!') {
             return false;
         }
-        let overrides = match self
+        let (overrides, extras) = match self
             .command_name_overrides(&event.broadcaster_user_id)
             .await
         {
-            Ok(overrides) => overrides,
+            Ok(names) => names,
             Err(error) => {
                 crate::command_names::warn_read_failure(&error);
                 return false;
             }
         };
-        let Some(command) =
-            crate::command_names::resolve_command(&typed, &overrides).map(|entry| entry.name)
+        let Some(command) = crate::command_names::resolve_command(&typed, &overrides, &extras)
+            .map(|entry| entry.name)
         else {
             return false;
         };
@@ -652,18 +660,18 @@ impl CommandEngine {
         if !invoked_command.starts_with('!') {
             return false;
         }
-        let overrides = match self
+        let (overrides, extras) = match self
             .command_name_overrides(&event.broadcaster_user_id)
             .await
         {
-            Ok(overrides) => overrides,
+            Ok(names) => names,
             Err(error) => {
                 crate::command_names::warn_read_failure(&error);
                 return true;
             }
         };
         let Some(command_info) =
-            crate::command_names::resolve_command(&invoked_command, &overrides)
+            crate::command_names::resolve_command(&invoked_command, &overrides, &extras)
         else {
             if invoked_command == "!dldc" {
                 if let Some(entry) = crate::command_names::entry_by_key("discord") {
@@ -3304,6 +3312,7 @@ mod tests {
                 title_command_enabled INTEGER DEFAULT 1,
                 stat_command_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
                 command_name_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
+                command_name_aliases JSONB NOT NULL DEFAULT '{}'::jsonb,
                 clip_command_enabled INTEGER DEFAULT 1,
                 clip_command_duration_seconds DOUBLE PRECISION,
                 promo_disabled INTEGER DEFAULT 0,

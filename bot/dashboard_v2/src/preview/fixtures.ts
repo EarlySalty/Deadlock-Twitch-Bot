@@ -944,6 +944,7 @@ const COMMAND_NAME_FIXTURES = [
   custom_name: null,
   effective_name: name,
   effective_aliases: [],
+  custom_aliases: command === 'clip' ? ['!moment'] : [],
   group,
   group_label: groupLabel,
   summary,
