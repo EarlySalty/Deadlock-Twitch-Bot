@@ -71,6 +71,16 @@ struct FollowersResponse {
     total: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct FollowerEntriesResponse {
+    data: Vec<serde_json::Value>,
+    total: u64,
+}
+
+fn follower_details_visible(probe: &FollowerEntriesResponse) -> bool {
+    probe.total == 0 || !probe.data.is_empty()
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FollowersTotalFetch {
     pub total: Option<i64>,
@@ -519,6 +529,59 @@ impl HelixClient {
         })
     }
 
+    pub async fn user_follows_channel(
+        &self,
+        broadcaster_id: &str,
+        user_id: &str,
+        moderator_token: &str,
+    ) -> Result<Option<bool>, HelixError> {
+        let broadcaster_id = broadcaster_id.trim();
+        let user_id = user_id.trim();
+        if broadcaster_id.is_empty() || user_id.is_empty() {
+            return Ok(None);
+        }
+        let Some(probe) = self
+            .follower_entries(
+                moderator_token,
+                &[("broadcaster_id", broadcaster_id), ("first", "1")],
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        if !follower_details_visible(&probe) {
+            tracing::debug!("follower details not visible to token");
+            return Ok(None);
+        }
+        let Some(body) = self
+            .follower_entries(
+                moderator_token,
+                &[("broadcaster_id", broadcaster_id), ("user_id", user_id)],
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(!body.data.is_empty()))
+    }
+
+    async fn follower_entries(
+        &self,
+        moderator_token: &str,
+        query: &[(&str, &str)],
+    ) -> Result<Option<FollowerEntriesResponse>, HelixError> {
+        let resp = self
+            .get_with_user_token("/channels/followers", moderator_token)
+            .query(query)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            tracing::debug!(status = %resp.status(), "follower lookup unavailable");
+            return Ok(None);
+        }
+        Ok(Some(resp.json().await?))
+    }
+
     /// Die jüngsten Archiv-VODs eines Kanals (`type=archive`) mit den Feldern,
     /// die der Highlight-Clipper braucht (id/created_at/duration). Best-effort:
     /// leerer Login oder non-200 → leere Liste.
@@ -928,6 +991,27 @@ pub fn normalize_ad_time(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn follower_totals_without_details_are_not_visible() {
+        use super::{follower_details_visible, FollowerEntriesResponse};
+        let parse = |v: serde_json::Value| -> FollowerEntriesResponse {
+            serde_json::from_value(v).expect("follower fixture")
+        };
+        assert!(!follower_details_visible(&parse(
+            serde_json::json!({"data": [], "total": 42, "pagination": {}})
+        )));
+        assert!(follower_details_visible(&parse(
+            serde_json::json!({"data": [{"user_id": "1"}], "total": 42})
+        )));
+        assert!(follower_details_visible(&parse(
+            serde_json::json!({"data": [], "total": 0})
+        )));
+        assert!(serde_json::from_value::<FollowerEntriesResponse>(
+            serde_json::json!({"total": 42})
+        )
+        .is_err());
+    }
+
     #[test]
     fn vod_abwesenheit_braucht_eindeutige_helix_antwort() {
         use super::video_verfuegbarkeit as pruefe;

@@ -62,6 +62,7 @@ pub mod engagement_settings;
 pub mod exp_analytics;
 pub mod feedback;
 pub mod follower_funnel;
+pub mod follow_hint_settings;
 pub mod forward_auth;
 pub mod greeting_settings;
 pub mod health_probe;

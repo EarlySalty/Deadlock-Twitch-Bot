@@ -19,6 +19,7 @@ import { TitleCommandSection } from '@/components/verwaltung/TitleCommandSection
 import { ClipCommandSection } from '@/components/verwaltung/ClipCommandSection';
 import { DisconnectBotSection } from '@/components/verwaltung/DisconnectBotSection';
 import { GreetingSection } from '@/components/verwaltung/GreetingSection';
+import { FollowHintSection } from '@/components/verwaltung/FollowHintSection';
 import { LurkCommandSection } from '@/components/verwaltung/LurkCommandSection';
 import { LurkerTaxSection } from '@/components/verwaltung/LurkerTaxSection';
 import { CommunityHinweiseSection } from '@/components/verwaltung/CommunityHinweiseSection';
@@ -272,6 +273,7 @@ export function VerwaltungPage() {
       <p className="text-xs text-text-secondary">{t("Namen ändern · mit + weitere Namen hinzufügen · speichert automatisch · nur Buchstaben und Zahlen")}</p>
       <SectionCard eyebrow={t("Chat-Interaktion & Clips")}>
         <GreetingSection />
+        <FollowHintSection />
         <LurkCommandSection />
         <TitleCommandSection />
         <ClipCommandSection />

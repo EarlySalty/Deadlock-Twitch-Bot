@@ -34,6 +34,7 @@ pub mod commands;
 pub mod conversation_scam;
 pub mod crew_guard;
 pub mod db_token_store;
+pub mod follow_hint;
 pub mod fun_responses;
 pub mod global_ban_sweep;
 pub mod global_chatter_ban;
@@ -84,6 +85,7 @@ pub use conversation_scam::{
     VerdictKind,
 };
 pub use crew_guard::{screen as crew_screen, CrewGuard, CrewSignal};
+pub use follow_hint::FollowHint;
 pub use fun_responses::FunResponses;
 pub use global_ban_sweep::{GlobalBanSweeper, PartnerRoster};
 pub use global_chatter_ban::GlobalChatterBanEnforcer;

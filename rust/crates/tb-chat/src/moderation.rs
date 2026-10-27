@@ -448,6 +448,18 @@ impl ChatApi for HelixChatClient {
             .map_err(|e| e.to_string())
     }
 
+    async fn user_follows(
+        &self,
+        broadcaster_id: &str,
+        user_id: &str,
+    ) -> Result<Option<bool>, String> {
+        let token = self.token_mgr.get_valid_token(false).await?;
+        self.helix
+            .user_follows_channel(broadcaster_id, user_id, &token)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     /// Bot-User-ID (sender_id / moderator_id für alle Helix-Aufrufe).
     async fn bot_user_id(&self) -> String {
         self.token_mgr.bot_user_id().await
