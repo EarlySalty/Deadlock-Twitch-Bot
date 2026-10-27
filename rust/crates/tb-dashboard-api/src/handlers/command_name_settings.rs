@@ -436,7 +436,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::raw_sql(include_str!(
-            "../../../../migrations/20261027150000_add_command_name_aliases.sql"
+            "../../../../migrations/20261027190000_add_command_name_aliases.sql"
         ))
         .execute(&database.pool)
         .await
