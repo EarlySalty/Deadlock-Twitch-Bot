@@ -5,10 +5,12 @@ mod config;
 pub mod fixture;
 mod read_side;
 mod schema;
+mod subscription;
 mod usage;
 
 pub use config::{
-    EditorConfig, Effort, Pricing, ProviderConfig, ProviderKind, SocialAiSection, TrustedPricing,
+    EditorConfig, Effort, Pricing, ProviderConfig, ProviderKind, SocialAiSection,
+    SubscriptionRelay, TrustedPricing,
 };
 pub use read_side::{consent_allowed, global_consent, job_usage, JobUsage};
 pub use usage::Usage;
@@ -121,12 +123,14 @@ pub struct EditorError {
     pub estimated_micro_usd: Option<i64>,
     pub reserved_micro_usd: Option<i64>,
     pub cost_basis: Option<&'static str>,
+    pub access: Option<ProviderAccess>,
 }
 
 impl EditorError {
     fn new(kind: ErrorKind) -> Self {
         Self {
             kind,
+            access: None,
             ledger_id: None,
             request_id: None,
             http_status: None,
@@ -212,7 +216,12 @@ pub struct EditorResponse {
     pub cost_basis: &'static str,
 }
 
-fn build_body(config: &ProviderConfig, request: &EditorRequest) -> Result<Value, EditorError> {
+pub fn check_schema(schema: &Value) -> Result<(), EditorError> {
+    schema::compile(schema)?;
+    schema::conformant_wire(schema).map(|_| ())
+}
+
+fn content_blocks(request: &EditorRequest) -> Vec<Value> {
     let mut blocks = Vec::with_capacity(request.frames.len() * 2 + 1);
     for frame in &request.frames {
         blocks.push(json!({"type":"text","text":format!("Frame bei {} ms", frame.timestamp_ms)}));
@@ -221,13 +230,19 @@ fn build_body(config: &ProviderConfig, request: &EditorRequest) -> Result<Value,
         }}));
     }
     blocks.push(json!({"type":"text","text":request.text}));
+    blocks
+}
+
+fn build_body(config: &ProviderConfig, request: &EditorRequest) -> Result<Value, EditorError> {
+    let blocks = content_blocks(request);
     let effort = serde_json::to_value(config.effort)
         .map_err(|_| EditorError::new(ErrorKind::Configuration))?;
+    let wire = schema::conformant_wire(&request.json_schema)?;
     Ok(json!({
         "model":config.model,
         "max_tokens":config.max_output_tokens,
         "thinking":{"type":"adaptive"},
-        "output_config":{"effort":effort,"format":{"type":"json_schema","schema":request.json_schema}},
+        "output_config":{"effort":effort,"format":{"type":"json_schema","schema":wire}},
         "system":request.system,
         "messages":[{"role":"user","content":blocks}]
     }))
@@ -325,13 +340,19 @@ async fn check_consent(pool: &PgPool, twitch_user_id: &str) -> Result<(), Editor
     check_consent_on(&mut connection, twitch_user_id).await
 }
 
+struct AttemptEntry {
+    provider: &'static str,
+    reservation: i64,
+    estimated: Option<i64>,
+    cost_basis: &'static str,
+    abandon_after_ms: Option<u64>,
+}
+
 async fn begin_attempt(
     pool: &PgPool,
     config: &ProviderConfig,
     context: &EditorContext,
 ) -> Result<ReservedAttempt, EditorError> {
-    let (project, service) =
-        crate::ledger::identity().ok_or_else(|| EditorError::new(ErrorKind::Ledger))?;
     let reservation = config
         .pricing
         .reservation(
@@ -339,6 +360,48 @@ async fn begin_attempt(
             u64::from(config.max_output_tokens),
         )
         .ok_or_else(|| EditorError::new(ErrorKind::Configuration))?;
+    let entry = AttemptEntry {
+        provider: PROVIDER,
+        reservation,
+        estimated: None,
+        cost_basis: "reserved_upper_bound",
+        abandon_after_ms: None,
+    };
+    begin_entry(pool, config, context, &entry).await
+}
+
+async fn close_abandoned_on(
+    tx: &mut Transaction<'_, Postgres>,
+    provider: &str,
+    after_ms: u64,
+) -> Result<(), EditorError> {
+    let closed = sqlx::query("UPDATE public.llm_usage SET success=0,attempt_state='failed',error_code='Subscription/abandoned',finished_at=now() WHERE purpose=$1 AND provider=$2 AND attempt_state='started' AND reserved_micro_usd=0 AND (CASE WHEN ts ~ '^\\d{4}-\\d{2}-\\d{2}T' THEN ts::timestamptz END) < now() - make_interval(secs => $3)")
+        .bind(PURPOSE)
+        .bind(provider)
+        .bind(after_ms as f64 / 1000.0)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| EditorError::new(ErrorKind::Ledger))?
+        .rows_affected();
+    if closed > 0 {
+        tracing::warn!(
+            provider,
+            closed,
+            "Closed abandoned zero-cost Social AI attempts"
+        );
+    }
+    Ok(())
+}
+
+async fn begin_entry(
+    pool: &PgPool,
+    config: &ProviderConfig,
+    context: &EditorContext,
+    entry: &AttemptEntry,
+) -> Result<ReservedAttempt, EditorError> {
+    let (project, service) =
+        crate::ledger::identity().ok_or_else(|| EditorError::new(ErrorKind::Ledger))?;
+    let reservation = entry.reservation;
     let mut tx: Transaction<'_, Postgres> = pool
         .begin()
         .await
@@ -349,8 +412,11 @@ async fn begin_attempt(
         .await
         .map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     check_consent_on(&mut tx, &context.twitch_user_id).await?;
+    if let Some(after_ms) = entry.abandon_after_ms {
+        close_abandoned_on(&mut tx, entry.provider, after_ms).await?;
+    }
     let started: Vec<i64> = sqlx::query_scalar("SELECT id FROM public.llm_usage WHERE purpose=$1 AND provider=$2 AND attempt_state='started'")
-        .bind(PURPOSE).bind(PROVIDER).fetch_all(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
+        .bind(PURPOSE).bind(entry.provider).fetch_all(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     let options = pool.connect_options();
     {
         let active = ACTIVE_ATTEMPTS
@@ -373,10 +439,11 @@ async fn begin_attempt(
         return Err(EditorError::new(ErrorKind::Budget));
     }
     admin_limits::admit_on(&mut tx, context, reservation).await?;
-    let id: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage (ts,source,purpose,model,tokens_in,tokens_out,total,success,project,service,provider,attempt_state,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,cost_basis) VALUES ($1,$2,$3,$4,NULL,NULL,NULL,0,$5,$6,$7,'started',$8,$9,$10,$11,'reserved_upper_bound') RETURNING id")
+    let id: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage (ts,source,purpose,model,tokens_in,tokens_out,total,success,project,service,provider,attempt_state,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ($1,$2,$3,$4,NULL,NULL,NULL,0,$5,$6,$7,'started',$8,$9,$10,$11,$12,$13) RETURNING id")
         .bind(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false))
-        .bind(crate::ledger::SOURCE).bind(PURPOSE).bind(&config.model).bind(project).bind(service).bind(PROVIDER)
+        .bind(crate::ledger::SOURCE).bind(PURPOSE).bind(&config.model).bind(project).bind(service).bind(entry.provider)
         .bind(&context.twitch_user_id).bind(&context.job_id).bind(&context.stage).bind(reservation)
+        .bind(entry.estimated).bind(entry.cost_basis)
         .fetch_one(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     let attempt = ReservedAttempt::register(id, options)?;
     tx.commit()
@@ -445,7 +512,13 @@ fn completion(id: i64, reserved: i64, outcome: AttemptOutcome<'_>) -> crate::led
         kind,
         provider_code,
     } = outcome;
-    let safe_estimated = estimated.filter(|_| usage.is_some());
+    let rejected =
+        kind == Some(ErrorKind::Provider) && rejected_unbilled(status, usage, provider_code);
+    let safe_estimated = if rejected {
+        Some(0)
+    } else {
+        estimated.filter(|_| usage.is_some())
+    };
     let tokens_in = usage
         .and_then(|u| u.input_tokens)
         .and_then(|n| i64::try_from(n).ok());
@@ -471,7 +544,9 @@ fn completion(id: i64, reserved: i64, outcome: AttemptOutcome<'_>) -> crate::led
         social_accounting: Some(crate::ledger::SocialAccounting {
             reserved_micro_usd: reserved,
             estimated_micro_usd: safe_estimated,
-            cost_basis: if safe_estimated.is_some_and(|cost| kind.is_none() || cost > reserved) {
+            cost_basis: if rejected {
+                crate::ledger::PROVIDER_REJECTED_UNBILLED
+            } else if safe_estimated.is_some_and(|cost| kind.is_none() || cost > reserved) {
                 "usage_priced_estimate"
             } else {
                 "reserved_upper_bound"
@@ -484,6 +559,30 @@ fn completion(id: i64, reserved: i64, outcome: AttemptOutcome<'_>) -> crate::led
                 .and_then(|u| u.cache_read_input_tokens)
                 .and_then(|n| i64::try_from(n).ok()),
         }),
+    }
+}
+
+fn rejected_unbilled(
+    status: Option<StatusCode>,
+    usage: Option<&Usage>,
+    provider_code: Option<&str>,
+) -> bool {
+    usage.is_none()
+        && status.is_some_and(|s| crate::ledger::is_rejected_client_status(i32::from(s.as_u16())))
+        && provider_code
+            .and_then(|code| code.split('/').next())
+            .is_some_and(|kind| {
+                !matches!(kind, "rate_limit_error" | "api_error" | "overloaded_error")
+            })
+}
+
+fn failure_cost(rejected: bool, exceeds_reservation: bool) -> &'static str {
+    if rejected {
+        crate::ledger::PROVIDER_REJECTED_UNBILLED
+    } else if exceeds_reservation {
+        "usage_priced_estimate"
+    } else {
+        "reserved_upper_bound"
     }
 }
 
@@ -543,14 +642,111 @@ fn provider_error_code(body: &[u8]) -> Option<String> {
     Some(format!("{kind}/{code}"))
 }
 
+const MAX_PROVIDER_MESSAGE_CHARS: usize = 300;
+
+fn provider_error_message(body: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let message = value.get("error")?.get("message")?.as_str()?;
+    let words = message
+        .split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            if word
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .starts_with("sk-")
+            {
+                "[redacted]"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let truncated = words
+        .chars()
+        .take(MAX_PROVIDER_MESSAGE_CHARS)
+        .collect::<String>();
+    (!truncated.is_empty()).then_some(truncated)
+}
+
+fn log_provider_rejection(
+    context: &EditorContext,
+    ledger_id: i64,
+    status: Option<StatusCode>,
+    request_id: Option<&str>,
+    provider_code: Option<&str>,
+    body: &[u8],
+) {
+    tracing::warn!(
+        stage = %context.stage,
+        ledger_id,
+        http_status = status.map(|s| s.as_u16()),
+        provider_error = provider_code.unwrap_or("unknown"),
+        request_id = request_id.unwrap_or("none"),
+        provider_message = provider_error_message(body).as_deref().unwrap_or("none"),
+        "Social AI provider rejected the request"
+    );
+}
+
+fn workspace_header(
+    workspace: Option<String>,
+) -> Result<Option<reqwest::header::HeaderValue>, EditorError> {
+    workspace
+        .map(|value| {
+            reqwest::header::HeaderValue::from_str(&value)
+                .map_err(|_| EditorError::new(ErrorKind::Configuration))
+        })
+        .transpose()
+}
+
 pub async fn complete(
     pool: &PgPool,
     context: &EditorContext,
     configuration: &EditorConfig,
     request: &EditorRequest,
 ) -> Result<EditorResponse, EditorError> {
-    let key =
-        crate::keys::anthropic_api_key().ok_or_else(|| EditorError::new(ErrorKind::Unavailable))?;
+    complete_with_fallback(
+        pool,
+        context,
+        configuration,
+        request,
+        crate::keys::anthropic_api_key,
+    )
+    .await
+}
+
+async fn complete_with_fallback(
+    pool: &PgPool,
+    context: &EditorContext,
+    configuration: &EditorConfig,
+    request: &EditorRequest,
+    key: impl FnOnce() -> Option<String>,
+) -> Result<EditorResponse, EditorError> {
+    let reason = match &configuration.provider.subscription_relay {
+        Some(relay) => {
+            match subscription::attempt(pool, context, configuration, request, relay).await {
+                Ok(response) => {
+                    tracing::info!(
+                        path = "subscription",
+                        stage = %context.stage,
+                        ledger_id = response.ledger_id,
+                        "Social AI request served"
+                    );
+                    return Ok(response);
+                }
+                Err(subscription::Outcome::Stop(error)) => return Err(error),
+                Err(subscription::Outcome::Fallback(reason)) => reason,
+            }
+        }
+        None => "not_configured",
+    };
+    tracing::info!(
+        path = "api_fallback",
+        reason,
+        stage = %context.stage,
+        "Social AI request routed to the API"
+    );
+    let key = key().ok_or_else(|| EditorError::new(ErrorKind::Unavailable))?;
     complete_with_key(pool, context, configuration, request, &key).await
 }
 
@@ -578,6 +774,7 @@ async fn complete_with_key(
         .timeout(Duration::from_millis(config.request_timeout_ms))
         .build()
         .map_err(|_| EditorError::new(ErrorKind::Configuration))?;
+    let workspace = workspace_header(crate::keys::anthropic_workspace_id())?;
     let endpoint = format!("{}/v1/messages", config.endpoint.trim_end_matches('/'));
     let deadline = Instant::now() + Duration::from_millis(config.total_deadline_ms);
     for attempt in 0..=config.max_retries {
@@ -613,10 +810,14 @@ async fn complete_with_key(
         }
         let start = Instant::now();
         let remaining = deadline.saturating_duration_since(start);
-        let sent = client
+        let mut builder = client
             .post(&endpoint)
             .header("x-api-key", key)
-            .header("anthropic-version", "2023-06-01")
+            .header("anthropic-version", "2023-06-01");
+        if let Some(workspace) = &workspace {
+            builder = builder.header("anthropic-workspace-id", workspace.clone());
+        }
+        let sent = builder
             .timeout(remaining.min(Duration::from_millis(config.request_timeout_ms)))
             .json(&body)
             .send()
@@ -652,7 +853,16 @@ async fn complete_with_key(
             Err(_) => (None, None, Vec::new(), Some(ErrorKind::Transport), true),
         };
         let provider_code = if kind == Some(ErrorKind::Provider) {
-            provider_error_code(&bytes)
+            let code = provider_error_code(&bytes);
+            log_provider_rejection(
+                context,
+                id,
+                status,
+                request_id.as_deref(),
+                code.as_deref(),
+                &bytes,
+            );
+            code
         } else {
             None
         };
@@ -676,6 +886,9 @@ async fn complete_with_key(
             Err(kind.unwrap_or(ErrorKind::Provider))
         };
         let error_kind = parsed.as_ref().err().copied();
+        let rejected = error_kind == Some(ErrorKind::Provider)
+            && rejected_unbilled(status, usage.as_ref(), provider_code.as_deref());
+        let failure_estimate = if rejected { Some(0) } else { estimated };
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let completed = completion(
             id,
@@ -698,13 +911,9 @@ async fn complete_with_key(
             err.provider_error_code = provider_code.map(String::into_boxed_str);
             err.usage = usage.map(Box::new);
             err.latency_ms = Some(u32::try_from(latency_ms).unwrap_or(u32::MAX));
-            err.estimated_micro_usd = estimated;
+            err.estimated_micro_usd = failure_estimate;
             err.reserved_micro_usd = Some(reservation);
-            err.cost_basis = Some(if exceeds_reservation {
-                "usage_priced_estimate"
-            } else {
-                "reserved_upper_bound"
-            });
+            err.cost_basis = Some(failure_cost(rejected, exceeds_reservation));
             return Err(err);
         }
         match parsed {
@@ -737,18 +946,136 @@ async fn complete_with_key(
                     provider_error_code: provider_code.map(String::into_boxed_str),
                     usage: usage.map(Box::new),
                     latency_ms: Some(u32::try_from(latency_ms).unwrap_or(u32::MAX)),
-                    estimated_micro_usd: estimated,
+                    estimated_micro_usd: failure_estimate,
                     reserved_micro_usd: Some(reservation),
-                    cost_basis: Some(if exceeds_reservation {
-                        "usage_priced_estimate"
-                    } else {
-                        "reserved_upper_bound"
-                    }),
+                    cost_basis: Some(failure_cost(rejected, exceeds_reservation)),
+                    access: status.and_then(|status| access_problem(status, &bytes)),
                 })
             }
         }
     }
     Err(EditorError::new(ErrorKind::Transport))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAccess {
+    Ready,
+    KeyMissing,
+    WorkspaceRequired,
+    WorkspaceInvalid,
+    KeyRejected,
+    Unreachable,
+}
+
+impl ProviderAccess {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::KeyMissing => "key_missing",
+            Self::WorkspaceRequired => "workspace_required",
+            Self::WorkspaceInvalid => "workspace_invalid",
+            Self::KeyRejected => "key_rejected",
+            Self::Unreachable => "unreachable",
+        }
+    }
+}
+
+fn access_problem(status: StatusCode, body: &[u8]) -> Option<ProviderAccess> {
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return Some(ProviderAccess::KeyRejected);
+    }
+    if status != StatusCode::BAD_REQUEST {
+        return None;
+    }
+    let message = serde_json::from_slice::<Value>(body).ok()?;
+    let message = message.get("error")?.get("message")?.as_str()?;
+    if message.contains("not scoped to a workspace") {
+        Some(ProviderAccess::WorkspaceRequired)
+    } else if message.contains("anthropic-workspace-id header must be") {
+        Some(ProviderAccess::WorkspaceInvalid)
+    } else {
+        None
+    }
+}
+
+const ACCESS_CACHE_TTL: Duration = Duration::from_secs(300);
+
+static ACCESS_CACHE: LazyLock<tokio::sync::Mutex<Option<CachedAccess>>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(None));
+
+#[derive(Clone, Copy)]
+struct CachedAccess {
+    at: Instant,
+    credentials: u64,
+    access: ProviderAccess,
+}
+
+fn credential_fingerprint(key: Option<&str>, workspace: Option<&str>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    workspace.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub async fn probe_access(configuration: &EditorConfig) -> ProviderAccess {
+    let key = crate::keys::anthropic_api_key();
+    let workspace = crate::keys::anthropic_workspace_id();
+    let credentials = credential_fingerprint(key.as_deref(), workspace.as_deref());
+    let mut cache = ACCESS_CACHE.lock().await;
+    if let Some(entry) = *cache {
+        if entry.credentials == credentials && entry.at.elapsed() < ACCESS_CACHE_TTL {
+            return entry.access;
+        }
+    }
+    let access = match key {
+        Some(key) => request_access(&configuration.provider, &key, workspace).await,
+        None => ProviderAccess::KeyMissing,
+    };
+    *cache = Some(CachedAccess {
+        at: Instant::now(),
+        credentials,
+        access,
+    });
+    access
+}
+
+async fn request_access(
+    config: &ProviderConfig,
+    key: &str,
+    workspace: Option<String>,
+) -> ProviderAccess {
+    let Ok(client) = Client::builder()
+        .no_proxy()
+        .redirect(Policy::none())
+        .timeout(Duration::from_millis(config.request_timeout_ms))
+        .build()
+    else {
+        return ProviderAccess::Unreachable;
+    };
+    let Ok(workspace) = workspace_header(workspace) else {
+        return ProviderAccess::WorkspaceInvalid;
+    };
+    let endpoint = format!(
+        "{}/v1/models?limit=1",
+        config.endpoint.trim_end_matches('/')
+    );
+    let mut builder = client
+        .get(&endpoint)
+        .header("x-api-key", key)
+        .header("anthropic-version", "2023-06-01");
+    if let Some(workspace) = workspace {
+        builder = builder.header("anthropic-workspace-id", workspace);
+    }
+    let Ok(reply) = builder.send().await else {
+        return ProviderAccess::Unreachable;
+    };
+    let status = reply.status();
+    if status.is_success() {
+        return ProviderAccess::Ready;
+    }
+    let body = reply.bytes().await.unwrap_or_default();
+    access_problem(status, &body).unwrap_or(ProviderAccess::Unreachable)
 }
 
 #[cfg(test)]

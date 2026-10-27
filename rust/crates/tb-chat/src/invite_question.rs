@@ -790,6 +790,25 @@ impl InviteQuestionResponder {
                 false,
             );
         }
+        if self.pending_confirmation_open(&channel_login, &chatter_login)
+            && is_affirmative(&self.answer_without_bot_mention(event).await)
+        {
+            let Some(invite_url) = self.resolve_invite_url(&channel_login).await else {
+                return InviteQuestionDecision::pending_silent(
+                    SilentReason::NoInviteUrl,
+                    channel_login,
+                    chatter_login,
+                    raw.to_string(),
+                );
+            };
+            return InviteQuestionDecision::pending_send_go(
+                channel_login,
+                chatter_login,
+                raw.to_string(),
+                invite_url,
+            );
+        }
+
         if raw.starts_with('!') {
             return InviteQuestionDecision::silent(
                 SilentReason::CommandPrefix,
@@ -808,23 +827,6 @@ impl InviteQuestionResponder {
                 raw.to_string(),
                 false,
                 false,
-            );
-        }
-
-        if self.pending_confirmation_open(&channel_login, &chatter_login) && is_affirmative(raw) {
-            let Some(invite_url) = self.resolve_invite_url(&channel_login).await else {
-                return InviteQuestionDecision::pending_silent(
-                    SilentReason::NoInviteUrl,
-                    channel_login,
-                    chatter_login,
-                    raw.to_string(),
-                );
-            };
-            return InviteQuestionDecision::pending_send_go(
-                channel_login,
-                chatter_login,
-                raw.to_string(),
-                invite_url,
             );
         }
 
@@ -1110,6 +1112,21 @@ impl InviteQuestionResponder {
         }
     }
 
+    async fn answer_without_bot_mention(&self, event: &ChatMessageEvent) -> String {
+        let raw = event.text().trim();
+        let Some(reply) = event.reply.as_ref() else {
+            return raw.to_string();
+        };
+        if reply.parent_user_id.is_empty() || reply.parent_user_id != self.api.bot_user_id().await {
+            return raw.to_string();
+        }
+        let mention = format!("@{}", reply.parent_user_login);
+        match raw.split_once(char::is_whitespace) {
+            Some((first, rest)) if first.eq_ignore_ascii_case(&mention) => rest.trim().to_string(),
+            _ => raw.to_string(),
+        }
+    }
+
     async fn resolve_invite_url(&self, channel_login: &str) -> Option<String> {
         match self.invite_url.invite_url(channel_login).await {
             Ok(Some(url)) if !url.trim().is_empty() => Some(url),
@@ -1181,19 +1198,31 @@ fn normalize_login(login: &str) -> String {
 }
 
 fn is_affirmative(raw: &str) -> bool {
-    let normalized: String = raw
+    let first_word = raw
         .trim()
-        .to_lowercase()
-        .chars()
-        .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace())
-        .collect();
-    let normalized = normalized.trim();
+        .trim_start_matches('!')
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    let word = first_word.trim_end_matches(|ch: char| !ch.is_alphanumeric());
     [
         "ja", "jo", "jop", "jap", "jup", "joa", "klar", "gerne", "bitte", "yes", "ye", "yep",
         "yeah", "sure",
     ]
     .iter()
-    .any(|token| normalized.starts_with(token))
+    .any(|token| is_stretched_token(word, token))
+}
+
+fn is_stretched_token(word: &str, token: &str) -> bool {
+    let Some(mut rest) = word.strip_prefix(token) else {
+        return false;
+    };
+    while let Some(next) = rest.strip_prefix(token) {
+        rest = next;
+    }
+    let last = token.chars().last();
+    rest.chars().all(|ch| Some(ch) == last)
 }
 
 #[cfg(test)]
@@ -2538,6 +2567,44 @@ mod tests {
             .maybe_respond(&event("viewer", "ja"), "streamer")
             .await;
         assert_eq!(api.messages(), vec![expected_confirm("viewer")]);
+
+        for (answer, from_bot_reply, expect_go) in [
+            ("@DeutscheDeadlockCommunity ja", true, true),
+            ("!ja", false, true),
+            ("Jaaa!", false, true),
+            ("jaja", false, true),
+            ("@freund ja", false, false),
+            ("!join", false, false),
+            ("jarvis ist cool", false, false),
+        ] {
+            let api = MockApi::new();
+            let invite = responder(
+                api.clone(),
+                Arc::new(FakeStore {
+                    rollup: rollup(1, false),
+                }),
+                FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Unsure, 0.0)]),
+            );
+            invite
+                .maybe_respond(
+                    &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
+                    "streamer",
+                )
+                .await;
+            let mut answer_event = event("viewer", answer);
+            if from_bot_reply {
+                answer_event.reply = Some(crate::types::ChatReply {
+                    parent_user_id: "bot-id".to_string(),
+                    parent_user_login: "deutschedeadlockcommunity".to_string(),
+                });
+            }
+            invite.maybe_respond(&answer_event, "streamer").await;
+            let mut expected = vec![expected_confirm("viewer")];
+            if expect_go {
+                expected.push(expected_go("viewer"));
+            }
+            assert_eq!(api.messages(), expected, "{answer}");
+        }
 
         let api = MockApi::new();
         let invite = responder(

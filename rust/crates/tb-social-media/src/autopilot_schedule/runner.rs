@@ -8,8 +8,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 
+mod text_mode;
+mod upload_mode;
+
 use crate::production_jobs::autopilot_schedule::{
-    plan_owner, recover_after_lease, retry_or_review, ScheduleError,
+    plan_owner, recover_after_lease, retry_or_fail, ScheduleError,
 };
 use crate::{
     ai_editor::{self, EditorRuntime, MediaInfo, MediaRuntime, ProductionContext, ResourceLimits},
@@ -43,6 +46,10 @@ pub enum RunnerError {
     Json(#[from] serde_json::Error),
     #[error("Der Clip konnte vorübergehend nicht heruntergeladen werden")]
     Download,
+    #[error("Das Video hat zu lange zum Rendern gebraucht.")]
+    RenderTimeout,
+    #[error("Das Video konnte nicht erstellt werden.")]
+    RenderFailed,
     #[error("Der ursprüngliche Clip oder die fertige Datei ist nicht verfügbar oder ungültig")]
     Source,
 }
@@ -174,7 +181,7 @@ impl AutopilotWorker {
         match job.mode.ok_or(RunnerError::Source)? {
             ProductionMode::Ai => self.produce_ai(lease, job).await,
             ProductionMode::Static => {
-                if let Err(error) = self.produce_static(lease, job).await {
+                if let Err(error) = self.produce_without_ai(lease, job).await {
                     tracing::warn!(error = %error, job_id = job.id, "Static Auto-Pilot production failed");
                     lease.ensure_held().await?;
                     let retryable = matches!(
@@ -188,17 +195,47 @@ impl AutopilotWorker {
                                 autopilot_settings::SettingsError::Database(_)
                             ))
                             | RunnerError::Download
+                            | RunnerError::RenderTimeout
+                            | RunnerError::RenderFailed
                             | RunnerError::Video(ProducedVideoError::Database(_))
                             | RunnerError::Video(ProducedVideoError::Settings(
                                 autopilot_settings::SettingsError::Database(_)
                             ))
                     );
-                    retry_or_review(&self.pool, job, "static_production_failed", retryable).await?;
+                    let detail = matches!(
+                        error,
+                        RunnerError::RenderTimeout | RunnerError::RenderFailed
+                    )
+                    .then(|| error.to_string());
+                    retry_or_fail(
+                        &self.pool,
+                        job,
+                        "static_production_failed",
+                        retryable,
+                        detail.as_deref(),
+                    )
+                    .await?;
                     if !retryable || job.attempts >= job.max_attempts {
                         self.fail_static_video(job).await?;
                     }
                 }
                 Ok(())
+            }
+        }
+    }
+
+    async fn produce_without_ai(
+        &self,
+        lease: &mut ProductionLease,
+        job: &ProductionJob,
+    ) -> Result<(), RunnerError> {
+        match self.static_route(job).await? {
+            upload_mode::StaticRoute::Legacy => self.produce_static(lease, job).await,
+            upload_mode::StaticRoute::Upload(policy) => {
+                self.produce_upload(lease, job, &policy).await
+            }
+            upload_mode::StaticRoute::Unavailable(reason) => {
+                self.hold_unavailable_mode(lease, job, reason).await
             }
         }
     }
@@ -213,19 +250,24 @@ impl AutopilotWorker {
                 &self.pool,
                 &job.twitch_user_id,
                 job.id,
-                JobCompletion::Review,
+                JobCompletion::Failed,
                 &["ai_editor_unavailable".into()],
-                Some("Der KI-Editor ist noch nicht verfügbar. Bitte prüfe den Auftrag."),
+                Some("Der KI-Editor ist gerade nicht verfügbar. Der Autopilot macht mit dem nächsten Clip weiter, Testläufe kannst du später erneut starten."),
             )
             .await?;
             return Ok(());
         };
+        let policy = job
+            .policy_snapshot
+            .clone()
+            .filter(|_| job.source == JobSource::Autopilot);
         let result = ai_editor::produce(
             ProductionContext {
                 pool: &self.pool,
                 runtime,
                 lease,
                 brain_token: self.config.brain_token.as_deref(),
+                downloader: Some(self.downloader.as_ref()),
             },
             job.clone(),
         )
@@ -233,6 +275,10 @@ impl AutopilotWorker {
         match result {
             Ok(outcome) => {
                 lease.ensure_held().await?;
+                if let Some(policy) = &policy {
+                    self.apply_ai_policy(job, policy, &outcome.produced_video_ids)
+                        .await?;
+                }
                 production_jobs::finish(
                     &self.pool,
                     &job.twitch_user_id,
@@ -244,22 +290,25 @@ impl AutopilotWorker {
                 .await?;
             }
             Err(error) => {
-                tracing::warn!(error = %error, job_id = job.id, "AI Auto-Pilot production held for review");
+                tracing::warn!(error = %error, job_id = job.id, "AI Auto-Pilot production finished with an error");
                 let current = production_jobs::get(&self.pool, &job.twitch_user_id, job.id)
                     .await?
                     .ok_or(RunnerError::Source)?;
                 if current.status == "running" {
                     lease.ensure_held().await?;
-                    let reason = if matches!(error, ai_editor::AiEditorError::Consent) {
-                        "external_ai_consent_required"
+                    let (completion, reason) = if matches!(error, ai_editor::AiEditorError::Consent)
+                    {
+                        (JobCompletion::Review, "external_ai_consent_required")
+                    } else if error.is_source_fetch_failure() {
+                        (JobCompletion::Failed, "ai_source_download_failed")
                     } else {
-                        "ai_production_failed"
+                        (JobCompletion::Failed, "ai_production_failed")
                     };
                     production_jobs::finish(
                         &self.pool,
                         &job.twitch_user_id,
                         job.id,
-                        JobCompletion::Review,
+                        completion,
                         &[reason.into()],
                         Some(&error.to_string()),
                     )
@@ -267,6 +316,30 @@ impl AutopilotWorker {
                 }
             }
         }
+        Ok(())
+    }
+
+    async fn apply_ai_policy(
+        &self,
+        job: &ProductionJob,
+        policy: &autopilot_settings::PipelinePolicy,
+        video_ids: &[i64],
+    ) -> Result<(), RunnerError> {
+        let veto = (policy.review_policy == autopilot_settings::ReviewPolicy::VetoUntilDeadline)
+            .then_some(job.scheduled_at)
+            .flatten();
+        sqlx::query(
+            "UPDATE social_produced_videos SET policy_snapshot = COALESCE(policy_snapshot, $4::text::jsonb),
+            metadata = metadata || jsonb_build_object('veto_deadline', $5::text::jsonb)
+            WHERE id = ANY($3) AND twitch_user_id = $2 AND job_id = $1",
+        )
+        .bind(job.id)
+        .bind(&job.twitch_user_id)
+        .bind(video_ids)
+        .bind(serde_json::to_string(policy)?)
+        .bind(serde_json::to_string(&veto)?)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -367,17 +440,32 @@ impl AutopilotWorker {
         let description: String = row.try_get("description")?;
         let hashtags: Vec<String> =
             serde_json::from_str(row.try_get::<String, _>("hashtags")?.as_str())?;
-        let settings = autopilot_settings::load(&self.pool, &job.twitch_user_id)
-            .await
-            .map_err(ScheduleError::from)?;
         let mut platforms = serde_json::Map::new();
-        for platform in settings.target_platforms {
+        for platform in self.publication_platforms(job).await? {
             platforms.insert(
                 platform,
                 json!({"title":title,"description":description,"hashtags":hashtags}),
             );
         }
         Ok(json!({"platforms":platforms,"production_mode":"static"}))
+    }
+
+    async fn publication_platforms(&self, job: &ProductionJob) -> Result<Vec<String>, RunnerError> {
+        let settings = autopilot_settings::load(&self.pool, &job.twitch_user_id)
+            .await
+            .map_err(ScheduleError::from)?;
+        let mut connection = self.pool.acquire().await?;
+        let reserved =
+            crate::production_jobs::autopilot_schedule::reservations_on(&mut connection, job.id)
+                .await?;
+        drop(connection);
+        Ok(settings
+            .target_platforms
+            .into_iter()
+            .filter(|platform| {
+                reserved.is_empty() || reserved.iter().any(|slot| &slot.platform == platform)
+            })
+            .collect())
     }
 
     async fn prepare_static(
@@ -407,8 +495,7 @@ impl AutopilotWorker {
             .join(format!("production-{}", job.id));
         tokio::fs::create_dir_all(&directory).await?;
         let root = self.config.output_root.canonicalize()?;
-        let directory = directory.canonicalize()?;
-        if !directory.starts_with(&root) {
+        if !directory.canonicalize()?.starts_with(&root) {
             return Err(RunnerError::Source);
         }
         let checkpoint = StaticCheckpoint {
@@ -506,7 +593,6 @@ impl AutopilotWorker {
         let expected = self
             .config
             .output_root
-            .canonicalize()?
             .join(&job.twitch_user_id)
             .join(format!("production-{}", job.id))
             .join(format!("version-{}.mp4", video.version_no));
@@ -629,7 +715,7 @@ impl AutopilotWorker {
         let settings = autopilot_settings::load(&self.pool, &job.twitch_user_id)
             .await
             .map_err(ScheduleError::from)?;
-        let needs_review = job.source == JobSource::Manual
+        let needs_review = job.source != JobSource::Autopilot
             || settings.publish_mode == autopilot_settings::PublishMode::Review;
         produced_video::complete_render(
             &self.pool,

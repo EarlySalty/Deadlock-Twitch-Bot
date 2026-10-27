@@ -1130,11 +1130,8 @@ mod tests {
             .all(|message| message.content.chars().count() <= MAX_HISTORY_CONTENT));
     }
 
-    #[test]
-    fn zeitbudget_bleibt_unter_zwei_minuten() {
-        assert!(MODEL_TIMEOUT_SEC < ANSWER_TIMEOUT_SEC);
-        assert!(ANSWER_TIMEOUT_SEC < 120);
-    }
+    const _: () = assert!(MODEL_TIMEOUT_SEC < ANSWER_TIMEOUT_SEC);
+    const _: () = assert!(ANSWER_TIMEOUT_SEC < 120);
 
     #[test]
     fn rate_limiter_blockt_nach_max() {

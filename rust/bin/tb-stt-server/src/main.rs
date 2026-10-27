@@ -342,6 +342,7 @@ async fn transcriptions(
 ) -> Result<Json<TranscriptionResponse>, ApiError> {
     let mut file: Option<Vec<u8>> = None;
     let mut response_format = "verbose_json".to_owned();
+    let mut prompt: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -368,6 +369,13 @@ async fn transcriptions(
                     .await
                     .map_err(|e| ApiError::BadRequest(format!("response_format unlesbar: {e}")))?;
             }
+            "prompt" => {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|e| ApiError::BadRequest(format!("prompt unlesbar: {e}")))?;
+                prompt = Some(initial_prompt(text)?).filter(|text| !text.is_empty());
+            }
             _ => {}
         }
     }
@@ -386,12 +394,24 @@ async fn transcriptions(
 
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        transcribe(&engine, &config, decoded, verbose)
+        transcribe(&engine, &config, decoded, verbose, prompt.as_deref())
     })
     .await
     .map_err(|e| ApiError::Internal(format!("STT-Worker abgebrochen: {e}")))??;
 
     Ok(Json(result))
+}
+
+const MAX_PROMPT_BYTES: usize = 1024;
+
+fn initial_prompt(text: String) -> Result<String, ApiError> {
+    let text = text.trim().to_owned();
+    if text.len() > MAX_PROMPT_BYTES || text.chars().any(char::is_control) {
+        return Err(ApiError::BadRequest(
+            "prompt ist zu lang oder ungültig".to_owned(),
+        ));
+    }
+    Ok(text)
 }
 
 fn decode_wav(raw: &[u8]) -> Result<DecodedAudio, ApiError> {
@@ -471,6 +491,7 @@ fn transcribe(
     config: &Config,
     audio: DecodedAudio,
     verbose: bool,
+    prompt: Option<&str>,
 ) -> Result<TranscriptionResponse, ApiError> {
     let started = Instant::now();
     let window = {
@@ -520,6 +541,9 @@ fn transcribe(
     params.set_suppress_nst(true);
     params.set_logprob_thold(config.avg_logprob_min);
     params.set_no_speech_thold(config.no_speech_max);
+    if let Some(prompt) = prompt {
+        params.set_initial_prompt(prompt);
+    }
 
     if let Some(language) = config.forced_language.as_deref() {
         params.set_language(Some(language));
@@ -763,6 +787,16 @@ async fn ensure_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_prompt_is_trimmed_and_bounded() {
+        assert_eq!(
+            initial_prompt("  Deutsch, Deadlock  ".to_owned()).ok(),
+            Some("Deutsch, Deadlock".to_owned())
+        );
+        assert!(initial_prompt("a\nb".to_owned()).is_err());
+        assert!(initial_prompt("x".repeat(MAX_PROMPT_BYTES + 1)).is_err());
+    }
 
     fn wav(samples: &[i16], sample_rate: u32, channels: u16) -> Vec<u8> {
         let spec = hound::WavSpec {

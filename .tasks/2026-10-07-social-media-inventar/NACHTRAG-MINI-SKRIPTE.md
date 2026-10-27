@@ -1,0 +1,1 @@
+[Orchestrator] Korrektur zur letzten Präzisierung: Kleine Timer-Skripte, die kurz laufen und kaum etwas tun, dürfen Python bleiben; sie bekommen kein "portieren". Pflicht zum Rust-Port gilt für Bots, Worker und dauerhaft laufende Dienste. Im Abschnitt "Nicht-Rust im Dauerbetrieb raus" Mini-Skripte als "darf bleiben" markieren.

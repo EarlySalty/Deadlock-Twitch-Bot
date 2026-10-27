@@ -777,7 +777,7 @@ fn internal_api_token() -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-fn worker_internal_base_url() -> String {
+pub(crate) fn worker_internal_base_url() -> String {
     let read = |key: &str| {
         std::env::var(key)
             .ok()

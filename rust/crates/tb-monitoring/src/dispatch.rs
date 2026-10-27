@@ -615,6 +615,7 @@ fn first_trimmed_value(values: &[Option<&Value>]) -> String {
         .unwrap_or_default()
 }
 
+#[derive(Clone)]
 pub struct EventSubDispatcher {
     guard: GuardStore,
     enqueuer: InboxEnqueuer,
@@ -622,12 +623,7 @@ pub struct EventSubDispatcher {
     streamer_logins: StreamerLoginStore,
     hooks: Arc<dyn EventSubHooks>,
     clock: ClockFn,
-    /// Notification-Dispatch-Schalter (Python `_notification_dispatch_active`).
-    /// Anders als Python (Default `False`, an im Bridge-Setup) startet der
-    /// native Receiver aktiv: er hat keinen separaten Bridge-Aktivierungs-
-    /// Schritt — der lauffähige An-Zustand ist „aktiv". Der Aus-Pfad bleibt für
-    /// geordnetes Pausieren/Herunterfahren erhalten.
-    dispatch_active: AtomicBool,
+    dispatch_active: Arc<AtomicBool>,
 }
 
 impl EventSubDispatcher {
@@ -646,7 +642,7 @@ impl EventSubDispatcher {
             streamer_logins,
             hooks,
             clock,
-            dispatch_active: AtomicBool::new(true),
+            dispatch_active: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -743,11 +739,43 @@ impl EventSubDispatcher {
             "EventSub: Notification angenommen"
         );
 
+        let owned_message_id = message_id.map(str::to_string);
+        let worker = tokio::spawn(self.clone().complete(
+            effective_type,
+            owned_message_id.clone(),
+            context,
+        ));
+        let supervisor_dispatcher = self.clone();
+        let supervisor = tokio::spawn(async move {
+            match worker.await {
+                Ok(result) => result,
+                Err(join_error) => {
+                    supervisor_dispatcher
+                        .release_message_guard(owned_message_id.as_deref())
+                        .await;
+                    Err(sqlx::Error::Protocol(format!(
+                        "eventsub dispatch task failed: {join_error}"
+                    )))
+                }
+            }
+        });
+        supervisor.await.unwrap_or_else(|join_error| {
+            Err(sqlx::Error::Protocol(format!(
+                "eventsub dispatch supervisor failed: {join_error}"
+            )))
+        })
+    }
+
+    async fn complete(
+        self,
+        effective_type: String,
+        message_id: Option<String>,
+        context: NotificationContext,
+    ) -> Result<DispatchOutcome, sqlx::Error> {
+        let message_id = message_id.as_deref();
         let result = self.route(&effective_type, message_id, &context).await;
         match result {
             Ok(outcome) => {
-                // Abschlusszeile je Event: ohne sie ist "kein Handler getroffen"
-                // von "Handler lief durch" nicht zu unterscheiden.
                 tracing::info!(
                     sub_type = %effective_type,
                     broadcaster = %context.broadcaster_login,
@@ -759,20 +787,22 @@ impl EventSubDispatcher {
                 Ok(outcome)
             }
             Err(error) => {
-                // Annahme fehlgeschlagen → Guard freigeben, Bridge retryt.
-                if let Some(message_id) = message_id {
-                    if let Err(release_error) =
-                        self.guard.release(GuardKind::MessageId, message_id).await
-                    {
-                        tracing::warn!(
-                            %release_error,
-                            message_id,
-                            "EventSub MessageId-Guard konnte nach Fehler nicht freigegeben werden"
-                        );
-                    }
-                }
+                self.release_message_guard(message_id).await;
                 Err(error)
             }
+        }
+    }
+
+    async fn release_message_guard(&self, message_id: Option<&str>) {
+        let Some(message_id) = message_id else {
+            return;
+        };
+        if let Err(release_error) = self.guard.release(GuardKind::MessageId, message_id).await {
+            tracing::warn!(
+                %release_error,
+                message_id,
+                "EventSub MessageId-Guard konnte nach Fehler nicht freigegeben werden"
+            );
         }
     }
 

@@ -198,6 +198,24 @@ impl SessionStore {
         .await
     }
 
+    pub async fn ended_at_of_stream(
+        &self,
+        login: &str,
+        stream_id: &str,
+    ) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
+        let ended: Option<String> = sqlx::query_scalar(
+            "SELECT to_char(ended_at::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') \
+             FROM twitch_stream_sessions \
+             WHERE lower(streamer_login) = lower($1) AND stream_id = $2 AND ended_at IS NOT NULL \
+             ORDER BY started_at::timestamptz DESC LIMIT 1",
+        )
+        .bind(login)
+        .bind(stream_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(ended.as_deref().and_then(crate::stream::parse_dt_utc))
+    }
+
     pub async fn stream_id_of(&self, session_id: i64) -> Result<Option<String>, sqlx::Error> {
         let row: Option<Option<String>> = sqlx::query_scalar!(
             "SELECT stream_id FROM twitch_stream_sessions WHERE id = $1",

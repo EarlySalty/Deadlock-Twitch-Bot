@@ -1,15 +1,3 @@
-//! Composition-Root für die OAuth-Callback-Followups — verdrahtet die
-//! `tb_raid::partner_setup`-Ports mit den echten Transporten:
-//!
-//! - **Discord** (Display-Name + Streamer-Rolle) → Master-Broker 8770
-//!   (`resolve-user` / `member/add-role`). Python machte beides in-process
-//!   über den lokalen Discord-Bot (`bot/discord_role_sync.py`).
-//! - **Moderator-Einsetzung** → Helix `POST /moderation/moderators` mit dem
-//!   Streamer-Token (`tb_transport_twitch::moderation`).
-//! - **Chat-Begrüßung** → Delegation an den Python-Chat-Prozess via
-//!   `POST /internal/twitch/v1/streamers/{login}/chat-action` auf dem
-//!   Legacy-Seitenport 8779 — bis zum Chat-Cutover (Welle B).
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,18 +11,9 @@ use tb_raid::partner_setup::{
 use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
 
-// ---------------------------------------------------------------------------
-// Discord via Master-Broker
-// ---------------------------------------------------------------------------
-
-/// Rollen-Sync + User-Auflösung über den Master-Broker.
-///
-/// Guild-Kandidaten wie Python `iter_role_guild_candidates`:
-/// `STREAMER_GUILD_ID` → `MAIN_GUILD_ID` → alle vom Broker gemeldeten Guilds.
 pub struct BrokerDiscordDirectory {
     relay: Option<BrokerRelay>,
-    guild_id: Option<u64>,
-    role_id: u64,
+    targets: crate::streamer_role_sync::Targets,
     pool: PgPool,
 }
 
@@ -46,8 +25,7 @@ impl BrokerDiscordDirectory {
     ) -> Self {
         Self {
             relay,
-            guild_id: Some(config.guild_id),
-            role_id: config.streamer_role_id,
+            targets: crate::streamer_role_sync::Targets::from_config(config),
             pool,
         }
     }
@@ -59,15 +37,7 @@ impl BrokerDiscordDirectory {
             .ok()
             .filter(|id| *id > 0)
             .ok_or("invalid_user_id")?;
-        let guild_id = self.guild_id.ok_or("no_guild")?;
-        crate::streamer_role_sync::reconcile(
-            &self.pool,
-            relay,
-            guild_id,
-            self.role_id,
-            Some(user_id),
-        )
-        .await
+        crate::streamer_role_sync::reconcile(&self.pool, relay, &self.targets, Some(user_id)).await
     }
 
     async fn revoke_streamer_role_detailed(
@@ -83,9 +53,7 @@ impl BrokerDiscordDirectory {
             Ok(None) => RoleRevokeOutcome::Skipped {
                 reason: "unknown_state".into(),
             },
-            Err(reason)
-                if matches!(reason.as_str(), "no_relay" | "invalid_user_id" | "no_guild") =>
-            {
+            Err(reason) if matches!(reason.as_str(), "no_relay" | "invalid_user_id") => {
                 RoleRevokeOutcome::Skipped { reason }
             }
             Err(detail) => RoleRevokeOutcome::Failed { detail },
@@ -137,10 +105,6 @@ impl tb_internal_api::DiscordRolePort for BrokerDiscordDirectory {
             .await
     }
 }
-
-// ---------------------------------------------------------------------------
-// Moderator via Helix
-// ---------------------------------------------------------------------------
 
 pub struct HelixModeratorInstaller {
     helix: HelixClient,
@@ -208,19 +172,12 @@ impl ModeratorInstallPort for HelixModeratorInstaller {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Chat-Begrüßung via Legacy-Python (Interim bis Chat-Cutover)
-// ---------------------------------------------------------------------------
-
 pub struct LegacyChatGreeter {
     client: reqwest::Client,
     base_url: String,
     token: String,
 }
 
-/// No-Op Greeter für Umgebungen ohne `TWITCH_INTERNAL_API_TOKEN`.
-/// Der Follow-up-Flow (Partner-Sync, Rollen, Mod-Setup) bleibt aktiv; nur
-/// Chat-Nachrichten werden nicht zugestellt.
 pub struct NoopChatGreeter;
 
 #[async_trait]
@@ -238,9 +195,6 @@ impl ChatGreeterPort for NoopChatGreeter {
 }
 
 impl LegacyChatGreeter {
-    /// `base_url` = `TB_INTERNAL_API_LEGACY_FALLBACK_URL` (Python-Seitenport
-    /// 8779), `token` = `TWITCH_INTERNAL_API_TOKEN` (gleicher Token wie die
-    /// interne API selbst).
     pub fn from_runtime() -> Option<Self> {
         let token = std::env::var("TWITCH_INTERNAL_API_TOKEN")
             .ok()
@@ -264,8 +218,6 @@ impl LegacyChatGreeter {
     }
 }
 
-/// Nativer Greeter (nach Chat-Cutover): sendet direkt über die tb-chat-API
-/// mit dem Bot-Token — der Python-Umweg über 8779 entfällt.
 pub struct NativeChatGreeter {
     api: Arc<dyn tb_chat::ChatApi>,
 }
@@ -343,10 +295,6 @@ impl ChatGreeterPort for LegacyChatGreeter {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Signup-Tag-Block via tb-analytics
-// ---------------------------------------------------------------------------
-
 struct AnalyticsSignupTagBlock {
     pool: PgPool,
 }
@@ -370,21 +318,12 @@ impl SignupTagEnforcePort for AnalyticsSignupTagBlock {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Builder
-// ---------------------------------------------------------------------------
-
-/// Baut den `PartnerSetupService` aus Env + Transporten.
-/// Der Service selbst wird selbst ohne Chat-Greeter erstellt; dann läuft die
-/// Folge-Logik mit einem No-Op-Greeter weiter.
 pub fn build_partner_setup_service(
     pool: PgPool,
     helix: HelixClient,
     relay: Option<BrokerRelay>,
     native_chat: Option<Arc<dyn tb_chat::ChatApi>>,
 ) -> Option<Arc<PartnerSetupService>> {
-    // Nach dem Chat-Cutover begrüßt der native Bot direkt; ohne aktiven
-    // Chat (TB_CHAT_ENABLED=0) bleibt der Legacy-Weg über Python 8779.
     let greeter: Arc<dyn ChatGreeterPort> = match native_chat {
         Some(api) => Arc::new(NativeChatGreeter::new(api)),
         None => LegacyChatGreeter::from_runtime()
@@ -425,10 +364,6 @@ pub fn build_partner_setup_service(
 mod tests {
     use super::*;
 
-    /// Der Rollen-Entzug lief live ins Leere, weil weder `STREAMER_GUILD_ID`
-    /// noch `MAIN_GUILD_ID` gesetzt war und der Broker-Fallback keine
-    /// `guild_id` liefert. Ohne Guild gibt es keinen Kandidaten — die
-    /// Konfiguration muss deshalb immer einen tragen.
     #[tokio::test]
     async fn from_config_hat_immer_eine_guild() {
         let directory = BrokerDiscordDirectory::from_config(
@@ -439,12 +374,11 @@ mod tests {
                 .unwrap(),
         );
         assert!(
-            directory.guild_id.is_some(),
+            directory.targets.guild_id != 0,
             "ohne Guild-Kandidat wird jeder Rollen-Entzug stumm übersprungen"
         );
     }
 
-    /// Ohne Relay ist der Entzug nicht „erledigt", sondern übersprungen.
     #[tokio::test]
     async fn ohne_relay_wird_der_entzug_als_uebersprungen_gemeldet() {
         let directory = BrokerDiscordDirectory::from_config(
@@ -465,8 +399,6 @@ mod tests {
         );
     }
 
-    /// Der Trait-Weg (internal-API) und der detaillierte Weg liefern denselben
-    /// Ausgang — der Handler darf nicht an einer zweiten Wahrheit hängen.
     #[tokio::test]
     async fn trait_weg_liefert_denselben_ausgang() {
         let directory = BrokerDiscordDirectory::from_config(

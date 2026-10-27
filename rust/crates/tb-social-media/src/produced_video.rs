@@ -4,6 +4,7 @@ use serde_json::Value;
 use sqlx::{PgPool, Row};
 
 use crate::autopilot_settings::{self, json_column, SettingsError};
+use crate::production_jobs::autopilot_schedule;
 pub use crate::production_jobs::ProductionMode;
 
 #[derive(Debug, thiserror::Error)]
@@ -68,6 +69,7 @@ pub struct ProducedVideo {
     pub needs_review: bool,
     pub review_reasons: Value,
     pub metadata: Value,
+    pub policy_snapshot: Option<autopilot_settings::PipelinePolicy>,
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub scheduled_at: Option<DateTime<Utc>>,
@@ -90,7 +92,7 @@ pub struct PublishingReservation {
 
 const SELECT: &str = "SELECT id, twitch_user_id, clip_id, job_id, mode, version_no, parent_version_id,
     variant_index, file_path, duration_ms, status, needs_review, review_reasons::text, metadata::text,
-    created_at, expires_at, scheduled_at FROM social_produced_videos";
+    created_at, expires_at, scheduled_at, NULLIF(to_jsonb(social_produced_videos)->'policy_snapshot', 'null'::jsonb)::text AS policy_snapshot FROM social_produced_videos";
 
 fn from_row(row: sqlx::postgres::PgRow) -> Result<ProducedVideo, ProducedVideoError> {
     let mode: String = row.try_get("mode")?;
@@ -109,6 +111,10 @@ fn from_row(row: sqlx::postgres::PgRow) -> Result<ProducedVideo, ProducedVideoEr
         needs_review: row.try_get("needs_review")?,
         review_reasons: json_column(&row, "review_reasons")?,
         metadata: json_column(&row, "metadata")?,
+        policy_snapshot: row
+            .try_get::<Option<String>, _>("policy_snapshot")?
+            .map(|raw| serde_json::from_str(&raw))
+            .transpose()?,
         created_at: row.try_get("created_at")?,
         expires_at: row.try_get("expires_at")?,
         scheduled_at: row.try_get("scheduled_at")?,
@@ -499,7 +505,9 @@ async fn enqueue(
         .await?;
     ensure_ready(&video, now).await?;
     let settings = autopilot_settings::load_on(&mut tx, &video.twitch_user_id).await?;
-    let automatic = settings.publish_mode == autopilot_settings::PublishMode::FullAuto;
+    let automatic = crate::autopilot_publish::review_mode_on(&mut tx, &video.twitch_user_id)
+        .await?
+        != crate::autopilot_publish::ReviewMode::Review;
     for platform in &selected {
         let approved: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_media_clip_approval WHERE produced_video_id = $1 AND platform = $2 AND state = 'approved' AND (approver_user_id = $3 OR ($4 AND approver_user_id = 'autopilot')))")
             .bind(id).bind(platform).bind(&video.twitch_user_id).bind(automatic).fetch_one(&mut *tx).await?;
@@ -507,18 +515,7 @@ async fn enqueue(
             return Err(ProducedVideoError::ApprovalRequired);
         }
     }
-    let scheduled_at = match video.scheduled_at {
-        Some(slot) => slot,
-        None => {
-            let taken = crate::production_jobs::autopilot_schedule::taken_on(
-                &mut tx,
-                &video.twitch_user_id,
-            )
-            .await?;
-            autopilot_settings::next_shared_slot(now, &taken, &settings)?
-                .ok_or(ProducedVideoError::NoSlot)?
-        }
-    };
+    let allocation = place_on(&mut tx, &video, &settings, now, &selected).await?;
     let mut queue_ids = Vec::new();
     for platform in selected {
         let existing: Option<i64> = sqlx::query_scalar("SELECT id::bigint FROM twitch_clips_upload_queue WHERE produced_video_id = $1 AND platform = $2 FOR UPDATE")
@@ -526,6 +523,7 @@ async fn enqueue(
         let queue_id = match existing {
             Some(queue_id) => queue_id,
             None => {
+                let scheduled_at = allocation.at(&platform);
                 if scheduled_at <= now {
                     return Err(ProducedVideoError::State);
                 }
@@ -539,17 +537,66 @@ async fn enqueue(
         };
         queue_ids.push((platform, queue_id));
     }
-    sqlx::query(
-        "UPDATE social_produced_videos SET status = 'scheduled', scheduled_at = $2 WHERE id = $1",
-    )
-    .bind(id)
-    .bind(scheduled_at)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE social_produced_videos SET status = 'scheduled' WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(PublishingReservation {
         produced_video_id: id,
-        scheduled_at,
+        scheduled_at: allocation.reference,
         queue_ids,
     })
+}
+
+async fn place_on(
+    tx: &mut sqlx::PgConnection,
+    video: &ProducedVideo,
+    settings: &autopilot_settings::AutopilotSettings,
+    now: DateTime<Utc>,
+    selected: &[String],
+) -> Result<autopilot_schedule::Allocation, ProducedVideoError> {
+    let reserved: Vec<autopilot_schedule::Reservation> =
+        autopilot_schedule::video_destinations_on(tx, video.id)
+            .await?
+            .into_iter()
+            .filter(|slot| slot.scheduled_at > now)
+            .collect();
+    let kept = match (reserved.is_empty(), video.scheduled_at) {
+        (true, Some(slot)) => selected
+            .iter()
+            .map(|platform| autopilot_schedule::Reservation {
+                platform: platform.clone(),
+                scheduled_at: slot,
+            })
+            .collect(),
+        _ => reserved,
+    };
+    let subject = autopilot_schedule::Subject {
+        job: video.job_id,
+        video: Some(video.id),
+    };
+    let mut allocator =
+        autopilot_schedule::Allocator::load_for(tx, &video.twitch_user_id, settings, subject)
+            .await
+            .map_err(schedule_error)?;
+    let allocation = allocator
+        .place_committed(now, &kept, selected)
+        .map_err(schedule_error)?
+        .ok_or(ProducedVideoError::NoSlot)?;
+    autopilot_schedule::place_video_on(tx, &video.twitch_user_id, video.id, &allocation)
+        .await
+        .map_err(schedule_error)?;
+    Ok(allocation)
+}
+
+fn schedule_error(error: autopilot_schedule::ScheduleError) -> ProducedVideoError {
+    use autopilot_schedule::ScheduleError;
+    match error {
+        ScheduleError::Database(error) => ProducedVideoError::Database(error),
+        ScheduleError::Settings(error) => ProducedVideoError::Settings(error),
+        ScheduleError::Json(error) => ProducedVideoError::Json(error),
+        ScheduleError::NotFound => ProducedVideoError::NotFound,
+        _ => ProducedVideoError::Invalid,
+    }
 }

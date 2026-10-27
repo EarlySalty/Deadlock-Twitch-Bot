@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{EditorError, ErrorKind};
 
-const APPROVED_INITIAL_CAP_MICRO_USD: i64 = 2_000_000;
+const APPROVED_INITIAL_CAP_MICRO_USD: i64 = 20_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +34,23 @@ pub struct ProviderConfig {
     pub initial_total_cap_micro_usd: i64,
     pub pricing_version: u32,
     pub pricing: Pricing,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription_relay: Option<SubscriptionRelay>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionRelay {
+    pub socket: std::path::PathBuf,
+    pub request_timeout_ms: u64,
+}
+
+impl SubscriptionRelay {
+    fn valid(&self) -> bool {
+        self.socket.is_absolute()
+            && self.socket.as_os_str().len() < 108
+            && (1_000..=600_000).contains(&self.request_timeout_ms)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -166,6 +183,10 @@ impl ProviderConfig {
             || self.retry_backoff_ms > 3_000
             || !(1..=APPROVED_INITIAL_CAP_MICRO_USD).contains(&self.initial_total_cap_micro_usd)
             || !self.pricing.valid()
+            || self
+                .subscription_relay
+                .as_ref()
+                .is_some_and(|relay| !relay.valid())
         {
             return Err(EditorError::new(ErrorKind::Configuration));
         }

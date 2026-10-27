@@ -14,6 +14,8 @@ pub mod process_info;
 /// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
 pub mod proxy;
 pub mod query_int;
+#[path = "handlers/social_media_ai_admin_observers.rs"]
+mod social_media_ai_admin_observers;
 #[path = "handlers/social_media_ai_admin_skills.rs"]
 mod social_media_ai_admin_skills;
 #[path = "handlers/social_media_ai_admin_usage.rs"]
@@ -154,6 +156,10 @@ pub fn build_public_router_with_brain(
             "/twitch/api/v2/public/caster-overlay",
             get(crate::handlers::caster_overlay::public_handler),
         )
+        .route(
+            "/twitch/api/v2/public/dono-goal",
+            get(crate::handlers::dono_goal::public_api_handler),
+        )
         // Roadmap (public GET + admin CRUD) liegt im eigenen build_roadmap_router,
         // damit der Admin-Write den ExpectedToken-Extractor sieht (axum erlaubt
         // denselben Pfad nicht in zwei gemergten Routern).
@@ -178,12 +184,36 @@ pub fn build_public_router_with_brain(
         )
         .route("/twitch/overlay", get(overlay::overlay_html_handler))
         .route(
+            "/twitch/dono-goal",
+            get(crate::handlers::dono_goal::html_handler),
+        )
+        .route(
             "/twitch/caster-overlay",
             get(crate::handlers::caster_overlay::html_handler),
         )
         .route(
+            "/twitch/caster-overlay/scoreboard",
+            get(crate::handlers::caster_overlay::scoreboard_handler),
+        )
+        .route(
+            "/twitch/caster-overlay/versus",
+            get(crate::handlers::caster_overlay::versus_handler),
+        )
+        .route(
+            "/twitch/caster-overlay/countdown",
+            get(crate::handlers::caster_overlay::countdown_handler),
+        )
+        .route(
             "/twitch/caster-overlay/background.png",
             get(crate::handlers::caster_overlay::background_handler),
+        )
+        .route(
+            "/twitch/caster-overlay/assets/{asset_id}",
+            get(crate::handlers::caster_overlay_assets::public_handler),
+        )
+        .route(
+            "/twitch/caster-overlay/builtin/{name}",
+            get(crate::handlers::caster_overlay_assets::builtin_handler),
         )
         .route(
             "/twitch/caster-camera/{camera_id}",
@@ -248,12 +278,12 @@ fn build_authed_router_with_analysis_store(
         audience_demographics, auth_status, billing, category_activity, category_comparison,
         category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
         chat_deep_llm, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
-        command_name_settings, dashboard_assistent, engagement_mode, engagement_settings,
-        exp_analytics, feedback, follower_funnel, greeting_settings, internal_home, leaderboard,
-        loyalty_curve, lurk_command_settings, lurker_analysis, lurker_tax_settings,
-        moderation_settings, monetization, onboarding, overview, performance, plattform_connect,
-        raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
-        scam_guard_settings, session_detail, silent_settings, social_media, spa,
+        command_name_settings, community_hints, dashboard_assistent, engagement_mode,
+        engagement_settings, exp_analytics, feedback, follower_funnel, greeting_settings,
+        internal_home, leaderboard, loyalty_curve, lurk_command_settings, lurker_analysis,
+        lurker_tax_settings, moderation_settings, monetization, onboarding, overview, performance,
+        plattform_connect, raid_analytics, raid_history, rankings, retention_curve,
+        scam_guard_queue, scam_guard_settings, session_detail, silent_settings, social_media, spa,
         stat_command_settings, stream_report, streamer_disconnect, streamers,
         sub_reminder_settings, tag_analysis, tip_settings, title, title_command_settings,
         title_performance, uplink, viewer_timeline, viewers, watch_time,
@@ -268,6 +298,7 @@ fn build_authed_router_with_analysis_store(
     let ai_runtime = handlers::social_media_ai::AiRuntime::packaged();
     let social_routes = Router::new()
         .merge(handlers::social_media_ai::routes(ai_runtime.clone()))
+        .merge(handlers::social_media_recording::partner_routes())
         .route("/social-media/api/stats", get(social_media::stats_handler))
         .route("/social-media/api/clips", get(social_media::clips_handler))
         .route(
@@ -284,6 +315,18 @@ fn build_authed_router_with_analysis_store(
         .route(
             "/social-media/api/access/me",
             get(social_media::my_access_handler),
+        )
+        .route(
+            "/social-media/api/access/request",
+            post(social_media::access_request_post_handler),
+        )
+        .route(
+            "/social-media/api/access/requests",
+            get(social_media::access_requests_get_handler),
+        )
+        .route(
+            "/social-media/api/access/requests/{twitch_user_id}",
+            delete(social_media::access_request_delete_handler),
         )
         // Analytics-Ansicht (identisch zu stats) + Queue-Upload.
         .route(
@@ -397,13 +440,34 @@ fn build_authed_router_with_analysis_store(
             post(social_media::autopilot_queue_resolve_handler),
         )
         .route(
+            "/social-media/api/autopilot/test-run",
+            post(social_media::autopilot_test_run_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/test-run/{job_id}/discard",
+            post(social_media::autopilot_test_run_discard_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/test-run/{job_id}/retry",
+            post(social_media::autopilot_test_run_retry_handler),
+        )
+        .route(
             "/social-media/api/autopilot/pool",
             get(social_media::autopilot::pool_handler),
+        )
+        .route(
+            "/social-media/api/pipeline/sources",
+            get(handlers::social_media_pipeline::sources_handler),
         )
         .route(
             "/social-media/api/autopilot/preferences",
             get(social_media::autopilot::preferences_get_handler)
                 .put(social_media::autopilot::preferences_put_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/policy",
+            get(social_media::autopilot::pipeline_policy_get_handler)
+                .put(social_media::autopilot::pipeline_policy_put_handler),
         )
         .route(
             "/social-media/api/autopilot/imports",
@@ -598,6 +662,10 @@ fn build_authed_router_with_analysis_store(
             "/twitch/api/v2/streamer/silent-settings",
             get(silent_settings::get_handler).post(silent_settings::post_handler),
         )
+        .route(
+            "/twitch/api/v2/streamer/community-hints",
+            get(community_hints::get_handler).post(community_hints::post_handler),
+        )
         // Streamer-Selbstbedienung: Go-Live-Tipp-Opt-out. Partner setzen nur
         // die eigene `twitch_tip_settings`-Zeile über ihre Session-User-ID.
         .route(
@@ -708,6 +776,23 @@ fn build_authed_router_with_analysis_store(
         .route(
             "/twitch/api/v2/streamer/greeting-settings",
             get(greeting_settings::get_handler).post(greeting_settings::post_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/follow-hint-settings",
+            get(handlers::follow_hint_settings::get_handler)
+                .post(handlers::follow_hint_settings::post_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/dono-goal",
+            get(handlers::dono_goal::get_handler).post(handlers::dono_goal::post_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/dono-goal/reset",
+            post(handlers::dono_goal::reset_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/dono-goal/test",
+            post(handlers::dono_goal::test_handler),
         )
         // Streamer-Selbstbedienung: Bot bewusst vom eigenen Kanal trennen.
         // Gleiche Kette wie die Admin-Route, Login kommt aber aus der Session.
@@ -1257,6 +1342,8 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
     Router::new()
         .merge(social_media_ai_admin_usage::routes())
         .merge(social_media_ai_admin_skills::routes())
+        .merge(social_media_ai_admin_observers::routes())
+        .merge(handlers::social_media_recording::admin_routes())
         .route(
             "/twitch/api/admin/config/overview",
             get(admin_config::config_overview_handler),
@@ -1366,6 +1453,18 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/admin/caster-overlay/context",
             get(crate::handlers::caster_overlay::context_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-overlay/assets",
+            post(crate::handlers::caster_overlay_assets::upload_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    crate::handlers::caster_overlay_assets::UPLOAD_BODY_LIMIT,
+                ))
+                .get(crate::handlers::caster_overlay_assets::list_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-overlay/assets/{asset_id}",
+            delete(crate::handlers::caster_overlay_assets::delete_handler),
         )
         .route(
             "/twitch/api/admin/caster-cameras",
@@ -2296,6 +2395,7 @@ pub fn build_router_with_analysis_writer(
     // DB-Fehlern ist der Limiter fail-open (siehe RateLimiter::allow).
     let fernet_key = DashboardAuthState::fernet_key_from_env().unwrap_or_default();
     let uplink_refresh_pool = pool.clone();
+    handlers::social_media_recording::spawn_retention(pool.clone());
     let rate_limiter = RateLimiter::new(pool.clone(), fernet_key);
     let challenge_settings = tb_config::runtime::settings().ok();
     let central_pool = challenge_settings.as_ref().and_then(|settings| {

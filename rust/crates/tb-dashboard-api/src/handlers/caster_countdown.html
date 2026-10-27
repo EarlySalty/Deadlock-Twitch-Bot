@@ -1,0 +1,23 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Countdown · Deutsche Deadlock Community</title><style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;font-family:"Segoe UI",Roboto,Arial,sans-serif}
+.stage{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:top left}
+.brand{position:absolute;left:50%;top:50%;width:560px;height:260px;transform:translate(-50%,-50%);object-fit:contain;filter:drop-shadow(0 10px 28px rgba(0,0,0,.45))}
+.brand[hidden]{display:none}
+.box{position:absolute;right:52px;bottom:40px;min-width:206px;display:flex;flex-direction:column;align-items:stretch;box-shadow:0 10px 26px rgba(0,0,0,.35)}
+.title{padding:12px 16px;background:#141418;color:#fff;font-weight:800;font-size:19px;letter-spacing:.4px;text-transform:uppercase;white-space:nowrap;text-align:center}
+.timer{padding:10px 16px 12px;background:rgba(14,14,18,.72);border-top:3px solid #E0A955;color:#fff;font-weight:800;font-size:56px;line-height:1;text-align:center;font-variant-numeric:tabular-nums;letter-spacing:2px}
+</style></head><body><main class="stage" id="stage"><img class="brand" id="brand" alt="" src="/twitch/caster-overlay/builtin/dachlock.png"><section class="box"><div class="title" id="title">STREAM STARTET IN</div><div class="timer" id="timer">00:00</div></section></main><script>
+'use strict';
+const stage=document.getElementById('stage');
+function resize(){stage.style.transform=`scale(${Math.min(innerWidth/1920,innerHeight/1080)})`;}addEventListener('resize',resize);resize();
+function setImage(img,url){const safe=typeof url==='string'&&url.startsWith('/twitch/caster-overlay/')?url:'';if(!safe){img.hidden=true;img.removeAttribute('src');return;}if(img.getAttribute('src')!==safe)img.src=safe;img.hidden=false;}
+let target=null;
+function pad(value){return String(value).padStart(2,'0');}
+function remaining(){if(target===null)return 0;return Math.max(0,Math.ceil((target-Date.now())/1000));}
+function tick(){const left=remaining();document.getElementById('timer').textContent=`${pad(Math.floor(left/60))}:${pad(left%60)}`;}
+function parseTarget(value){if(typeof value!=='string')return null;const time=Date.parse(value);return Number.isFinite(time)?time:null;}
+function render(payload){const title=typeof payload?.countdown?.title==='string'?payload.countdown.title.trim().slice(0,60):'';document.getElementById('title').textContent=title||'STREAM STARTET IN';target=parseTarget(payload?.countdown?.target);const brand=document.getElementById('brand');if(typeof payload?.event?.brandUrl==='string')setImage(brand,payload.event.brandUrl);brand.hidden=payload?.event?.showBrand===false;tick();}
+setInterval(tick,250);tick();
+const preview=new URLSearchParams(location.search).get('preview')==='1'&&parent!==window;if(preview){addEventListener('message',event=>{if(event.source!==parent||event.origin!=='https://admin.deutsche-deadlock-community.de'||event.data?.type!=='ddc-caster-preview')return;render(event.data);});}
+let reportedFailure=false;async function refresh(){try{const response=await fetch('/twitch/api/v2/public/caster-overlay',{cache:'no-store',credentials:'omit'});if(!response.ok)throw new Error('HTTP '+response.status);render(await response.json());reportedFailure=false;}catch(error){if(!reportedFailure){console.warn('Countdown: Aktualisierung fehlgeschlagen; letzte Anzeige bleibt erhalten.',error);reportedFailure=true;}}finally{if(!preview)setTimeout(refresh,5000);}}if(!preview)refresh();
+</script></body></html>

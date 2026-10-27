@@ -5,4 +5,8 @@ ignore = [
   # bauen sqlx nur mit dem postgres-Feature, mysql wird nie kompiliert.
   # Upstream gibt es keine feste Version.
   "RUSTSEC-2023-0071",
+  # webpki-roots 0.26.11 (emSign-Wurzel). Kommt ueber sqlx-core 0.8; 0.26.11 ist
+  # nur ein Semver-Shim und reexportiert webpki-roots 1.0.10 (gepatcht). Weg:
+  # sqlx auf eine Version mit webpki-roots 1 heben.
+  "RUSTSEC-2026-0381",
 ]

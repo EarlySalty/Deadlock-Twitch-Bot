@@ -9,14 +9,16 @@ use serde_json::Value;
 use sqlx::{PgConnection, PgPool, Row};
 
 use super::{
-    bind_on, binding, connections_on, notify, now_on, queue_status, release_slot,
-    valid_approvals_on, AutopilotNotifier, PublishError, AUTOPILOT_APPROVER,
+    bind_on, binding, connections_on, notify, now_on, queue_status, release_slot, review_mode_on,
+    tiktok_delivery, valid_approvals_on, AutopilotNotifier, PublishError, ReviewMode,
+    AUTOPILOT_APPROVER, EFFECTIVE_REVIEW,
 };
 use crate::autopilot_settings::{self, AutopilotSettings};
 use crate::credentials::CredentialManager;
 use crate::produced_video;
 use crate::production_jobs::autopilot_schedule;
-use crate::uploaders::UploadError;
+use crate::uploaders::tiktok::draft_uploader;
+use crate::uploaders::{PlatformUploader, UploadCheckpoint, UploadError};
 
 const TICK: Duration = Duration::from_secs(30);
 const MAX_ATTEMPTS: i32 = 4;
@@ -32,9 +34,11 @@ const CLEANUP_FAILED: &str =
 const UNRESOLVED: &str = "v.file_path IS NOT NULL AND v.artifact_deleted_at IS NULL
     AND v.cleanup_error IS NULL AND v.publication_executed_at IS NOT NULL
     AND EXISTS (SELECT 1 FROM twitch_clips_upload_queue q
-        WHERE q.produced_video_id = v.id AND q.status = ANY($2))
+        WHERE q.produced_video_id = v.id AND q.status = ANY($2)
+        AND (q.platform <> 'tiktok' OR q.status = ANY($1)))
     AND NOT EXISTS (SELECT 1 FROM twitch_clips_upload_queue q
-        WHERE q.produced_video_id = v.id AND NOT COALESCE(q.status = ANY($1), FALSE))";
+        WHERE q.produced_video_id = v.id AND NOT COALESCE(q.status = ANY($1)
+            OR (q.platform <> 'tiktok' AND q.status = ANY($2)), FALSE))";
 const RETENTION_OVER: &str = "v.metadata #> '{artifact_retention,unresolved_since}' IS NOT NULL
     AND GREATEST(v.publication_executed_at,
         (v.metadata #>> '{artifact_retention,unresolved_since}')::timestamptz,
@@ -42,6 +46,16 @@ const RETENTION_OVER: &str = "v.metadata #> '{artifact_retention,unresolved_sinc
             q.completed_at, q.next_retry_at))
          FROM twitch_clips_upload_queue q WHERE q.produced_video_id = v.id))
         < clock_timestamp() - make_interval(days => $3)";
+const VETO_DEADLINE: &str = "CASE WHEN jsonb_typeof(v.metadata -> 'veto_deadline') = 'string'
+    THEN v.metadata ->> 'veto_deadline' END";
+const PROMOTION_BATCH: usize = 20;
+const PROMOTABLE: &str = "NOT s.paused AND v.status = 'review'
+    AND EXISTS (SELECT 1 FROM social_production_jobs j WHERE j.id = v.job_id AND j.source = 'autopilot')
+    AND NOT v.needs_review AND v.review_reasons = '[]'::jsonb
+    AND v.expires_at > clock_timestamp() AND v.publication_executed_at IS NULL
+    AND v.artifact_deleted_at IS NULL AND v.file_path IS NOT NULL
+    AND NOT (v.metadata ? 'manual_review') AND NOT (v.metadata ? 'manual_ai_job_id')
+    AND NOT EXISTS (SELECT 1 FROM social_media_clip_approval a WHERE a.produced_video_id = v.id)";
 const NOT_DEFERRED: &str = "NOT COALESCE(v.autopilot_deferred_stage = $1
     AND v.autopilot_deferred_until > clock_timestamp(), FALSE)";
 
@@ -67,6 +81,23 @@ pub trait DestinationPublisher: Send + Sync {
         platform: &str,
         request: &PublishRequest,
     ) -> Result<PublishOutcome, UploadError>;
+
+    async fn publish_tiktok(
+        &self,
+        _owner: &str,
+        _request: &PublishRequest,
+        _checkpoint: &dyn UploadCheckpoint,
+    ) -> Result<String, UploadError> {
+        Err(UploadError::not_started(UploadError::NotImplemented(
+            "TikTok drafts are not available for this publisher".into(),
+        )))
+    }
+
+    async fn tiktok_status(&self, _owner: &str, _publish_id: &str) -> Result<Value, UploadError> {
+        Err(UploadError::NotImplemented(
+            "TikTok status checks are not available for this publisher".into(),
+        ))
+    }
 }
 
 pub struct PlatformPublisher {
@@ -109,12 +140,49 @@ impl DestinationPublisher for PlatformPublisher {
             visibility,
         })
     }
+
+    async fn publish_tiktok(
+        &self,
+        owner: &str,
+        request: &PublishRequest,
+        checkpoint: &dyn UploadCheckpoint,
+    ) -> Result<String, UploadError> {
+        let credentials = self
+            .credentials
+            .get_channel_credentials_for_id("tiktok", owner)
+            .await
+            .ok_or_else(|| UploadError::not_started(UploadError::NotAuthenticated))?;
+        let uploader = draft_uploader(&credentials)?;
+        uploader
+            .upload_video_checkpointed(
+                &request.file_path,
+                &request.title,
+                &request.description,
+                &request.hashtags,
+                checkpoint,
+            )
+            .await
+    }
+
+    async fn tiktok_status(&self, owner: &str, publish_id: &str) -> Result<Value, UploadError> {
+        let credentials = self
+            .credentials
+            .get_channel_credentials_for_id("tiktok", owner)
+            .await
+            .ok_or(UploadError::NotAuthenticated)?;
+        let uploader = draft_uploader(&credentials).map_err(|error| match error {
+            UploadError::NotStarted(cause) => *cause,
+            other => other,
+        })?;
+        Ok(uploader.get_video_status(publish_id).await)
+    }
 }
 
 pub struct PublishExecutor {
     pool: PgPool,
     publisher: Arc<dyn DestinationPublisher>,
     notifier: Option<Arc<dyn AutopilotNotifier>>,
+    tiktok_dispatch: bool,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -124,27 +192,47 @@ pub struct TickReport {
     pub rescheduled: usize,
     pub released: usize,
     pub uploads: usize,
+    pub reconciled: usize,
     pub finished: usize,
     pub expired: usize,
     pub cleaned: usize,
 }
 
 pub(super) struct Claim {
-    queue_id: i64,
-    generation: i64,
-    video_id: i64,
-    owner: String,
+    pub(super) queue_id: i64,
+    pub(super) generation: i64,
+    pub(super) video_id: i64,
+    pub(super) owner: String,
     platform: String,
-    attempts: i32,
-    request: PublishRequest,
-    sha256: Option<String>,
+    pub(super) attempts: i32,
+    pub(super) request: PublishRequest,
+    pub(super) sha256: Option<String>,
     accounts: Value,
+    tiktok_publish_id: Option<String>,
 }
 
 enum Verdict {
-    Upload(Option<String>),
+    Upload {
+        account: Option<String>,
+        tiktok: bool,
+    },
     Hold(&'static str),
 }
+
+const START_EFFECT: &str = "UPDATE twitch_clips_upload_queue SET status = $2,
+     outcome_reason = CASE WHEN $2 = $6 THEN outcome_reason ELSE $5 END,
+     effect_started_at = CASE WHEN $2 = $6 THEN clock_timestamp() ELSE effect_started_at END,
+     attempts = CASE WHEN $2 = $6 THEN attempts + 1 ELSE attempts END,
+     account_id = CASE WHEN $2 = $6 THEN $3 ELSE account_id END,
+     next_retry_at = NULL WHERE id = $1 AND status = $4 AND claim_generation = $7";
+
+const START_TIKTOK_EFFECT: &str = "UPDATE twitch_clips_upload_queue SET status = $2,
+     outcome_reason = CASE WHEN $2 = $6 THEN outcome_reason ELSE $5 END,
+     effect_started_at = CASE WHEN $2 = $6 THEN clock_timestamp() ELSE effect_started_at END,
+     attempts = CASE WHEN $2 = $6 THEN attempts + 1 ELSE attempts END,
+     account_id = CASE WHEN $2 = $6 THEN $3 ELSE account_id END,
+     next_retry_at = NULL WHERE id = $1 AND status = $4 AND claim_generation = $7
+     AND tiktok_publish_id IS NULL";
 
 impl PublishExecutor {
     pub fn new(pool: PgPool, publisher: Arc<dyn DestinationPublisher>) -> Self {
@@ -152,7 +240,13 @@ impl PublishExecutor {
             pool,
             publisher,
             notifier: None,
+            tiktok_dispatch: false,
         }
+    }
+
+    pub fn with_tiktok_dispatch(mut self, enabled: bool) -> Self {
+        self.tiktok_dispatch = enabled;
+        self
     }
 
     pub fn with_notifier(mut self, notifier: Arc<dyn AutopilotNotifier>) -> Self {
@@ -176,6 +270,8 @@ impl PublishExecutor {
         report.promoted += self.schedule_slotless().await?;
         self.execute_due(&mut report).await?;
         report.uploads = self.upload_due().await?;
+        report.reconciled =
+            tiktok_delivery::reconcile(&self.pool, self.publisher.as_ref(), MAX_ATTEMPTS).await?;
         report.finished = self.finalize().await?;
         report.cleaned = self.cleanup_published().await?;
         report.cleaned += self.cleanup_unresolved().await?;
@@ -199,36 +295,50 @@ impl PublishExecutor {
         .execute(&self.pool)
         .await?;
         sqlx::query(
-            "UPDATE twitch_clips_upload_queue SET status = $1, outcome_reason = 'interrupted'
+            "UPDATE twitch_clips_upload_queue SET status = $1,
+             outcome_reason = CASE WHEN platform <> 'tiktok' THEN 'interrupted'
+                 WHEN tiktok_publish_id IS NULL THEN $4 ELSE $5 END
              WHERE produced_video_id IS NOT NULL AND status = $2
              AND effect_started_at < clock_timestamp() - make_interval(mins => $3)",
         )
         .bind(queue_status::UNCERTAIN)
         .bind(queue_status::EFFECT_STARTED)
         .bind(EFFECT_STALE_MINUTES as i32)
+        .bind(tiktok_delivery::INIT_UNCERTAIN)
+        .bind(tiktok_delivery::TRANSFER_UNCERTAIN)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     async fn promote(&self) -> Result<usize, PublishError> {
-        let candidates: Vec<(i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT v.id, v.twitch_user_id FROM social_produced_videos v
-             JOIN social_production_jobs j ON j.id = v.job_id AND j.source = 'autopilot'
+        let automatic = automatic();
+        let candidates: Vec<PromotionRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT v.id, v.twitch_user_id, {EFFECTIVE_REVIEW} = 'veto_until_deadline',
+                {VETO_DEADLINE}, clock_timestamp() FROM social_produced_videos v
              JOIN social_media_autopilot_settings s ON s.twitch_user_id = v.twitch_user_id
-             WHERE s.publish_mode = 'full_auto' AND NOT s.paused AND v.status = 'review'
-             AND NOT v.needs_review AND v.review_reasons = '[]'::jsonb
-             AND v.expires_at > clock_timestamp() AND v.publication_executed_at IS NULL
-             AND v.artifact_deleted_at IS NULL AND v.file_path IS NOT NULL
-             AND NOT (v.metadata ? 'manual_review') AND NOT (v.metadata ? 'manual_ai_job_id')
-             AND NOT EXISTS (SELECT 1 FROM social_media_clip_approval a WHERE a.produced_video_id = v.id)
-             AND {NOT_DEFERRED} ORDER BY v.created_at, v.id LIMIT 20"
+             WHERE {automatic} AND {PROMOTABLE}
+             AND {NOT_DEFERRED} ORDER BY v.created_at, v.id"
         )))
         .bind(Stage::Promote.name())
         .fetch_all(&self.pool)
         .await?;
+        let mut due = Vec::new();
+        for (id, owner, veto, deadline, now) in candidates {
+            if due.len() >= PROMOTION_BATCH {
+                break;
+            }
+            match veto_state(veto, deadline.as_deref(), now) {
+                VetoState::Due => due.push((id, owner)),
+                VetoState::Waiting => {}
+                VetoState::Invalid => {
+                    tracing::warn!(video = id, "Auto-Pilot veto deadline is invalid");
+                    self.defer(id, Stage::Promote).await?;
+                }
+            }
+        }
         let mut promoted = 0;
-        for (id, owner) in candidates {
+        for (id, owner) in due {
             match self.promote_video(id, &owner).await {
                 Ok(true) => promoted += 1,
                 Ok(false) => self.defer(id, Stage::Promote).await?,
@@ -258,11 +368,15 @@ impl PublishExecutor {
         let settings = autopilot_settings::load(&self.pool, owner).await?;
         let mut connection = self.pool.acquire().await?;
         let accounts = connections_on(&mut connection, owner).await?;
+        let reserved = autopilot_schedule::video_destinations_on(&mut connection, id).await?;
         drop(connection);
         let platforms: Vec<String> = settings
             .target_platforms
             .iter()
             .filter(|platform| accounts.contains_key(platform.as_str()))
+            .filter(|platform| {
+                reserved.is_empty() || reserved.iter().any(|slot| &slot.platform == *platform)
+            })
             .cloned()
             .collect();
         if platforms.is_empty() {
@@ -271,22 +385,24 @@ impl PublishExecutor {
         let binding = binding(&self.pool, owner, id).await?;
         let mut tx = self.pool.begin().await?;
         autopilot_settings::lock_owner(&mut tx, owner).await?;
-        let mode: Option<String> = sqlx::query_scalar(
-            "SELECT publish_mode FROM social_media_autopilot_settings WHERE twitch_user_id = $1",
-        )
-        .bind(owner)
-        .fetch_optional(&mut *tx)
-        .await?;
-        let still_eligible: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM social_produced_videos WHERE id = $1 AND status = 'review'
-             AND NOT needs_review AND NOT (metadata ? 'manual_review'))",
-        )
-        .bind(id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if mode.as_deref() != Some("full_auto") || !still_eligible {
+        let automatic = automatic();
+        let eligible: Option<(bool, Option<String>, DateTime<Utc>)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "SELECT {EFFECTIVE_REVIEW} = 'veto_until_deadline', {VETO_DEADLINE}, clock_timestamp()
+                 FROM social_produced_videos v
+                 JOIN social_media_autopilot_settings s ON s.twitch_user_id = v.twitch_user_id
+                 WHERE v.id = $1 AND {automatic} AND {PROMOTABLE}"
+            )))
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let still_eligible = eligible.is_some_and(|(veto, deadline, now)| {
+            veto_state(veto, deadline.as_deref(), now) == VetoState::Due
+        });
+        if !still_eligible {
             return Ok(false);
         }
+        let mode = review_mode_on(&mut tx, owner).await?;
         bind_on(&mut tx, owner, id, &binding, &platforms).await?;
         for platform in &platforms {
             sqlx::query(
@@ -309,6 +425,10 @@ impl PublishExecutor {
                 .bind(id)
                 .fetch_one(&mut *tx)
                 .await?;
+        if mode == ReviewMode::VetoUntilDeadline {
+            tx.commit().await?;
+            return Ok(true);
+        }
         if slot.is_some_and(|slot| slot <= now) {
             release_slot(&mut tx, id).await?;
         }
@@ -363,10 +483,25 @@ impl PublishExecutor {
         .fetch_all(&self.pool)
         .await?;
         for (id, owner) in due {
-            if let Err(error) = self.execute_video(id, &owner, report).await {
+            if let Err(error) = self.execute_or_promote(id, &owner, report).await {
                 tracing::warn!(%error, video = id, "Auto-Pilot publication event failed");
                 self.defer(id, Stage::Execute).await?;
             }
+        }
+        Ok(())
+    }
+
+    async fn execute_or_promote(
+        &self,
+        id: i64,
+        owner: &str,
+        report: &mut TickReport,
+    ) -> Result<(), PublishError> {
+        if self.execute_video(id, owner, report, true).await? == Execution::VetoDue {
+            if self.promote_video(id, owner).await? {
+                report.promoted += 1;
+            }
+            self.execute_video(id, owner, report, false).await?;
         }
         Ok(())
     }
@@ -376,27 +511,32 @@ impl PublishExecutor {
         id: i64,
         owner: &str,
         report: &mut TickReport,
-    ) -> Result<(), PublishError> {
+        promote_veto: bool,
+    ) -> Result<Execution, PublishError> {
         let mut tx = self.pool.begin().await?;
         autopilot_settings::lock_owner(&mut tx, owner).await?;
         let settings = autopilot_settings::load_on(&mut tx, owner).await?;
-        let row: Option<(Option<DateTime<Utc>>, String, i64)> = sqlx::query_as(
-            "SELECT scheduled_at, status, clip_id FROM social_produced_videos WHERE id = $1
+        let row: Option<ExecutionRow> = sqlx::query_as(
+            "SELECT scheduled_at, status, clip_id, job_id FROM social_produced_videos WHERE id = $1
              AND twitch_user_id = $2 AND publication_executed_at IS NULL FOR UPDATE",
         )
         .bind(id)
         .bind(owner)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some((Some(slot), status, clip_id)) = row else {
-            return Ok(());
+        let Some((Some(slot), status, clip_id, job)) = row else {
+            return Ok(Execution::Done);
         };
         let now = now_on(&mut tx).await?;
         if slot > now || settings.paused {
-            return Ok(());
+            return Ok(Execution::Done);
         }
-        let approved = valid_approvals_on(&mut tx, id, owner, settings.publish_mode).await?;
+        let mode = review_mode_on(&mut tx, owner).await?;
+        let approved = valid_approvals_on(&mut tx, id, owner, mode).await?;
         if approved.is_empty() {
+            if promote_veto && mode == ReviewMode::VetoUntilDeadline && status == "review" {
+                return Ok(Execution::VetoDue);
+            }
             release_slot(&mut tx, id).await?;
             if status != "review" {
                 sqlx::query("UPDATE social_produced_videos SET status = 'review' WHERE id = $1 AND status = 'approved'")
@@ -406,17 +546,26 @@ impl PublishExecutor {
             }
             tx.commit().await?;
             report.released += 1;
-            return Ok(());
+            return Ok(Execution::Done);
         }
         if !on_time(&settings, slot, now) {
-            let taken = autopilot_schedule::taken_on(&mut tx, owner).await?;
-            match autopilot_settings::next_shared_slot(now, &taken, &settings)? {
-                Some(next) => move_slot(&mut tx, id, next).await?,
+            let mut platforms: BTreeSet<String> = approved.iter().cloned().collect();
+            platforms.extend(autopilot_schedule::queued_platforms_on(&mut tx, id).await?);
+            let platforms: Vec<String> = platforms.into_iter().collect();
+            let subject = autopilot_schedule::Subject {
+                job,
+                video: Some(id),
+            };
+            let reserved = autopilot_schedule::video_destinations_on(&mut tx, id).await?;
+            let mut allocator =
+                autopilot_schedule::Allocator::load_for(&mut tx, owner, &settings, subject).await?;
+            match allocator.place(now, &reserved, &platforms)? {
+                Some(next) => autopilot_schedule::place_video_on(&mut tx, owner, id, &next).await?,
                 None => release_slot(&mut tx, id).await?,
             }
             tx.commit().await?;
             report.rescheduled += 1;
-            return Ok(());
+            return Ok(Execution::Done);
         }
         let existing: Vec<String> = sqlx::query_scalar(
             "SELECT platform FROM twitch_clips_upload_queue WHERE produced_video_id = $1",
@@ -430,10 +579,12 @@ impl PublishExecutor {
                 .bind(id)
                 .fetch_one(&mut *tx)
                 .await?;
+        let reserved = autopilot_schedule::video_destinations_on(&mut tx, id).await?;
         let event = EventRef {
             clip_id,
             video_id: id,
             slot,
+            reserved: &reserved,
             metadata: &metadata,
         };
         for platform in approved
@@ -452,7 +603,11 @@ impl PublishExecutor {
         .bind(approved.iter().cloned().collect::<Vec<_>>())
         .execute(&mut *tx)
         .await?;
-        let mut discarded: BTreeSet<String> = settings.target_platforms.iter().cloned().collect();
+        let mut discarded: BTreeSet<String> = if reserved.is_empty() {
+            settings.target_platforms.iter().cloned().collect()
+        } else {
+            reserved.iter().map(|slot| slot.platform.clone()).collect()
+        };
         let skipped: Vec<String> = sqlx::query_scalar(
             "SELECT platform FROM social_media_clip_approval WHERE produced_video_id = $1",
         )
@@ -473,6 +628,9 @@ impl PublishExecutor {
             )
             .await?;
         }
+        if let Some(job) = job {
+            autopilot_schedule::release_on(&mut tx, job).await?;
+        }
         sqlx::query(
             "UPDATE social_produced_videos SET publication_executed_at = $2,
              status = CASE WHEN status = 'review' THEN 'approved' ELSE status END WHERE id = $1",
@@ -483,7 +641,7 @@ impl PublishExecutor {
         .await?;
         tx.commit().await?;
         report.executed += 1;
-        Ok(())
+        Ok(Execution::Done)
     }
 
     async fn upload_due(&self) -> Result<usize, PublishError> {
@@ -509,12 +667,14 @@ impl PublishExecutor {
                  WHERE v2.publication_executed_at IS NOT NULL AND NOT COALESCE(s.paused, FALSE)
                  AND v2.artifact_deleted_at IS NULL AND v2.file_path IS NOT NULL
                  AND (q2.status = $2 OR (q2.status = $3 AND q2.next_retry_at <= clock_timestamp()))
+                 AND COALESCE(q2.scheduled_at, '-infinity'::timestamptz) <= clock_timestamp()
                  ORDER BY q2.scheduled_at, q2.id LIMIT 1 FOR UPDATE OF q2 SKIP LOCKED)
              AND v.id = q.produced_video_id AND c.id = q.clip_id
              RETURNING q.id::bigint AS queue_id, q.claim_generation, v.id AS video_id, v.twitch_user_id,
                  q.platform, q.attempts, v.file_path, q.title, q.description, q.hashtags, c.clip_title,
                  v.metadata#>>ARRAY['publication', 'hashes', q.platform] AS sha256,
-                 COALESCE(v.metadata#>'{publication,accounts}', '{}'::jsonb)::text AS accounts",
+                 COALESCE(v.metadata#>'{publication,accounts}', '{}'::jsonb)::text AS accounts,
+                 NULLIF(to_jsonb(q)->>'tiktok_publish_id', '') AS tiktok_publish_id",
         )
         .bind(queue_status::PREPARING)
         .bind(queue_status::PENDING)
@@ -551,24 +711,17 @@ impl PublishExecutor {
             },
             sha256: row.try_get("sha256")?,
             accounts: serde_json::from_str(&row.try_get::<String, _>("accounts")?)?,
+            tiktok_publish_id: row.try_get("tiktok_publish_id")?,
         }))
     }
 
     async fn verdict(&self, claim: &Claim) -> Result<Verdict, PublishError> {
-        let settings = autopilot_settings::load(&self.pool, &claim.owner).await?;
         let mut connection = self.pool.acquire().await?;
-        let approved = valid_approvals_on(
-            &mut connection,
-            claim.video_id,
-            &claim.owner,
-            settings.publish_mode,
-        )
-        .await?;
+        let mode = review_mode_on(&mut connection, &claim.owner).await?;
+        let approved =
+            valid_approvals_on(&mut connection, claim.video_id, &claim.owner, mode).await?;
         if !approved.contains(&claim.platform) {
             return Ok(Verdict::Hold("review_required"));
-        }
-        if claim.platform == "tiktok" {
-            return Ok(Verdict::Hold("tiktok_effect_boundary_pending"));
         }
         let accounts = connections_on(&mut connection, &claim.owner).await?;
         let Some(current) = accounts.get(&claim.platform) else {
@@ -584,22 +737,45 @@ impl PublishExecutor {
             return Ok(Verdict::Hold("exact_file_changed"));
         };
         match crate::uploaders::tiktok::video_digest(&claim.request.file_path).await {
-            Ok(actual) if actual == expected => Ok(Verdict::Upload(current.clone())),
-            _ => Ok(Verdict::Hold("exact_file_changed")),
+            Ok(actual) if actual == expected => {}
+            _ => return Ok(Verdict::Hold("exact_file_changed")),
         }
+        let tiktok = claim.platform == "tiktok";
+        if tiktok && !self.tiktok_dispatch {
+            return Ok(Verdict::Hold(tiktok_delivery::BOUNDARY_PENDING));
+        }
+        Ok(Verdict::Upload {
+            account: current.clone(),
+            tiktok,
+        })
     }
 
     pub(super) async fn process(&self, claim: Claim) -> Result<(), PublishError> {
-        let account = match self.verdict(&claim).await? {
+        if claim.platform == "tiktok" && claim.tiktok_publish_id.is_some() {
+            return tiktok_delivery::quarantine(&self.pool, &claim).await;
+        }
+        let (account, tiktok) = match self.verdict(&claim).await? {
             Verdict::Hold(reason) => {
                 self.settle(&claim, queue_status::HELD, Some(reason), None)
                     .await?;
                 return Ok(());
             }
-            Verdict::Upload(account) => account,
+            Verdict::Upload { account, tiktok } => (account, tiktok),
         };
-        if !self.start_effect(&claim, account.as_deref()).await? {
+        if !self
+            .start_effect(&claim, account.as_deref(), tiktok)
+            .await?
+        {
             return Ok(());
+        }
+        if tiktok {
+            return tiktok_delivery::dispatch(
+                &self.pool,
+                self.publisher.as_ref(),
+                &claim,
+                MAX_ATTEMPTS,
+            )
+            .await;
         }
         let attempts = claim.attempts.saturating_add(1);
         match self
@@ -617,7 +793,17 @@ impl PublishExecutor {
                 )
                 .await
             }
-            Err(UploadError::Validation(_)) | Err(UploadError::NotImplemented(_)) => {
+            Err(UploadError::PublishUnconfirmed(_)) => {
+                self.settle(
+                    &claim,
+                    queue_status::UNCERTAIN,
+                    Some("publish_unconfirmed"),
+                    None,
+                )
+                .await
+            }
+            Err(error @ (UploadError::Validation(_) | UploadError::NotImplemented(_))) => {
+                tracing::warn!(%error, queue = claim.queue_id, platform = %claim.platform, "Auto-Pilot upload rejected");
                 self.settle(
                     &claim,
                     queue_status::FAILED,
@@ -650,36 +836,33 @@ impl PublishExecutor {
         &self,
         claim: &Claim,
         account: Option<&str>,
+        tiktok: bool,
     ) -> Result<bool, PublishError> {
         let mut tx = self.pool.begin().await?;
         autopilot_settings::lock_owner(&mut tx, &claim.owner).await?;
-        let settings = autopilot_settings::load_on(&mut tx, &claim.owner).await?;
-        let approved =
-            valid_approvals_on(&mut tx, claim.video_id, &claim.owner, settings.publish_mode)
-                .await?;
-        let (status, reason) = if approved.contains(&claim.platform) {
-            (queue_status::EFFECT_STARTED, None)
-        } else {
-            (queue_status::HELD, Some("review_required"))
+        let mode = review_mode_on(&mut tx, &claim.owner).await?;
+        let approved = valid_approvals_on(&mut tx, claim.video_id, &claim.owner, mode).await?;
+        let mut reason = (!approved.contains(&claim.platform)).then_some("review_required");
+        if reason.is_none() && tiktok {
+            reason = tiktok_delivery::effect_issue_on(&mut tx, claim).await?;
+        }
+        let status = match reason {
+            None => queue_status::EFFECT_STARTED,
+            Some(_) => queue_status::HELD,
         };
-        let changed = sqlx::query(
-            "UPDATE twitch_clips_upload_queue SET status = $2,
-             outcome_reason = CASE WHEN $2 = $6 THEN outcome_reason ELSE $5 END,
-             effect_started_at = CASE WHEN $2 = $6 THEN clock_timestamp() ELSE effect_started_at END,
-             attempts = CASE WHEN $2 = $6 THEN attempts + 1 ELSE attempts END,
-             account_id = CASE WHEN $2 = $6 THEN $3 ELSE account_id END,
-             next_retry_at = NULL WHERE id = $1 AND status = $4 AND claim_generation = $7",
-        )
+        let query = sqlx::query(if tiktok {
+            START_TIKTOK_EFFECT
+        } else {
+            START_EFFECT
+        })
         .bind(claim.queue_id)
         .bind(status)
         .bind(account)
         .bind(queue_status::PREPARING)
         .bind(reason)
         .bind(queue_status::EFFECT_STARTED)
-        .bind(claim.generation)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        .bind(claim.generation);
+        let changed = query.execute(&mut *tx).await?.rows_affected();
         tx.commit().await?;
         Ok(changed == 1 && reason.is_none())
     }
@@ -954,13 +1137,12 @@ async fn record_cleanup_error(connection: &mut PgConnection, id: i64) -> Result<
     Ok(())
 }
 
-fn settled_states() -> [&'static str; 5] {
+fn settled_states() -> [&'static str; 4] {
     [
         queue_status::PUBLISHED,
         queue_status::DISCARDED,
         queue_status::FAILED,
         queue_status::HELD,
-        queue_status::UNCERTAIN,
     ]
 }
 
@@ -1013,27 +1195,58 @@ fn on_time(settings: &AutopilotSettings, slot: DateTime<Utc>, now: DateTime<Utc>
     (7..23).contains(&hour)
 }
 
-async fn move_slot(tx: &mut PgConnection, id: i64, next: DateTime<Utc>) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE social_produced_videos SET scheduled_at = $2 WHERE id = $1")
-        .bind(id)
-        .bind(next)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        "UPDATE twitch_clips_upload_queue SET scheduled_at = $2 WHERE produced_video_id = $1",
+type ExecutionRow = (Option<DateTime<Utc>>, String, i64, Option<i64>);
+type PromotionRow = (i64, String, bool, Option<String>, DateTime<Utc>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Execution {
+    Done,
+    VetoDue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VetoState {
+    Due,
+    Waiting,
+    Invalid,
+}
+
+fn automatic() -> String {
+    format!(
+        "({EFFECTIVE_REVIEW} = 'off' OR ({EFFECTIVE_REVIEW} = 'veto_until_deadline'
+            AND v.policy_snapshot ->> 'review_policy' = 'veto_until_deadline'))"
     )
-    .bind(id)
-    .bind(next)
-    .execute(&mut *tx)
-    .await?;
-    Ok(())
+}
+
+fn veto_state(veto: bool, deadline: Option<&str>, now: DateTime<Utc>) -> VetoState {
+    if !veto {
+        return VetoState::Due;
+    }
+    let Some(deadline) = deadline else {
+        return VetoState::Waiting;
+    };
+    match DateTime::parse_from_rfc3339(deadline) {
+        Ok(deadline) if deadline.with_timezone(&Utc) <= now => VetoState::Due,
+        Ok(_) => VetoState::Waiting,
+        Err(_) => VetoState::Invalid,
+    }
 }
 
 struct EventRef<'a> {
     clip_id: i64,
     video_id: i64,
     slot: DateTime<Utc>,
+    reserved: &'a [autopilot_schedule::Reservation],
     metadata: &'a str,
+}
+
+impl EventRef<'_> {
+    fn at(&self, platform: &str) -> DateTime<Utc> {
+        self.reserved
+            .iter()
+            .find(|slot| slot.platform == platform)
+            .map_or(self.slot, |slot| slot.scheduled_at.max(self.slot))
+    }
 }
 
 async fn insert_destination(
@@ -1046,17 +1259,28 @@ async fn insert_destination(
     sqlx::query(
         "INSERT INTO twitch_clips_upload_queue (clip_id, produced_video_id, platform, status, scheduled_at,
              outcome_reason, title, description, hashtags)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::text::jsonb->'platforms'->$3->>'title',
-             $7::text::jsonb->'platforms'->$3->>'description', ($7::text::jsonb->'platforms'->$3->'hashtags')::text)
+         SELECT $1, $2, $3,
+             CASE WHEN legacy.open THEN $8 ELSE $4 END,
+             $5,
+             CASE WHEN legacy.open THEN 'legacy_publication_open' ELSE $6 END,
+             $7::text::jsonb->'platforms'->$3->>'title',
+             $7::text::jsonb->'platforms'->$3->>'description', ($7::text::jsonb->'platforms'->$3->'hashtags')::text
+         FROM (SELECT EXISTS (
+             SELECT 1 FROM twitch_clips_upload_queue q
+             WHERE q.clip_id = $1 AND q.platform = $3 AND q.produced_video_id IS NULL
+             AND COALESCE(q.status, '') NOT IN
+                 ('completed', 'failed', 'cancelled', 'autopilot_discarded', 'autopilot_failed')
+         ) AS open) legacy
          ON CONFLICT DO NOTHING",
     )
     .bind(event.clip_id)
     .bind(event.video_id)
     .bind(platform)
     .bind(status)
-    .bind(event.slot)
+    .bind(event.at(platform))
     .bind(reason)
     .bind(event.metadata)
+    .bind(queue_status::DISCARDED)
     .execute(tx)
     .await?;
     Ok(())

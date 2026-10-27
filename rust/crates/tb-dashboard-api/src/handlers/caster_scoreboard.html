@@ -1,0 +1,30 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Scoreboard · Deutsche Deadlock Community</title><style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;font-family:"Segoe UI",Roboto,Arial,sans-serif}
+.stage{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:top left}
+.bar{position:absolute;left:0;top:0;width:1920px;height:104px}
+.half{position:absolute;top:0;height:86px;width:960px;display:flex;align-items:center;gap:22px}
+.half.left{left:0;justify-content:flex-end;padding-right:214px;background:linear-gradient(to left,rgba(224,169,85,.96) 0%,rgba(224,169,85,.82) 30%,rgba(224,169,85,.35) 68%,rgba(224,169,85,0) 100%)}
+.half.right{left:960px;justify-content:flex-start;padding-left:214px;background:linear-gradient(to right,rgba(127,155,216,.96) 0%,rgba(127,155,216,.82) 30%,rgba(127,155,216,.35) 68%,rgba(127,155,216,0) 100%)}
+.half::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px}
+.half.left::after{background:linear-gradient(to left,#f6d398,rgba(246,211,152,0))}
+.half.right::after{background:linear-gradient(to right,#c7d5f5,rgba(199,213,245,0))}
+.logo{flex:0 0 auto;width:70px;height:70px;border-radius:50%;object-fit:cover;background:#111;border:3px solid rgba(255,255,255,.85);box-shadow:0 3px 12px rgba(0,0,0,.45)}
+.logo[hidden]{display:none}
+.name{max-width:600px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:"Cinzel","Trajan Pro","Trajan","Times New Roman",Georgia,serif;font-weight:700;font-size:40px;letter-spacing:3px;text-transform:uppercase;color:#fff;text-shadow:0 2px 6px rgba(0,0,0,.55)}
+.half.left .name{text-align:right}
+.notch{position:absolute;left:740px;top:0;width:440px;height:104px}
+.notch svg{position:absolute;inset:0;width:440px;height:104px}
+.notch img{position:absolute;left:50%;top:10px;transform:translateX(-50%);width:170px;height:76px;object-fit:contain;opacity:.32}
+.notch img[hidden]{display:none}
+</style></head><body><main class="stage" id="stage"><div class="bar"><div class="half left" id="team-left"><div class="name"></div><img class="logo" alt="" hidden></div><div class="half right" id="team-right"><img class="logo" alt="" hidden><div class="name"></div></div><div class="notch"><svg viewBox="0 0 440 104" aria-hidden="true"><defs><linearGradient id="notch-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#151515" stop-opacity=".96"/><stop offset="1" stop-color="#0b0b0b" stop-opacity=".92"/></linearGradient><linearGradient id="notch-edge" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#E0A955"/><stop offset=".5" stop-color="#d9d4c8"/><stop offset="1" stop-color="#7F9BD8"/></linearGradient></defs><path d="M0 0H440C404 0 392 18 380 44C366 78 340 104 300 104H140C100 104 74 78 60 44C48 18 36 0 0 0Z" fill="url(#notch-fill)"/><path d="M0 0C36 0 48 18 60 44C74 78 100 104 140 104H300C340 104 366 78 380 44C392 18 404 0 440 0" fill="none" stroke="url(#notch-edge)" stroke-width="3"/></svg><img id="brand" alt="" src="/twitch/caster-overlay/builtin/dachlock.png"></div></div></main><script>
+'use strict';
+const stage=document.getElementById('stage');
+function resize(){stage.style.transform=`scale(${Math.min(innerWidth/1920,innerHeight/1080)})`;}addEventListener('resize',resize);resize();
+function setImage(img,url){const safe=typeof url==='string'&&url.startsWith('/twitch/caster-overlay/')?url:'';if(!safe){img.hidden=true;img.removeAttribute('src');return;}if(img.getAttribute('src')!==safe)img.src=safe;img.hidden=false;}
+function teamName(team){const name=typeof team?.name==='string'?team.name.trim():'';const short=typeof team?.short==='string'?team.short.trim():'';return (name||short).slice(0,80);}
+function fitName(el){el.style.fontSize='40px';const full=el.scrollWidth;const room=el.clientWidth;if(full>room&&full>0)el.style.fontSize=Math.max(24,Math.floor(40*room/full))+'px';}
+function renderTeam(id,team){const host=document.getElementById(id);const name=host.querySelector('.name');name.textContent=teamName(team);fitName(name);setImage(host.querySelector('.logo'),team?.logoUrl);}
+function render(payload){const ctx=payload?.matchContext||{};const teams=payload?.teams||{left:ctx.teamA,right:ctx.teamB};renderTeam('team-left',teams.left);renderTeam('team-right',teams.right);const brand=document.getElementById('brand');if(typeof payload?.event?.brandUrl==='string')setImage(brand,payload.event.brandUrl);brand.hidden=payload?.event?.showBrand===false;}
+const preview=new URLSearchParams(location.search).get('preview')==='1'&&parent!==window;if(preview){addEventListener('message',event=>{if(event.source!==parent||event.origin!=='https://admin.deutsche-deadlock-community.de'||event.data?.type!=='ddc-caster-preview')return;render(event.data);});}
+let reportedFailure=false;async function refresh(){try{const response=await fetch('/twitch/api/v2/public/caster-overlay',{cache:'no-store',credentials:'omit'});if(!response.ok)throw new Error('HTTP '+response.status);render(await response.json());reportedFailure=false;}catch(error){if(!reportedFailure){console.warn('Scoreboard: Aktualisierung fehlgeschlagen; letzte Anzeige bleibt erhalten.',error);reportedFailure=true;}}finally{if(!preview)setTimeout(refresh,2000);}}if(!preview)refresh();
+</script></body></html>

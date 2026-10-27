@@ -1454,3 +1454,81 @@ async fn sub_reminder_subscription_dbfehler_retry_und_originalzeit() {
     assert_eq!(sqlx::query_scalar::<_,String>("SELECT end_message_id FROM twitch_sub_reminders").fetch_one(&db.pool).await.unwrap(),"end-1");
     runtime.shutdown().await;
 }
+
+struct NoopInboxHandler;
+
+#[async_trait::async_trait]
+impl InboxHandler for NoopInboxHandler {
+    async fn handle(
+        &self,
+        _work_type: &str,
+        _payload: &serde_json::Value,
+    ) -> Result<(), HandlerError> {
+        Ok(())
+    }
+}
+
+struct SlowChatHooks {
+    started: tokio::sync::Notify,
+    completed: AtomicU64,
+}
+
+#[async_trait::async_trait]
+impl EventSubHooks for SlowChatHooks {
+    async fn on_chat_message(&self, _event: &serde_json::Value, _message_id: Option<&str>) {
+        self.started.notify_one();
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        self.completed.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn chat_message_dispatch_laeuft_nach_abgebrochenem_aufrufer_zu_ende() {
+    let db = isolated_postgres::TestPostgres::start().await;
+    support::create_schema(&db.pool).await;
+    let hooks = Arc::new(SlowChatHooks {
+        started: tokio::sync::Notify::new(),
+        completed: AtomicU64::new(0),
+    });
+    let store = ProcessingInboxStore::new(db.pool.clone());
+    let runtime = InboxRuntime::new(store, Arc::new(NoopInboxHandler)).start();
+    let dispatcher = Arc::new(EventSubDispatcher::new(
+        GuardStore::new(db.pool.clone()),
+        runtime.enqueuer(),
+        TelemetryStore::new(db.pool.clone()),
+        StreamerLoginStore::new(db.pool.clone()),
+        hooks.clone(),
+        Arc::new(epoch_clock),
+    ));
+    let body = serde_json::json!({
+        "subscription": {"type": "channel.chat.message"},
+        "event": {"broadcaster_user_id": "77", "message": {"text": "!lurk"}}
+    });
+
+    let caller_dispatcher = dispatcher.clone();
+    let caller_body = body.clone();
+    let caller = tokio::spawn(async move {
+        caller_dispatcher
+            .dispatch("channel.chat.message", Some("chat-cancel-1"), &caller_body)
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), hooks.started.notified())
+        .await
+        .expect("Chat-Hook muss starten");
+    caller.abort();
+    assert!(caller.await.is_err_and(|error| error.is_cancelled()));
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while hooks.completed.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(hooks.completed.load(Ordering::SeqCst), 1);
+
+    let retry = dispatcher
+        .dispatch("channel.chat.message", Some("chat-cancel-1"), &body)
+        .await
+        .expect("Retry-Dispatch");
+    assert!(retry.duplicate);
+    assert_eq!(hooks.completed.load(Ordering::SeqCst), 1);
+    runtime.shutdown().await;
+}

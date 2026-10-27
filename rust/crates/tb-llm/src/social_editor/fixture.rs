@@ -8,14 +8,14 @@ effort = "low"
 max_input_tokens = 128000
 max_output_tokens = 4096
 max_frames = 4
-max_frame_bytes = 131072
+max_frame_bytes = 256000
 max_text_bytes = 16000
 max_schema_bytes = 16000
 request_timeout_ms = 30000
 total_deadline_ms = 90000
 max_retries = 1
 retry_backoff_ms = 1000
-initial_total_cap_micro_usd = 2000000
+initial_total_cap_micro_usd = 20000000
 pricing_version = 1
 
 [provider.pricing]
@@ -54,8 +54,8 @@ max_media_duration_ms = 120000
 max_media_width = 3840
 max_media_height = 2160
 max_frames = 4
-frame_width = 640
-max_frame_bytes = 131072
+frame_width = 960
+max_frame_bytes = 256000
 max_ass_bytes = 131072
 process_deadline_ms = 300000
 total_frames_deadline_ms = 120000

@@ -1,40 +1,57 @@
-import type { ScheduleQueueApi } from '@/components/socialmedia/autopilot/schedule-queue';
 import type { SocialMediaView, SocialMediaViewTarget } from './labels';
+import type { QueueStage } from './queuePresentation';
 
 export interface AiEditorMountProps {
   twitchUserId: string;
   streamer: string;
   clipDbId?: number;
   settingsOnly?: boolean;
-  scheduleApi?: ScheduleQueueApi;
 }
+
+const VIEW_ALIASES: Record<string, SocialMediaView> = {
+  heute: 'heute',
+  clips: 'clips',
+  freigabe: 'clips',
+  pool: 'clips',
+  ai: 'clips',
+  review: 'clips',
+  veroeffentlicht: 'clips',
+  library: 'clips',
+  import: 'clips',
+  planen: 'planen',
+  plan: 'planen',
+  schedule: 'planen',
+  autopilot: 'planen',
+  vod: 'vod',
+  archiv: 'vod',
+  einstellungen: 'einstellungen',
+  konten: 'einstellungen',
+  settings: 'einstellungen',
+  layout: 'einstellungen',
+};
+
+const STAGE_ALIASES: Record<string, QueueStage> = {
+  freigabe: 'review',
+  review: 'review',
+  veroeffentlicht: 'posted',
+  vorbereitung: 'preparing',
+  aussortiert: 'failed',
+};
+
+const STAGES: QueueStage[] = ['all', 'new', 'preparing', 'review', 'planned', 'posted', 'failed', 'archive'];
 
 export function socialViewFromSearch(search: string): SocialMediaView {
   const params = new URLSearchParams(search);
   if (params.has('oauth_success') || params.has('oauth_error')) return 'einstellungen';
-  const view = params.get('view');
-  if (view === 'heute' || view === 'freigabe' || view === 'planen' || view === 'veroeffentlicht' || view === 'einstellungen') return view;
-  if (view === 'pool' || view === 'ai' || view === 'review') return 'freigabe';
-  if (view === 'plan' || view === 'schedule' || view === 'autopilot' || view === 'library' || view === 'import') return 'planen';
-  if (view === 'konten' || view === 'settings' || view === 'layout') return 'einstellungen';
-  if (view === 'archiv' || view === 'vod') return 'veroeffentlicht';
-  return 'heute';
+  return VIEW_ALIASES[params.get('view') ?? ''] ?? 'heute';
 }
 
-export function socialWorkspaceView(view: SocialMediaViewTarget) {
-  const canonical = socialViewFromSearch(`?view=${view}`);
-  if (canonical === 'freigabe') return 'pool';
-  if (canonical === 'planen') return 'plan';
-  if (canonical === 'einstellungen') return 'konten';
-  if (canonical === 'veroeffentlicht') return 'archiv';
-  return 'heute';
-}
-
-export function socialAiClipFromSearch(search: string): number | undefined {
-  const value = new URLSearchParams(search).get('clip_db_id');
-  if (!value || !/^\d+$/.test(value)) return undefined;
-  const id = Number(value);
-  return Number.isSafeInteger(id) && id > 0 ? id : undefined;
+export function socialStageFromSearch(search: string): QueueStage | undefined {
+  const params = new URLSearchParams(search);
+  if (socialViewFromSearch(search) !== 'clips') return undefined;
+  const stage = params.get('stage');
+  if (stage && (STAGES as string[]).includes(stage)) return stage as QueueStage;
+  return STAGE_ALIASES[stage ?? ''] ?? STAGE_ALIASES[params.get('view') ?? ''];
 }
 
 export function socialWorkspaceDepartureAllowed(
@@ -45,13 +62,15 @@ export function socialWorkspaceDepartureAllowed(
   return !scope.querySelector('[data-unsaved="true"]') || confirmDiscard();
 }
 
-export function socialViewSearch(search: string, view: SocialMediaViewTarget, clipDbId?: number): string {
+export function socialViewSearch(search: string, view: SocialMediaViewTarget, stage?: QueueStage): string {
   const params = new URLSearchParams(search);
   const canonical = socialViewFromSearch(`?view=${view}`);
+  const nextStage = stage ?? socialStageFromSearch(`?view=${view}`);
   params.set('view', canonical);
   params.delete('oauth_success');
   params.delete('oauth_error');
-  if (canonical === 'freigabe' && clipDbId !== undefined) params.set('clip_db_id', String(clipDbId));
-  else params.delete('clip_db_id');
+  params.delete('clip_db_id');
+  if (canonical === 'clips' && nextStage && nextStage !== 'all') params.set('stage', nextStage);
+  else params.delete('stage');
   return params.toString();
 }

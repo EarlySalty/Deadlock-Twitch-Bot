@@ -3,11 +3,16 @@ import { fetchSocialAiJson } from '@/api/socialMedia';
 const AI_PREFIX = '/twitch/social-media/api/ai';
 
 export type AiJobStatus = 'queued' | 'preparing' | 'transcribing' | 'analyzing' | 'planning' | 'rendering' | 'validating' | 'review' | 'failed' | 'awaiting_confirmation' | 'rejected';
-export type AiCostBasis = 'usage_priced_estimate' | 'provider_billed' | 'unknown';
+export type AiCostBasis = 'usage_priced_estimate' | 'provider_billed' | 'subscription_included' | 'unknown';
+
+export type AiProviderAccess = 'ready' | 'key_missing' | 'workspace_required' | 'workspace_invalid' | 'key_rejected' | 'unreachable';
+
+const PROVIDER_ACCESS: readonly AiProviderAccess[] = ['ready', 'key_missing', 'workspace_required', 'workspace_invalid', 'key_rejected', 'unreachable'];
 
 export interface AiConsent {
   external_ai_consent: boolean;
   global_allowed: boolean;
+  provider_access?: AiProviderAccess | null;
 }
 
 export type AiPublishLanguage = 'de' | 'en' | 'auto';
@@ -31,7 +36,12 @@ export interface AiVideoVersion {
   original_url: string | null;
   decisions: AiTimeRange[];
   approved_platforms: string[];
+  rating: AiVersionRating | null;
+  layout_mode: string | null;
+  streamer_layout_configured: boolean;
 }
+
+export type AiVersionRating = 'accepted' | 'rejected';
 
 export interface AiRevisionProposal {
   summary: string;
@@ -168,6 +178,9 @@ function decodeVersion(value: unknown): AiVideoVersion {
     original_url: mediaUrl(item.original_url),
     decisions: list(item.decisions, decodeTimeRange),
     approved_platforms: decodePlatforms(item.approved_platforms),
+    rating: item.rating === 'accepted' || item.rating === 'rejected' ? item.rating : null,
+    layout_mode: item.layout_mode === undefined || item.layout_mode === null ? null : text(item.layout_mode),
+    streamer_layout_configured: item.streamer_layout_configured === true,
   };
 }
 
@@ -180,12 +193,13 @@ function decodePlatforms(value: unknown): string[] {
 function decodeProposal(value: unknown): AiRevisionProposal | null {
   if (value === null) return null;
   const proposal = record(value);
-  return {summary:text(proposal.summary),impact:text(proposal.impact),reanalyze:flag(proposal.reanalyze),requires_confirmation:flag(proposal.requires_confirmation),estimated_provider_cost_usd:optionalNumber(proposal.estimated_provider_cost_usd)};
+  return {summary:text(proposal.summary),impact:typeof proposal.impact === 'string' ? proposal.impact : invalidResponse(),reanalyze:flag(proposal.reanalyze),requires_confirmation:flag(proposal.requires_confirmation),estimated_provider_cost_usd:optionalNumber(proposal.estimated_provider_cost_usd)};
 }
 
 export function decodeAiConsent(value: unknown): AiConsent {
   const item = record(value);
-  return { external_ai_consent: flag(item.external_ai_consent), global_allowed: flag(item.global_allowed) };
+  const access = PROVIDER_ACCESS.find((value) => value === item.provider_access) ?? null;
+  return { external_ai_consent: flag(item.external_ai_consent), global_allowed: flag(item.global_allowed), provider_access: access };
 }
 
 export function decodeAiJob(value: unknown): AiJobView {
@@ -193,7 +207,7 @@ export function decodeAiJob(value: unknown): AiJobView {
   const status = text(item.status);
   if (!['queued', 'preparing', 'transcribing', 'analyzing', 'planning', 'rendering', 'validating', 'review', 'failed', 'awaiting_confirmation', 'rejected'].includes(status)) invalidResponse();
   const cost_basis = text(item.cost_basis);
-  if (!['usage_priced_estimate', 'provider_billed', 'unknown'].includes(cost_basis)) invalidResponse();
+  if (!['usage_priced_estimate', 'provider_billed', 'subscription_included', 'unknown'].includes(cost_basis)) invalidResponse();
   return {
     id: number(item.id, true),
     clip_db_id: number(item.clip_db_id, true),
@@ -366,6 +380,7 @@ export interface AiPlatformCopy {
 export interface AiVersionMetadata {
   video_id: number;
   editable: boolean;
+  targets: AiCopyPlatform[];
   platforms: Record<AiCopyPlatform, AiPlatformCopy>;
 }
 
@@ -374,6 +389,18 @@ export const AI_COPY_PLATFORMS: AiCopyPlatform[] = ['youtube', 'tiktok', 'instag
 function plainText(value: unknown): string {
   if (typeof value !== 'string') invalidResponse();
   return value;
+}
+
+function copyPlatform(value: unknown): AiCopyPlatform {
+  const platform = AI_COPY_PLATFORMS.find((entry) => entry === value);
+  if (!platform) invalidResponse();
+  return platform;
+}
+
+function decodeTargets(value: unknown): AiCopyPlatform[] {
+  const targets = list(value, copyPlatform);
+  if (targets.length === 0 || new Set(targets).size !== targets.length) invalidResponse();
+  return AI_COPY_PLATFORMS.filter((platform) => targets.includes(platform));
 }
 
 function decodePlatformCopy(value: unknown): AiPlatformCopy {
@@ -387,6 +414,7 @@ export function decodeAiVersionMetadata(value: unknown): AiVersionMetadata {
   return {
     video_id: number(item.video_id, true),
     editable: flag(item.editable),
+    targets: decodeTargets(item.targets),
     platforms: { youtube: decodePlatformCopy(platforms.youtube), tiktok: decodePlatformCopy(platforms.tiktok), instagram: decodePlatformCopy(platforms.instagram) },
   };
 }

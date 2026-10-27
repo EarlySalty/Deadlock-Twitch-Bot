@@ -37,8 +37,10 @@ const STALE_LIVE_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
 const STALE_LIVE_MAX_AGE_SECS: i64 = 30 * 60;
 /// Auto-Archiv-Drossel (Python: max. alle 15 Minuten).
 const AUTO_ARCHIVE_THROTTLE: Duration = Duration::from_secs(900);
-/// Inaktivität in Tagen, ab der ein Partner automatisch archiviert wird.
-const AUTO_ARCHIVE_DAYS: i64 = 10;
+const INACTIVITY_WINDOW_DAYS: i64 = 60;
+const INACTIVITY_MIN_DAYS: i64 = 4;
+const REACTIVATION_WINDOW_DAYS: i64 = 30;
+const REACTIVATION_MIN_DAYS: i64 = 4;
 /// Gemeinsame Offline-Drossel mit EventSub gegen doppelte Auto-Raid-Trigger.
 const POLL_OFFLINE_RAID_THROTTLE_SECONDS: f64 = 120.0;
 /// Statische Poll-Konfiguration (Env-getrieben, wie die Python-Konstanten).
@@ -223,6 +225,25 @@ impl PollEngine {
                 false
             }
         }
+    }
+
+    async fn announcement_ended_at(
+        &self,
+        login: &str,
+        stream_id: &str,
+        ended_now: bool,
+        now_iso: &str,
+    ) -> Option<String> {
+        if !stream_id.is_empty() {
+            match self.sessions.ended_at_of_stream(login, stream_id).await {
+                Ok(Some(ended_at)) => return Some(iso_seconds(ended_at)),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, login = %login, "Stream-Ende konnte nicht gelesen werden");
+                }
+            }
+        }
+        ended_now.then(|| now_iso.to_string())
     }
 
     async fn claim_announcement_reannounce_cooldown(&self, login: &str) {
@@ -656,10 +677,10 @@ impl PollEngine {
                 && !self.target_game_lower.is_empty()
                 && game_name.to_lowercase() == self.target_game_lower;
 
-            // Informativ inaktiver Partner streamt wieder Deadlock → Flag loeschen.
             if is_live
                 && entry.is_inactivity_flagged
                 && is_deadlock
+                && self.reactivated(&login_lower).await
                 && self.hooks.on_auto_unarchive(&login_lower).await
             {
                 tracing::info!(login = %login_lower, "Partner-Inaktivitaetsflag geloescht");
@@ -719,6 +740,9 @@ impl PollEngine {
                         .map(|s| s.streamer_login.clone())
                         .filter(|n| !n.trim().is_empty())
                         .unwrap_or_else(|| entry.login.clone());
+                    let ended_at_iso = self
+                        .announcement_ended_at(&login_lower, &previous_stream_id, true, &now_iso)
+                        .await;
                     let outcome = self
                         .sink
                         .end_announcement(EndAnnouncementRequest {
@@ -738,6 +762,7 @@ impl PollEngine {
                             started_at_iso: prev_state
                                 .and_then(|s| s.last_started_at.clone())
                                 .filter(|s| !s.trim().is_empty()),
+                            ended_at_iso,
                         })
                         .await;
                     match outcome {
@@ -845,6 +870,9 @@ impl PollEngine {
                     .filter(|n| !n.is_empty())
                     .or_else(|| prev_state.map(|s| s.streamer_login.clone()))
                     .unwrap_or_else(|| entry.login.clone());
+                let ended_at_iso = self
+                    .announcement_ended_at(&login_lower, &previous_stream_id, was_live, &now_iso)
+                    .await;
                 let outcome = self
                     .sink
                     .end_announcement(EndAnnouncementRequest {
@@ -858,6 +886,7 @@ impl PollEngine {
                             .map(str::to_string)
                             .or_else(|| prev_state.map(|s| s.twitch_user_id.clone())),
                         started_at_iso: started_at_iso.clone(),
+                        ended_at_iso,
                     })
                     .await;
                 match outcome {
@@ -1003,9 +1032,21 @@ impl PollEngine {
         }
     }
 
-    /// Informative Inaktivitaetsmarkierung (> 10 Tage keine bekannte Stream-
-    /// Aktivitaet, gedrosselt auf alle 15 Minuten). Die eigentliche Lifecycle-
-    /// Op macht der Hook; sie deaktiviert Partner nicht.
+    async fn reactivated(&self, login: &str) -> bool {
+        let since = Utc::now() - chrono::Duration::days(REACTIVATION_WINDOW_DAYS);
+        match self
+            .tracked
+            .deadlock_days_including_today(login, since)
+            .await
+        {
+            Ok(days) => days >= REACTIVATION_MIN_DAYS,
+            Err(error) => {
+                tracing::debug!(%error, login, "Reaktivierung: Deadlock-Tage nicht ladbar");
+                false
+            }
+        }
+    }
+
     async fn auto_archive_inactive(&self) {
         {
             let mut state = self.state.lock().expect("tick state lock");
@@ -1017,10 +1058,10 @@ impl PollEngine {
             }
             state.last_archive_check = Some(Instant::now());
         }
-        let cutoff = Utc::now() - chrono::Duration::days(AUTO_ARCHIVE_DAYS);
+        let since = Utc::now() - chrono::Duration::days(INACTIVITY_WINDOW_DAYS);
         let candidates = match self
             .tracked
-            .archive_candidates(&self.config.target_game, cutoff)
+            .archive_candidates(&self.config.target_game, since, INACTIVITY_MIN_DAYS)
             .await
         {
             Ok(candidates) => candidates,

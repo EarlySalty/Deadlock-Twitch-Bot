@@ -1,4 +1,3 @@
-import { globalTimezoneOwner, globalTimezoneUrl } from '../src/utils/socialMediaChannel';
 import { readFileSync } from 'node:fs';
 import { studioActions } from '../src/components/socialmedia/studioActions';
 import { clipDisplayTitles } from '../src/components/socialmedia/clipTitles';
@@ -9,12 +8,22 @@ import {
   queueStats,
   filterQueue,
   loadQueueSnapshot,
+  sourceStage,
+  sourceMatchesStage,
+  QUEUE_FILTERS,
 } from '../src/components/socialmedia/queuePresentation';
+import { SOCIAL_MEDIA_TABS } from '../src/components/socialmedia/labels';
+import { studioNextStep } from '../src/components/socialmedia/studioNextStep';
+import type { StudioOverviewData } from '../src/components/socialmedia/StudioOverview';
+import type { ProductionHold, ScheduleQueueSnapshot, TestRun } from '../src/components/socialmedia/autopilot/schedule-queue/api';
+import type { PipelineSource } from '../src/components/socialmedia/pipelineApi';
 import type { SocialClipMitPosting } from '../src/api/socialMedia';
 import { upcomingTerms, upcomingTermView } from '../src/components/socialmedia/upcomingTerms';
 import { DEFAULT_LAYOUT } from '../src/types/socialMedia';
+import { createScheduleQueueFixture } from '../src/components/socialmedia/autopilot/schedule-queue/fixtures';
+import { planDraft, planText, schedulePatch, scopeMergeChanges, switchScope, validateDraft } from '../src/components/socialmedia/pipelinePlan';
 import { approvalFact, authorizationFact, clipPlatformPresentation, connectionFact, publicationFact, transferFact } from '../src/components/socialmedia/platformPresentation';
-import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceView } from '../src/components/socialmedia/studioNavigation';
+import { socialStageFromSearch, socialViewFromSearch, socialViewSearch } from '../src/components/socialmedia/studioNavigation';
 import { getPreviewSocialResponse, SOCIAL_CLIPS_FIXTURE, SOCIAL_PLATFORMS_FIXTURE } from '../src/preview/fixtures';
 
 const clip = (id: number, overrides: Partial<SocialClipMitPosting> = {}): SocialClipMitPosting => ({
@@ -43,7 +52,9 @@ test('veröffentlichte und archivierte Clips bleiben trotz altem Freigabestand t
   const approval = { state: 'awaiting_approval' } as SocialClipMitPosting['approval'];
   assert.equal(queueStage(clip(1, { status: 'published_all', approval })), 'posted');
   assert.equal(queueStage(clip(2, { status: 'discarded', approval })), 'archive');
-  assert.equal(queueStage(clip(3, { status: 'awaiting_approval' })), 'review');
+  assert.equal(queueStage(clip(3, { status: 'awaiting_approval', pipeline_unified: true })), 'new');
+  assert.equal(queueStage(clip(5, { status: 'awaiting_approval' })), 'review');
+  assert.equal(queueStage(clip(6, { status: 'awaiting_approval', pipeline_unified: false })), 'review');
   assert.equal(queueStage(clip(4, { status: 'approved' })), 'new');
 });
 
@@ -64,15 +75,16 @@ test('Suche, Plattform und Status kombinieren sich über den gesamten Bestand', 
     clip(1, {
       title: 'Bebop ÜBERLEBT',
       status: 'awaiting_approval',
+      pipeline_unified: true,
       approval: { approved_platforms: ['youtube'] } as SocialClipMitPosting['approval'],
     }),
     clip(2),
   ];
   assert.deepEqual(
-    filterQueue(data, 'review', 'überlebt', 'youtube').map((c) => c.clip_db_id),
+    filterQueue(data, 'new', 'überlebt', 'youtube').map((c) => c.clip_db_id),
     [1],
   );
-  assert.equal(filterQueue(data, 'review', 'überlebt', 'tiktok').length, 0);
+  assert.equal(filterQueue(data, 'review', 'überlebt', 'youtube').length, 0);
 });
 
 test('Bestandsabfrage lädt nachfolgende Seiten und zählt nicht bloß die ersten 100', async () => {
@@ -166,12 +178,11 @@ test('Übertragung, Postfach und private YouTube-Sichtbarkeit bedeuten keine öf
 });
 
 test('alte Studio-Adressen und OAuth-Rückkehr bleiben erreichbar', () => {
-  assert.equal(socialViewFromSearch('?view=pool'), 'freigabe');
-  for (const view of ['clips', 'unrecognized']) assert.equal(socialViewFromSearch(`?view=${view}`), 'heute');
-  for (const [alias, view] of [['schedule', 'planen'], ['settings', 'einstellungen'], ['vod', 'veroeffentlicht'], ['layout', 'einstellungen'], ['ai', 'freigabe']]) {
+  assert.equal(socialViewFromSearch('?view=pool'), 'clips');
+  assert.equal(socialViewFromSearch('?view=unrecognized'), 'heute');
+  for (const [alias, view] of [['schedule', 'planen'], ['settings', 'einstellungen'], ['archiv', 'vod'], ['layout', 'einstellungen'], ['ai', 'clips'], ['veroeffentlicht', 'clips']]) {
     assert.equal(socialViewFromSearch(`?view=${alias}`), view);
   }
-  assert.equal(socialWorkspaceView('layout'), 'konten');
   for (const callback of ['oauth_success=youtube', 'oauth_error=provider_error']) assert.equal(socialViewFromSearch(`?view=pool&${callback}`), 'einstellungen');
   const search = socialViewSearch('?twitch_user_id=1&streamer=alpha&oauth_success=youtube', 'plan');
   assert.equal(socialViewFromSearch(`?${search}`), 'planen');
@@ -201,12 +212,164 @@ test('upcoming terms exclude past and invalid dates while preserving legacy time
   assert.deepEqual(upcomingTerms({ ...data, clipsFailed: true }, Date.parse('2026-10-14T12:00:00Z')), []);
 });
 
+test('studio tabs start with Heute then Planen then Clips', () => {
+  assert.deepEqual(SOCIAL_MEDIA_TABS.map((tab) => tab.id), ['heute', 'planen', 'clips', 'vod', 'einstellungen']);
+  assert.deepEqual(QUEUE_FILTERS.map((item) => item.label), ['Alle', 'Neu', 'In Vorbereitung', 'Prüfung', 'Geplant', 'Gepostet', 'Fehler', 'Archiv']);
+});
+
+const nextT = (key: string, params?: Record<string, string | number>) =>
+  key.replace(/\{(\w+)\}/g, (_, name) => String(params?.[name] ?? `{${name}}`));
+
+function overview(schedule = createScheduleQueueFixture().snapshot()): StudioOverviewData {
+  return {
+    schedule,
+    scheduleFailed: false,
+    publish: undefined,
+    publishFailed: false,
+    clips: undefined,
+    clipsFailed: false,
+    platforms: undefined,
+    platformsFailed: false,
+    timezone: 'Europe/Berlin',
+  };
+}
+
+function testRun(patch: Partial<TestRun>): TestRun {
+  return {
+    job_id: 1,
+    clip_id: 9,
+    clip_title: 'Clip',
+    status: 'running',
+    stage: 'starting',
+    mode: 'static',
+    last_error: null,
+    video_id: null,
+    video_status: null,
+    ...patch,
+  };
+}
+
+test('status bar names the current studio step', () => {
+  const time = (iso: string) => iso;
+  const withRun = (run: TestRun) => {
+    const schedule = createScheduleQueueFixture().snapshot();
+    schedule.test_run = run;
+    return studioNextStep(overview(schedule), nextT, time).text;
+  };
+  assert.equal(withRun(testRun({ stage: 'starting' })), 'Testlauf: Datei wird von Twitch geladen.');
+  assert.equal(withRun(testRun({ stage: 'analyzing' })), 'Testlauf: Clip wird vorbereitet.');
+  assert.equal(
+    withRun(testRun({ status: 'failed', last_error: 'Clip fehlt auf Twitch.' })),
+    'Testlauf fehlgeschlagen: Clip fehlt auf Twitch. Auf Heute erneut versuchen oder verwerfen.',
+  );
+  assert.equal(
+    withRun(testRun({ status: 'failed', last_error: 'Download fehlgeschlagen' })),
+    'Testlauf fehlgeschlagen: Download fehlgeschlagen. Auf Heute erneut versuchen oder verwerfen.',
+  );
+  assert.equal(
+    withRun(testRun({ status: 'review', video_status: 'review' })),
+    'Fertiges Video wartet auf Heute unter Prüfung & Freigabe.',
+  );
+  const stale = createScheduleQueueFixture().snapshot();
+  stale.test_run = null;
+  stale.production_hold = null;
+  stale.jobs = [{ ...stale.jobs[0], status: 'failed', source: 'autopilot' }, { ...stale.jobs[0], id: 99, status: 'failed', source: 'manual' }];
+  assert.deepEqual(studioNextStep(overview(stale), nextT, time), {
+    text: 'Auto-Pilot aktiv. Nächster Termin 2026-10-12T16:00:00Z. Kein Eingriff nötig.',
+    view: 'planen',
+    tone: 'success',
+  });
+  const idle = createScheduleQueueFixture().snapshot();
+  idle.settings.enabled = false;
+  idle.test_run = null;
+  assert.equal(
+    studioNextStep(overview(idle), nextT, time).text,
+    'Nichts läuft gerade. Auf Planen kannst du die Pipeline testen.',
+  );
+  assert.equal(
+    studioNextStep(overview(), nextT, time).text,
+    'Auto-Pilot aktiv. Nächster Termin 2026-10-12T16:00:00Z. Kein Eingriff nötig.',
+  );
+});
+
+test('status bar names every production hold truthfully', () => {
+  const time = (iso: string) => iso;
+  const held = (hold: Exclude<ProductionHold, null>, patch: (schedule: ScheduleQueueSnapshot) => void = () => {}) => {
+    const schedule = createScheduleQueueFixture().snapshot();
+    schedule.test_run = null;
+    schedule.production_hold = hold;
+    patch(schedule);
+    const { text, view, tone } = studioNextStep(overview(schedule), nextT, time);
+    return { text, view, tone };
+  };
+  assert.deepEqual(held('disabled', (schedule) => { schedule.settings.enabled = false; }), {
+    text: 'Der Auto-Pilot ist ausgeschaltet. Auf Planen kannst du ihn einschalten oder die Pipeline testen.',
+    view: 'planen',
+    tone: 'neutral',
+  });
+  assert.deepEqual(held('paused', (schedule) => { schedule.settings.paused = true; }), {
+    text: 'Der Auto-Pilot ist pausiert. Laufende Produktionen werden fertig, fortsetzen kannst du ihn auf Planen.',
+    view: 'planen',
+    tone: 'warning',
+  });
+  assert.deepEqual(held('review_backlog', (schedule) => { schedule.jobs = [{ ...schedule.jobs[0], status: 'review' }]; }), {
+    text: 'Auto-Pilot wartet, bis du die offenen Produktionen auf Planen prüfst.',
+    view: 'planen',
+    tone: 'warning',
+  });
+  assert.deepEqual(held('review_backlog', (schedule) => { schedule.jobs = []; }), {
+    text: 'Auto-Pilot wartet, bis du die fertigen Videos unter Clips freigibst.',
+    view: 'freigabe',
+    tone: 'warning',
+  });
+  assert.deepEqual(held('failure_backlog'), {
+    text: 'Auto-Pilot wartet, weil die letzten Produktionen fehlgeschlagen sind. Starte auf Planen einen Testlauf.',
+    view: 'planen',
+    tone: 'danger',
+  });
+  assert.deepEqual(held('empty_pool'), {
+    text: 'Auto-Pilot wartet: Keine passenden Clips verfügbar. Prüfe auf Planen deine Clips oder den Zeitraum.',
+    view: 'planen',
+    tone: 'warning',
+  });
+  assert.deepEqual(held('no_schedule'), {
+    text: 'Auto-Pilot wartet: Wöchentliche Termine fehlen. Füge auf Planen mindestens eine Zeit hinzu.',
+    view: 'planen',
+    tone: 'warning',
+  });
+  assert.deepEqual(held('outside_lead'), {
+    text: 'Auto-Pilot aktiv. Der nächste Termin 2026-10-12T16:00:00Z liegt noch außerhalb des Vorlaufs. Kein Eingriff nötig.',
+    view: 'planen',
+    tone: 'neutral',
+  });
+  assert.deepEqual(held('outside_lead', (schedule) => { schedule.next_slot = null; }), {
+    text: 'Auto-Pilot aktiv. Der nächste freie Termin liegt noch außerhalb des Vorlaufs. Kein Eingriff nötig.',
+    view: 'planen',
+    tone: 'neutral',
+  });
+});
+
+test('status bar warns instead of an all-clear when approvals are unavailable', () => {
+  const time = (iso: string) => iso;
+  const schedule = createScheduleQueueFixture().snapshot();
+  schedule.test_run = null;
+  schedule.production_hold = null;
+  const { text, view, tone } = studioNextStep({ ...overview(schedule), publishFailed: true }, nextT, time);
+  assert.deepEqual({ text, view, tone }, {
+    text: 'Ob fertige Videos auf Freigabe warten, ist gerade nicht abrufbar. Schau gleich noch einmal auf Heute.',
+    view: 'heute',
+    tone: 'warning',
+  });
+  schedule.production_hold = 'failure_backlog';
+  assert.equal(studioNextStep({ ...overview(schedule), publishFailed: true }, nextT, time).tone, 'danger');
+});
+
 test('five canonical views resolve every historical workspace without dropping OAuth', () => {
   const groups = {
-    freigabe: ['pool', 'ai', 'review'],
-    planen: ['plan', 'schedule', 'autopilot', 'library', 'import'],
+    clips: ['freigabe', 'pool', 'ai', 'review', 'veroeffentlicht', 'library', 'import'],
+    planen: ['plan', 'schedule', 'autopilot'],
     einstellungen: ['konten', 'settings', 'layout'],
-    veroeffentlicht: ['archiv', 'vod'],
+    vod: ['archiv'],
     heute: [],
   } as const;
   for (const [view, aliases] of Object.entries(groups)) {
@@ -216,11 +379,16 @@ test('five canonical views resolve every historical workspace without dropping O
   assert.equal(socialViewFromSearch(''), 'heute');
 });
 
-test('KI-Einstieg bewahrt Clipkontext beim Neuladen und entfernt ihn außerhalb der KI-Ansicht', () => {
-  const search = socialViewSearch('?twitch_user_id=1', 'ai', 42);
-  assert.equal(socialAiClipFromSearch(`?${search}`), 42);
-  assert.equal(socialAiClipFromSearch(`?${socialViewSearch(search, 'pool')}`), undefined);
-  for (const value of ['0', '-1', '1.5', 'NaN', '9007199254740992']) assert.equal(socialAiClipFromSearch(`?clip_db_id=${value}`), undefined);
+test('clip stage survives reload and leaves the address outside the clip collection', () => {
+  const search = socialViewSearch('?twitch_user_id=1&clip_db_id=42', 'freigabe');
+  assert.equal(socialViewFromSearch(`?${search}`), 'clips');
+  assert.equal(socialStageFromSearch(`?${search}`), 'review');
+  assert.equal(new URLSearchParams(search).get('clip_db_id'), null);
+  assert.equal(socialStageFromSearch('?view=veroeffentlicht'), 'posted');
+  assert.equal(socialStageFromSearch('?view=clips&stage=failed'), 'failed');
+  assert.equal(socialStageFromSearch('?view=clips&stage=bogus'), undefined);
+  assert.equal(socialStageFromSearch(`?${socialViewSearch(search, 'planen')}`), undefined);
+  assert.equal(new URLSearchParams(socialViewSearch(search, 'clips', 'all')).get('stage'), null);
 });
 
 test('lokale Social-Vorschau sperrt schreibende Aufrufe und simuliert keine Speicherung', async () => {
@@ -260,6 +428,7 @@ test('approved clips awaiting TikTok remain planned rather than needing clip app
   assert.equal(queueStage(approved), 'planned');
   assert.equal(filterQueue([approved], 'review', '', 'all').length, 0);
   assert.equal(queueStage(clip(2, { status: 'awaiting_approval', upload_states: { tiktok: 'waiting_tiktok_approval' } })), 'review');
+  assert.equal(queueStage(clip(3, { status: 'awaiting_approval', pipeline_unified: true })), 'new');
 });
 
 test('generated titles win while duplicate Twitch titles gain date and time', () => {
@@ -271,42 +440,18 @@ test('generated titles win while duplicate Twitch titles gain date and time', ()
 });
 
 test('Today prioritizes the same action as its overview and ignores failed sources', () => {
-  const data = { clips: [clip(1, { status: 'awaiting_approval' })], clipsFailed: false, platforms: [], platformsFailed: false, scheduleFailed: false, publishFailed: false, timezone: 'Europe/Berlin' };
+  const data = { clips: [clip(1, { status: 'awaiting_approval', pipeline_unified: true })], clipsFailed: false, platforms: [], platformsFailed: false, scheduleFailed: false, publishFailed: false, timezone: 'Europe/Berlin' };
   const t = (key: string) => key;
-  assert.deepEqual(studioActions(data, 0, t).map(action => [action.key, action.view, action.stage]), [['clips', 'freigabe', 'review']]);
+  assert.deepEqual(studioActions(data, 0, t).map(action => [action.key, action.view, action.stage]), []);
+  const legacy = { ...data, clips: [clip(1, { status: 'awaiting_approval' })] };
+  assert.deepEqual(studioActions(legacy, 0, t).map(action => [action.key, action.view, action.stage]), [['clips', 'freigabe', 'review']]);
   assert.deepEqual(studioActions({ ...data, clipsFailed: true }, 0, t), []);
 });
 
 
-test('timezone links and the editor preserve the selected channel instead of the authenticated account', () => {
-  for (const owner of ['123', '456']) {
-    const url = new URL(globalTimezoneUrl(owner), 'https://example.test');
-    assert.equal(url.pathname, '/twitch/verwaltung');
-    assert.equal(url.hash, '#konto');
-    assert.equal(globalTimezoneOwner(url.search, '999'), owner);
-  }
-  assert.equal(globalTimezoneOwner('', '999'), '999');
-  for (const search of ['?twitch_user_id=', '?twitch_user_id=invalid']) {
-    assert.equal(globalTimezoneOwner(search, '999'), undefined);
-  }
-  assert.equal(globalTimezoneOwner(new URL(globalTimezoneUrl(undefined), 'https://example.test').search, '999'), undefined);
-  const source = (path: string) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
-  for (const [path, owner] of [
-    ['pages/SocialMedia.tsx', 'twitchUserId'],
-    ['components/socialmedia/autopilot/schedule-queue/ScheduleQueuePanel.tsx', 'twitchUserId'],
-    ['components/socialmedia/autopilot/import-pool/ImportPoolPanel.tsx', 'owner'],
-  ]) {
-    assert.ok(source(path).includes(`href={globalTimezoneUrl(${owner})}`));
-    assert.ok(!source(path).includes('/twitch/verwaltung?tab=konto'));
-  }
-  assert.match(source('pages/Verwaltung.tsx'), /GlobalTimezone owner=\{timezoneOwner\}/);
-  const editor = source('components/verwaltung/GlobalTimezone.tsx');
-  for (const call of ['fetchPostingPlan(owner)', 'scheduleQueueApi.load(owner)', 'importPoolApi.getPreferences(owner)', 'savePostingPlanSettings(owner, { timezone })', 'scheduleQueueApi.save({ timezone }, owner)', 'importPoolApi.savePreferences(owner, { ...preferences, timezone })']) assert.ok(editor.includes(call));
-});
-
 test('upcoming produced videos open video review while production jobs keep their queue target', () => {
   const source = readFileSync(new URL('../src/components/socialmedia/StudioOverview.tsx', import.meta.url), 'utf8');
-  assert.ok(source.includes("post ? onNavigate('freigabe', post.stage) : onNavigate(upcomingTermView(term.key))"));
+  assert.ok(source.includes("post ? onNavigate('clips', post.stage) : onNavigate(upcomingTermView(term.key))"));
   assert.equal(upcomingTermView('video-42'), 'freigabe');
   assert.equal(upcomingTermView('42-youtube'), 'freigabe');
   assert.equal(upcomingTermView('job-42'), 'planen');
@@ -316,4 +461,71 @@ test('upcoming produced videos open video review while production jobs keep thei
   assert.equal(studioActions(data, 0, key => key)[0].view, 'freigabe');
   schedule.jobs = [{ status: 'review' }] as typeof schedule.jobs;
   assert.equal(studioActions(data, 0, key => key)[0].view, 'planen');
+});
+
+test('eingeplante Ziele landen in Geplant, laufende Produktion in Vorbereitung', () => {
+  const source = (patch: Partial<PipelineSource>) => ({ discarded_at: null, published_at: null, jobs: [], versions: [], destinations: [], legacy_publications: [], ...patch }) as unknown as PipelineSource;
+  const destination = (status: string | null) => ({ platform: 'youtube', status, produced_video_id: 1 });
+  for (const status of [null, 'pending', 'waiting_schedule', 'waiting_tiktok_approval', 'waiting_connection', 'autopilot_processing']) {
+    assert.equal(sourceStage(source({ destinations: [destination(status)] } as Partial<PipelineSource>)), 'planned', String(status));
+  }
+  assert.equal(sourceStage(source({ versions: [{ status: 'scheduled' }] } as Partial<PipelineSource>)), 'planned');
+  assert.equal(sourceStage(source({ jobs: [{ status: 'queued', reservations: [] }] } as Partial<PipelineSource>)), 'preparing');
+  assert.equal(sourceStage(source({ versions: [{ status: 'rendering' }] } as Partial<PipelineSource>)), 'preparing');
+  assert.equal(sourceStage(source({ jobs: [{ status: 'review', reservations: [] }] } as Partial<PipelineSource>)), 'failed');
+  assert.equal(sourceStage(source({
+    jobs: [{ id: 1, status: 'review', reservations: [] }],
+    versions: [{ id: 9, job_id: 1, status: 'review' }],
+  } as Partial<PipelineSource>)), 'review');
+});
+
+test('archivierte Clips erscheinen nur unter Archiv, nicht unter Aussortiert / Fehler', () => {
+  const source = (patch: Partial<PipelineSource>) => ({ discarded_at: null, published_at: null, jobs: [], versions: [], destinations: [], legacy_publications: [], ...patch }) as unknown as PipelineSource;
+  const archived = source({ discarded_at: '2026-10-01T10:00:00Z' } as Partial<PipelineSource>);
+  assert.equal(sourceMatchesStage(archived, 'archive'), true);
+  assert.equal(sourceMatchesStage(archived, 'failed'), false);
+  const failed = source({ jobs: [{ status: 'failed', reservations: [] }] } as Partial<PipelineSource>);
+  assert.equal(sourceMatchesStage(failed, 'failed'), true);
+  assert.equal(sourceMatchesStage(failed, 'archive'), false);
+});
+
+test('Fehler-Kachel zählt nur automatische Fehler, keine Handaktionen', async () => {
+  const { failedItems } = await import('../src/components/socialmedia/failedItems');
+  const job = (id: number, status: string, review_reasons: string[]) => ({ id, clip_id: id, clip_title: `Clip ${id}`, status, review_reasons, last_error: null });
+  const schedule = { jobs: [job(1, 'failed', []), job(2, 'cancelled', ['unsuitable_clip']), job(3, 'cancelled', ['external_ai_consent_required']), job(4, 'cancelled', [])] } as unknown as Parameters<typeof failedItems>[0];
+  const video = (id: number, status: string, review_reasons: string[], destinations: unknown[] = []) => ({ id, clip_id: id, status, review_reasons, event: { destinations } });
+  const publish = { videos: [
+    video(10, 'rejected', []),
+    video(11, 'rejected', ['ai_production_failed']),
+    video(12, 'failed', []),
+    video(13, 'approved', [], [{ platform: 'youtube', state: 'discarded', reason: null }, { platform: 'tiktok', state: 'discarded', reason: 'tiktok_rejected' }, { platform: 'instagram', state: 'failed', reason: null }]),
+    video(14, 'rejected', [], [{ platform: 'youtube', state: 'discarded', reason: 'revision_replaced' }, { platform: 'tiktok', state: 'discarded', reason: 'not_approved_at_execution' }]),
+  ] } as unknown as Parameters<typeof failedItems>[1];
+  const clips = [{ clip_db_id: 99, clip_id: 'x', title: 'Hand', discarded_at: '2026-10-01T10:00:00Z' }] as unknown as SocialClipMitPosting[];
+  const keys = failedItems(schedule, publish, clips, key => key).map(item => item.key);
+  assert.deepEqual(keys, ['job-1', 'video-12', 'destination-13-tiktok', 'destination-13-instagram']);
+});
+
+test('nur KI-Schnitt schaltet die KI-Bearbeitung ein, Nur KI-Texte und Vorlage nicht', () => {
+  const fixture = createScheduleQueueFixture();
+  const editing = (enabled: boolean, from: 'upload' | 'upload_text' | 'ai_edit') => {
+    const snapshot = fixture.snapshot();
+    const base = { snapshot: { ...snapshot, settings: { ...snapshot.settings, ai_editing_enabled: enabled } }, policy: { ...fixture.policy(), pipeline_mode: from } };
+    return (mode: 'upload' | 'upload_text' | 'ai_edit') => schedulePatch(base, { ...planDraft(base), pipeline_mode: mode }).ai_editing_enabled;
+  };
+  assert.equal(editing(false, 'upload')('upload_text'), undefined);
+  assert.equal(editing(false, 'upload')('ai_edit'), true);
+  assert.equal(editing(true, 'ai_edit')('upload_text'), false);
+  assert.equal(editing(true, 'ai_edit')('upload'), false);
+});
+
+test('Wechsel auf gemeinsamen Plan meldet nur echte Zusammenführung, Fehler nennen die Plattform', () => {
+  const fixture = createScheduleQueueFixture();
+  const snapshot = fixture.snapshot();
+  const base = { snapshot: { ...snapshot, settings: { ...snapshot.settings, target_platforms: ['tiktok', 'youtube'] } }, policy: fixture.policy() };
+  const split = switchScope(planDraft(base), 'per_platform');
+  assert.equal(scopeMergeChanges(split), false);
+  const extra = { ...split, per_platform: { ...split.per_platform, tiktok: [...split.per_platform.tiktok, { weekday: 2, local_time: '08:00' }, { weekday: 2, local_time: '08:00' }] } };
+  assert.equal(scopeMergeChanges(extra), true);
+  assert.deepEqual(validateDraft(extra, planText('de')), ['TikTok: Dienstag 08:00 ist doppelt.']);
 });

@@ -54,6 +54,7 @@ use crate::conversation_scam::ConversationScamGuard;
 use crate::crew_guard::CrewGuard;
 use crate::fun_responses::FunResponses;
 use crate::global_chatter_ban::GlobalChatterBanEnforcer;
+use crate::impersonation_guard::{GuardMode, ImpersonationGuard, PartnerActions};
 use crate::invite_question::InviteQuestionResponder;
 use crate::lfg_pitch::LfgPitchResponder;
 use crate::mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
@@ -71,6 +72,7 @@ use crate::spam_filter::{
     SpamAction, SpamContext, SpamFilter, SPAM_MIN_MATCHES,
 };
 use crate::standard_replies::StandardReplies;
+use crate::suppression_guard::DbManualPartnerOptOutCheck;
 use crate::sus_invite::SusInviteCheck;
 use crate::types::ChatMessageEvent;
 
@@ -708,6 +710,7 @@ pub struct ChatPipelineParts {
     pub brain_chat: Option<Arc<dyn BrainChatPort>>,
     pub fun: Arc<FunResponses>,
     pub standard_replies: Arc<StandardReplies>,
+    pub follow_hint: Arc<crate::follow_hint::FollowHint>,
     pub invite_question: Arc<InviteQuestionResponder>,
     pub lfg_pitch: Arc<LfgPitchResponder>,
     pub streamer_voice: Option<Arc<crate::streamer_voice::StreamerVoiceResponder>>,
@@ -771,15 +774,7 @@ pub struct ChatPipeline {
 
 impl ChatPipeline {
     pub fn new(parts: ChatPipelineParts) -> Self {
-        let crew_guard = Arc::new(CrewGuard::new(
-            true,
-            Arc::clone(&parts.alerter),
-            parts.pool.clone(),
-            parts.bot_user_id.clone(),
-            Arc::clone(&parts.account_age),
-            Arc::clone(&parts.crew_centroid),
-            false,
-        ));
+        let crew_guard = Arc::new(Self::crew_guard(&parts, None));
         let moderation_settings = Arc::new(ModerationSettingsCache::new(parts.pool.clone()));
         Self {
             parts,
@@ -789,6 +784,39 @@ impl ChatPipeline {
             seen_messages: Arc::new(SeenMessages::default()),
             moderation_settings,
         }
+    }
+
+    fn crew_guard(
+        parts: &ChatPipelineParts,
+        impersonation: Option<Arc<ImpersonationGuard>>,
+    ) -> CrewGuard {
+        CrewGuard::new(
+            true,
+            Arc::clone(&parts.alerter),
+            parts.pool.clone(),
+            parts.bot_user_id.clone(),
+            Arc::clone(&parts.account_age),
+            Arc::clone(&parts.crew_centroid),
+            false,
+        )
+        .with_impersonation(impersonation)
+    }
+
+    pub fn with_impersonation_guard(mut self, enabled: bool, bot_login: String) -> Self {
+        let guard = enabled.then(|| {
+            Arc::new(ImpersonationGuard::new(
+                GuardMode::Partner,
+                bot_login,
+                Arc::new(PartnerActions::new(
+                    Arc::clone(&self.parts.moderation),
+                    Arc::clone(&self.parts.api),
+                    Arc::new(DbManualPartnerOptOutCheck::new(self.parts.pool.clone())),
+                    self.parts.pool.clone(),
+                )),
+            ))
+        });
+        self.crew_guard = Arc::new(Self::crew_guard(&self.parts, guard));
+        self
     }
 
     /// Merkt sich eine Nachrichten-ID und meldet, ob sie neu war
@@ -1112,26 +1140,41 @@ impl ChatPipeline {
         // Schritt 8b: Feste Antworten ohne KI (Gruß kanalweit, Release-Frage
         // nur live). Trifft eine, entfallen die Deadlock-Detektoren.
         p.commands.remind_subscriber(event).await;
+        let follow_hint_sent = if tracked_was_first_message == Some(true) {
+            let follow_hint = Arc::clone(&p.follow_hint);
+            let event_for_step = event.clone();
+            let follow_channel = channel_login.clone();
+            run_pipeline_step("follow_hint", &channel_login, &chatter_login, async move {
+                follow_hint
+                    .maybe_send(&event_for_step, &follow_channel)
+                    .await
+            })
+            .await
+            .unwrap_or(false)
+        } else {
+            false
+        };
         let standard_replies = Arc::clone(&p.standard_replies);
         let event_for_step = event.clone();
         let standard_channel = channel_login.clone();
         let deadlock_live_for_standard = class.is_deadlock_live;
-        let standard_sent = run_pipeline_step(
-            "standard_replies",
-            &channel_login,
-            &chatter_login,
-            async move {
-                standard_replies
-                    .maybe_respond(
-                        &event_for_step,
-                        &standard_channel,
-                        deadlock_live_for_standard,
-                    )
-                    .await
-            },
-        )
-        .await
-        .unwrap_or(false);
+        let standard_sent = !follow_hint_sent
+            && run_pipeline_step(
+                "standard_replies",
+                &channel_login,
+                &chatter_login,
+                async move {
+                    standard_replies
+                        .maybe_respond(
+                            &event_for_step,
+                            &standard_channel,
+                            deadlock_live_for_standard,
+                        )
+                        .await
+                },
+            )
+            .await
+            .unwrap_or(false);
 
         // Schritt 9/10: Deadlock-live-Detektoren.
         if class.is_deadlock_live && !standard_sent {
@@ -2225,10 +2268,12 @@ mod tests {
             &self,
             _broadcaster_id: &str,
             _broadcaster_login: &str,
+            _target_login: Option<&str>,
         ) -> Result<RaidStartResult, String> {
             Ok(RaidStartResult {
                 status: "unavailable".to_string(),
                 target_login: None,
+                error: None,
             })
         }
 
@@ -2525,6 +2570,10 @@ mod tests {
             brain_chat: None,
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
             standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait), pool.clone())),
+            follow_hint: Arc::new(crate::follow_hint::FollowHint::new(
+                Arc::clone(&api_trait),
+                pool.clone(),
+            )),
             invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
@@ -2810,6 +2859,10 @@ mod tests {
             brain_chat: None,
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
             standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait), pool.clone())),
+            follow_hint: Arc::new(crate::follow_hint::FollowHint::new(
+                Arc::clone(&api_trait),
+                pool.clone(),
+            )),
             invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
                 invite_api_trait,
                 Arc::new(StaticInviteUrl),
@@ -3636,6 +3689,10 @@ mod tests {
             brain_chat: None,
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
             standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait), pool.clone())),
+            follow_hint: Arc::new(crate::follow_hint::FollowHint::new(
+                Arc::clone(&api_trait),
+                pool.clone(),
+            )),
             invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),

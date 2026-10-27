@@ -253,7 +253,7 @@ async fn race(erasure_first: bool) {
                 .map(|_| ())
         }
     });
-    wait_on_lock(&pool, (0x5c07_c0de_f001_i64 & 0xffff_ffff)).await;
+    wait_on_lock(&pool, 0x5c07_c0de_f001_i64 & 0xffff_ffff).await;
     pause.commit().await.unwrap();
     first.await.unwrap().unwrap();
     let second = second.await.unwrap();

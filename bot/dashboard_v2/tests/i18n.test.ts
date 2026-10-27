@@ -117,7 +117,7 @@ test('isLanguage erkennt nur gepflegte Sprachen', () => {
   assert.ok(isLanguage('en'));
   assert.ok(!isLanguage('fr'));
   assert.ok(!isLanguage(null));
-  assert.equal(LANGUAGE_STORAGE_KEY, 'dashboard.language');
+  assert.equal(LANGUAGE_STORAGE_KEY, 'dashboard.language.v2');
 });
 
 function withBrowser(
@@ -153,10 +153,11 @@ test('Existing area dictionaries are available without changing German', () => {
   }
 });
 
-test('Browser default follows the primary language when no choice is stored', () => {
+test('Browser default is German when any preferred language is German', () => {
   for (const [navigator, expected] of [
     [{ languages: ['de-AT', 'en-US'] }, 'de'],
-    [{ languages: ['en-US', 'de-DE'] }, 'en'],
+    [{ languages: ['en-US', 'de-DE'] }, 'de'],
+    [{ languages: ['en-US', 'fr-FR'] }, 'en'],
     [{ languages: [], language: 'de' }, 'de'],
     [{ language: 'fr-FR' }, 'en'],
     [{}, 'en'],

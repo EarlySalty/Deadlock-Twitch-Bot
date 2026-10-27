@@ -1441,6 +1441,8 @@ export interface CasterScenePlayer {
 export interface CasterSceneTeam {
   id?: string | null;
   name: string;
+  short?: string | null;
+  logoAssetId?: string | null;
   players: CasterScenePlayer[];
 }
 export interface CasterMatchContext {
@@ -1448,11 +1450,44 @@ export interface CasterMatchContext {
   teamB?: CasterSceneTeam | null;
   observerAccountId?: number | null;
 }
+export type CasterBuiltinEventLogo = 'wochenende' | 'community' | 'fun_turnier';
+export type CasterEventLogo =
+  | { kind: 'none' }
+  | { kind: 'builtin'; id: CasterBuiltinEventLogo }
+  | { kind: 'asset'; assetId: string };
+export interface CasterEvent {
+  logo: CasterEventLogo;
+  showBrand: boolean;
+}
+export interface CasterCountdown {
+  title: string;
+  target?: string | null;
+}
+export type CasterChatPosition = 'left' | 'right';
+export interface CasterChat {
+  enabled: boolean;
+  channel: string;
+  position: CasterChatPosition;
+}
 export interface CasterScene {
   roster: CasterPerson[];
   slots: Array<string | null>;
   layout: CasterLayout;
   matchContext: CasterMatchContext;
+  event: CasterEvent;
+  countdown: CasterCountdown;
+  sidesSwapped: boolean;
+  chat: CasterChat;
+}
+export type CasterAssetKind = 'team_logo' | 'event_logo' | 'brand';
+export interface CasterAsset {
+  id: string;
+  kind: CasterAssetKind;
+  name: string;
+  mime: string;
+  size: number;
+  createdAt: string;
+  url: string;
 }
 export interface CasterDocument { revision: number; scene: CasterScene }
 export interface CasterCamera {
@@ -1492,6 +1527,26 @@ export const fetchCasterCameras = async () => {
 };
 export const createCasterCamera = (ownerLogin: string, label: string) =>
   postAdminJson<CreatedCasterCamera, { ownerLogin: string; label: string }>('/caster-cameras', { ownerLogin, label });
+export const fetchCasterAssets = async (kind: CasterAssetKind) => {
+  const result = await admin<{ assets: CasterAsset[] }>(`/caster-overlay/assets?kind=${encodeURIComponent(kind)}`);
+  return result.assets ?? [];
+};
+export async function uploadCasterAsset(kind: CasterAssetKind, name: string, file: File): Promise<CasterAsset> {
+  const csrfToken = await resolveJsonCsrfToken({});
+  const query = `kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`;
+  return admin<CasterAsset>(`/caster-overlay/assets?${query}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': file.type || 'application/octet-stream', 'X-CSRF-Token': csrfToken },
+    body: file,
+  });
+}
+export async function deleteCasterAsset(assetId: string): Promise<{ deleted: string }> {
+  const csrfToken = await resolveJsonCsrfToken({});
+  return admin<{ deleted: string }>(`/caster-overlay/assets/${encodeURIComponent(assetId)}`, {
+    method: 'DELETE',
+    headers: { 'X-CSRF-Token': csrfToken },
+  });
+}
 export async function revokeCasterCamera(cameraId: string): Promise<{ ok: boolean; cameraId: string }> {
   const csrfToken = await resolveJsonCsrfToken({});
   return admin<{ ok: boolean; cameraId: string }>(`/caster-cameras/${encodeURIComponent(cameraId)}`, {
@@ -1525,3 +1580,37 @@ export interface GuildRaidSetting {
 export const fetchGuildRaidSettings = () => admin<GuildRaidSetting[]>('/config/guild-raids', { cache: 'no-store' });
 export const saveGuildRaidSetting = (setting: Pick<GuildRaidSetting, 'guild_id' | 'cross_server_raids'>) =>
   postAdminJson<GuildRaidSetting, typeof setting>('/config/guild-raids', setting);
+
+export interface SocialMediaRecordingSession {
+  id: string;
+  twitch_user_id: string;
+  twitch_login: string;
+  started_at: string;
+  last_chunk_at: string;
+  duration_seconds: number;
+  total_bytes: number;
+  chunk_count: number;
+  viewport_width: number | null;
+  viewport_height: number | null;
+  user_agent: string;
+}
+
+const RECORDINGS_PATH = '/social-media/recordings';
+
+export async function fetchSocialMediaRecordings(): Promise<SocialMediaRecordingSession[]> {
+  const data = await admin<{ items?: SocialMediaRecordingSession[] }>(RECORDINGS_PATH);
+  return coerceArray<SocialMediaRecordingSession>(data?.items);
+}
+
+export async function fetchSocialMediaRecordingEvents(sessionId: string): Promise<unknown[]> {
+  const chunks = await admin<unknown[][]>(`${RECORDINGS_PATH}/${encodeURIComponent(sessionId)}/events`);
+  return coerceArray<unknown[]>(chunks).flat();
+}
+
+export async function deleteSocialMediaRecording(sessionId: string): Promise<{ ok: boolean }> {
+  const csrfToken = await resolveJsonCsrfToken({});
+  return admin<{ ok: boolean }>(`${RECORDINGS_PATH}/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+    headers: { 'X-CSRF-Token': csrfToken },
+  });
+}

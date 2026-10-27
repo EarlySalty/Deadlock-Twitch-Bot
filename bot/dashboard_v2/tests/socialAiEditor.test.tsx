@@ -67,7 +67,7 @@ test('consent requires an explicit per-channel PUT and never invents a default',
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const restore = mockFetch({ external_ai_consent: false, global_allowed: false }, (url, init) => calls.push({ url, init }));
   try {
-    assert.deepEqual(await fetchAiConsent('11 22'), { external_ai_consent: false, global_allowed: false });
+    assert.deepEqual(await fetchAiConsent('11 22'), { external_ai_consent: false, global_allowed: false, provider_access: null });
     await saveAiConsent('11 22', true);
     assert.equal(calls[0].url, '/twitch/social-media/api/ai/consent?twitch_user_id=11+22');
     assert.equal(calls[0].init.credentials, 'same-origin');

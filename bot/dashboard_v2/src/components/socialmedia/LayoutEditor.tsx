@@ -313,7 +313,7 @@ function SourcePreview({ layout, camEnabled, selectedBox, onSelectBox, onBoxChan
     {
       id: 'game_crop',
       box: layout.game_crop,
-      label: t('Game-Ausschnitt'),
+      label: t('Spielausschnitt'),
       color: 'gold',
       interaction: 'free',
       aufBild,
@@ -411,7 +411,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
     ) : (
       <div className="absolute inset-0 flex items-center justify-center" style={{ background: GAME_PATTERN }}>
         <span className="text-white/80 text-[10px] font-bold uppercase tracking-[0.16em]">
-          {t('Game mittig, Rand verschwommen')}
+          {t('Spiel mittig, Rand verschwommen')}
         </span>
       </div>
     );
@@ -475,7 +475,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
   ) : (
     <div className="absolute inset-0 flex items-center justify-center" style={{ background: GAME_PATTERN }}>
       <span className="text-white/80 text-[10px] font-bold uppercase tracking-[0.16em]">
-        {isStacked && camEnabled ? t('Game') : t('Game füllt das Bild')}
+        {isStacked && camEnabled ? t('Spiel') : t('Spiel füllt das Bild')}
       </span>
     </div>
   );
@@ -659,7 +659,7 @@ export function LayoutEditor({
               }`}
             >
               <span className="inline-flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5 rotate-90" /> {t('Stacked')}
+                <Layers className="w-3.5 h-3.5 rotate-90" /> {t('Gestapelt')}
               </span>
             </button>
             <button
@@ -751,7 +751,7 @@ export function LayoutEditor({
                   : 'border-border text-text-secondary hover:text-white'
               }`}
             >
-              {t('Game-Ausschnitt')}
+              {t('Spielausschnitt')}
             </button>
             <button
               type="button"
@@ -795,7 +795,7 @@ export function LayoutEditor({
             {blurPad
               ? t('Blur-Rand: das Game liegt mittig, oben und unten ein verschwommener Rand. Ohne Cam.')
               : !camWirksam
-              ? t('Cam ist aus: das Game füllt das ganze Bild.')
+              ? t('Cam ist aus: Das Spiel füllt das ganze Bild.')
               : mode === 'pip'
               ? t('Cam-Kachel frei ziehen und an den Ecken skalieren: {box}.', {
                   box: formatBox(layout.cam_position),

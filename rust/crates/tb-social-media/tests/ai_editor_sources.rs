@@ -284,6 +284,8 @@ fn job_config(port: u16, binary: &Path) -> SttJobConfig {
         shutdown_deadline: Duration::from_secs(5),
         poll_interval: Duration::from_millis(250),
         max_upload_bytes: 25 * 1024 * 1024,
+        prompt: String::new(),
+        voice_filter: String::new(),
     }
 }
 

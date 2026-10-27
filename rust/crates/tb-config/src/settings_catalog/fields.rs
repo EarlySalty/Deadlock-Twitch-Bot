@@ -381,6 +381,11 @@ fn bot(b: &mut Builder) {
             "Weist im Chat auf die Mitspielersuche hin.",
         )
         .flag(
+            "bot.impersonation_guard_enabled",
+            "Schutz vor Nachahmern",
+            "Timeoutet Nachahmer der Community in Partner-Chats und warnt in fremden Chats vor ihnen.",
+        )
+        .flag(
             "bot.golive_tips_enabled",
             "Go-Live-Tipps",
             "Sendet Streamern Tipps beim Stream-Start.",
@@ -1576,7 +1581,7 @@ fn social_ai_provider(b: &mut Builder) {
             "Kostendeckel",
             "Gesamtbudget in Mikro-US-Dollar.",
             1,
-            2_000_000,
+            20_000_000,
         )
         .int(
             "social_ai.provider.pricing_version",
@@ -1720,6 +1725,13 @@ fn social_ai_runtime(b: &mut Builder) {
             "Bytes je Skill-Anweisung.",
             128,
             4_096,
+        )
+        .int(
+            "social_ai.runtime.analysis_fps",
+            "Bilder je Sekunde für die Analyse",
+            "So viele Standbilder je Sekunde landen gemeinsam auf einem Übersichtsbild.",
+            1,
+            16,
         );
 }
 

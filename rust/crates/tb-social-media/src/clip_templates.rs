@@ -1,13 +1,5 @@
-//! Clip-Beschreibungs-Templates + zuletzt genutzte Hashtags (Port der
-//! Template-Methoden aus `clip_manager.py`).
-//!
-//! Globale (Admin) + Streamer-Templates mit Platzhaltern
-//! (`{{title}}`/`{{streamer}}`/`{{game}}`), angewendet auf einen Clip. Hashtags
-//! liegen als JSON-String in TEXT-Spalten.
-
 use sqlx::{PgPool, Row};
 
-/// Globales Template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalTemplate {
     pub id: i64,
@@ -20,7 +12,6 @@ pub struct GlobalTemplate {
     pub created_by: Option<String>,
 }
 
-/// Streamer-Template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamerTemplate {
     pub id: i64,
@@ -42,7 +33,6 @@ fn dump_hashtags(hashtags: &[String]) -> String {
     serde_json::to_string(hashtags).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// Erstellt ein globales Template (Admin). Liefert die ID.
 pub async fn create_global_template(
     pool: &PgPool,
     template_name: &str,
@@ -66,7 +56,6 @@ pub async fn create_global_template(
     Ok(id)
 }
 
-/// Lädt globale Templates (optional kategorie-gefiltert).
 pub async fn get_global_templates(pool: &PgPool, category: Option<&str>) -> Vec<GlobalTemplate> {
     let base = "SELECT id, template_name, description_template, hashtags, category, usage_count, \
                 created_at::text, created_by FROM clip_templates_global";
@@ -106,8 +95,6 @@ pub async fn get_global_templates(pool: &PgPool, category: Option<&str>) -> Vec<
         .collect()
 }
 
-/// Erstellt oder aktualisiert ein Streamer-Template (Upsert nach
-/// streamer_login+template_name). `is_default` setzt andere Defaults zurück.
 pub async fn create_streamer_template(
     pool: &PgPool,
     twitch_user_id: &str,
@@ -147,7 +134,6 @@ pub async fn create_streamer_template(
     Ok(id)
 }
 
-/// Lädt alle Templates eines Streamers (Default zuerst).
 pub async fn get_streamer_templates(pool: &PgPool, twitch_user_id: &str) -> Vec<StreamerTemplate> {
     let rows = sqlx::query!(
         "SELECT id, streamer_login, template_name, COALESCE(description_template, '') AS \"description_template!\", \
@@ -173,8 +159,6 @@ pub async fn get_streamer_templates(pool: &PgPool, twitch_user_id: &str) -> Vec<
         .collect()
 }
 
-/// Wendet ein Template auf einen Clip an (Platzhalter substituieren, Clip
-/// updaten). Globale Templates erhöhen ihren `usage_count`.
 pub async fn apply_template_to_clip(
     pool: &PgPool,
     clip_id: impl Into<i64>,
@@ -245,18 +229,22 @@ pub async fn apply_template_to_clip(
         .map(|tag| tag.replace("{{game}}", &game_no_spaces))
         .collect();
 
-    sqlx::query!(
-        "UPDATE twitch_clips_social_media SET custom_description = $1, hashtags = $2 WHERE id = $3",
-        &description,
-        dump_hashtags(&hashtags),
-        clip_id
+    sqlx::query(
+        "UPDATE twitch_clips_social_media c SET
+         custom_description = CASE WHEN to_jsonb(c)->>'pool_managed_at' IS NULL
+             OR COALESCE(btrim(c.custom_description), '') = '' THEN $1 ELSE c.custom_description END,
+         hashtags = CASE WHEN to_jsonb(c)->>'pool_managed_at' IS NULL
+             OR COALESCE(btrim(c.hashtags), '') IN ('', '[]') THEN $2 ELSE c.hashtags END
+         WHERE c.id = $3",
     )
+    .bind(&description)
+    .bind(dump_hashtags(&hashtags))
+    .bind(clip_id)
     .execute(pool)
     .await
     .is_ok()
 }
 
-/// Speichert zuletzt genutzte Hashtags eines Streamers (Upsert).
 pub async fn save_last_hashtags(
     pool: &PgPool,
     twitch_user_id: &str,
@@ -364,7 +352,6 @@ mod tests {
         assert_eq!(list[0].id, tid);
         assert_eq!(list[0].hashtags, tags(&["#deadlock", "#{{game}}"]));
 
-        // Clip + apply.
         let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, clip_title, streamer_login, game_name) VALUES ('tpl-1', 'https://clips.test/tpl-1', 'Insane 1v3', 'nani', 'Dead Lock') RETURNING id").fetch_one(&pool).await.unwrap();
         assert!(apply_template_to_clip(&pool, clip, tid, true).await);
         let (desc, ht): (Option<String>, Option<String>) = sqlx::query_as(
@@ -375,12 +362,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(desc.as_deref(), Some("nani spielt Dead Lock: Insane 1v3"));
-        // {{game}} im Hashtag → ohne Leerzeichen.
         assert_eq!(
             parse_hashtags(ht.as_deref()),
             tags(&["#deadlock", "#DeadLock"])
         );
-        // usage_count erhöht.
         let uc: i32 =
             sqlx::query_scalar("SELECT usage_count FROM clip_templates_global WHERE id = $1")
                 .bind(tid)
@@ -398,16 +383,14 @@ mod tests {
         let id1 = create_streamer_template(&pool, "42", "main", "A", &tags(&["#a"]), true)
             .await
             .unwrap();
-        // Zweites Default → erstes wird zurückgesetzt.
         let id2 = create_streamer_template(&pool, "42", "alt", "B", &tags(&["#b"]), true)
             .await
             .unwrap();
         let list = get_streamer_templates(&pool, "42").await;
         assert_eq!(list.len(), 2);
-        assert_eq!(list[0].id, id2); // Default zuerst
+        assert_eq!(list[0].id, id2);
         assert!(list[0].is_default);
         assert!(!list.iter().find(|t| t.id == id1).unwrap().is_default);
-        // Upsert (gleicher Name) → Update, gleiche ID.
         let id1b = create_streamer_template(&pool, "42", "main", "A2", &tags(&["#a2"]), false)
             .await
             .unwrap();

@@ -5,7 +5,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tb_config::{stt::SttConfig, BotConfigSnapshot};
-use tb_llm::social_editor::{EditorConfig, SocialAiSection};
+use tb_llm::{
+    social_editor::{EditorConfig, SocialAiSection},
+    video_observer::{ObserverVariant, VideoObserverConfig},
+};
 
 use super::{brain::BrainRetrieveConfig, stt::SttJobConfig, PlanLimits, ResourceLimits};
 
@@ -30,6 +33,24 @@ pub struct RuntimeConfig {
     pub brain: Option<BrainRuntimeConfig>,
     #[serde(default)]
     pub revisions: RevisionLimits,
+    #[serde(default)]
+    pub video_observer: Option<VideoObserverConfig>,
+    #[serde(default)]
+    pub observer_variants: Vec<ObserverVariant>,
+    #[serde(default = "default_analysis_fps")]
+    pub analysis_fps: u32,
+}
+
+fn valid_variants(variants: &[ObserverVariant]) -> bool {
+    let mut labels = std::collections::HashSet::new();
+    variants.len() <= 12
+        && variants
+            .iter()
+            .all(|variant| variant.valid() && labels.insert(variant.active_label.as_str()))
+}
+
+fn default_analysis_fps() -> u32 {
+    4
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -83,6 +104,24 @@ pub struct SttRuntimeConfig {
     pub startup_deadline_ms: u64,
     pub shutdown_deadline_ms: u64,
     pub poll_interval_ms: u64,
+    #[serde(default = "default_stt_prompt")]
+    pub prompt: String,
+    #[serde(default = "default_voice_filter")]
+    pub voice_filter: String,
+}
+
+pub const VOICE_BAND_FILTER: &str = "highpass=f=200,lowpass=f=3500";
+
+fn default_stt_prompt() -> String {
+    "Deutsch, Deadlock, kein Problem, geparryt, parry, low, push, nice, ja".to_owned()
+}
+
+fn default_voice_filter() -> String {
+    VOICE_BAND_FILTER.to_owned()
+}
+
+fn plain_text(value: &str, max_bytes: usize) -> bool {
+    value.len() <= max_bytes && !value.chars().any(char::is_control)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -150,6 +189,23 @@ fn resolve(root: &Path, path: &Path) -> PathBuf {
         path.to_path_buf()
     } else {
         root.join(path)
+    }
+}
+
+fn stable_root(canonical: PathBuf) -> PathBuf {
+    let Some(releases) = canonical.parent() else {
+        return canonical;
+    };
+    if releases.file_name().is_none_or(|name| name != "releases") {
+        return canonical;
+    }
+    let Some(current) = releases.parent().map(|base| base.join("current")) else {
+        return canonical;
+    };
+    if current.canonicalize().ok().as_deref() == Some(canonical.as_path()) {
+        current
+    } else {
+        canonical
     }
 }
 
@@ -228,9 +284,11 @@ impl MediaRuntime {
         package_root: &Path,
         configuration: MediaConfiguration,
     ) -> Result<Self, super::AiEditorError> {
-        let root = package_root
-            .canonicalize()
-            .map_err(|_| super::AiEditorError::Configuration)?;
+        let root = stable_root(
+            package_root
+                .canonicalize()
+                .map_err(|_| super::AiEditorError::Configuration)?,
+        );
         validate_media(
             &configuration.source_root,
             &configuration.work_root,
@@ -333,6 +391,9 @@ impl RuntimeConfig {
             || !(1..=50).contains(&self.list_limit)
             || !(1024..=32_768).contains(&self.max_snapshot_bytes)
             || !(128..=4096).contains(&self.max_skill_bytes)
+            || !(1..=super::MAX_CONTACT_SHEET_FPS).contains(&self.analysis_fps)
+            || !plain_text(&self.stt.prompt, 1024)
+            || !plain_text(&self.stt.voice_filter, 256)
             || resources.max_frames > configuration.provider.max_frames
             || resources.max_frame_bytes > configuration.provider.max_frame_bytes as u64
             || resources.process_deadline_ms > self.job_deadline_ms
@@ -369,6 +430,10 @@ impl RuntimeConfig {
                 .brain
                 .as_ref()
                 .is_some_and(|brain| !brain.retrieval().validate())
+            || self.video_observer.as_ref().is_some_and(|observer| {
+                !observer.valid() || observer.total_deadline_ms >= self.job_deadline_ms
+            })
+            || !valid_variants(&self.observer_variants)
         {
             return Err(super::AiEditorError::Configuration);
         }
@@ -430,7 +495,10 @@ impl SttRuntimeConfig {
 
     pub fn job_config(&self) -> Result<SttJobConfig, super::AiEditorError> {
         Ok(SttJobConfig {
-            binary: self.binary.clone(),
+            binary: self
+                .binary
+                .canonicalize()
+                .map_err(|_| super::AiEditorError::Configuration)?,
             model_directory: self
                 .settings
                 .model_directory
@@ -446,6 +514,8 @@ impl SttRuntimeConfig {
             shutdown_deadline: Duration::from_millis(self.shutdown_deadline_ms),
             poll_interval: Duration::from_millis(self.poll_interval_ms),
             max_upload_bytes: self.settings.max_upload_bytes,
+            prompt: self.prompt.clone(),
+            voice_filter: self.voice_filter.clone(),
         })
     }
 }

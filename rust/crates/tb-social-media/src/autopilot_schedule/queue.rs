@@ -4,7 +4,7 @@ use serde_json::json;
 use sqlx::{PgConnection, PgPool};
 use std::collections::HashSet;
 
-use super::ScheduleError;
+use super::{reservations_on, reserve_on, Allocation, ScheduleError};
 use crate::autopilot_settings;
 
 async fn unstarted_on(
@@ -32,13 +32,15 @@ async fn reorder_on(
     if requested.len() != ids.len() || requested != actual {
         return Err(ScheduleError::QueueChanged);
     }
-    let mut slots: Vec<DateTime<Utc>> = jobs
-        .iter()
-        .filter(|job| job.2 == "autopilot")
-        .filter_map(|job| job.3)
-        .collect();
-    slots.sort_unstable();
-    let mut slots = slots.into_iter();
+    let mut allocations = Vec::new();
+    for job in jobs.iter().filter(|job| job.2 == "autopilot") {
+        if let Some(reference) = job.3 {
+            let slots = reservations_on(connection, job.0).await?;
+            allocations.extend([Allocation { reference, slots }]);
+        }
+    }
+    allocations.sort_by_key(|allocation| allocation.reference);
+    let mut allocations = allocations.into_iter();
     sqlx::query("UPDATE social_production_jobs SET scheduled_at = NULL
         WHERE twitch_user_id = $1 AND status = 'queued' AND started_at IS NULL AND source = 'autopilot'")
         .bind(owner).execute(&mut *connection).await?;
@@ -47,21 +49,18 @@ async fn reorder_on(
             .iter()
             .find(|job| job.0 == *id)
             .ok_or(ScheduleError::QueueChanged)?;
-        let slot = if job.2 == "autopilot" {
-            slots.next()
-        } else {
-            job.3
-        };
         sqlx::query(
-            "UPDATE social_production_jobs SET queue_order = $3, scheduled_at = $4
+            "UPDATE social_production_jobs SET queue_order = $3
             WHERE id = $1 AND twitch_user_id = $2 AND status = 'queued' AND started_at IS NULL",
         )
         .bind(id)
         .bind(owner)
         .bind(jobs[index].1)
-        .bind(slot)
         .execute(&mut *connection)
         .await?;
+        if job.2 == "autopilot" {
+            reserve_on(connection, owner, *id, allocations.next().as_ref()).await?;
+        }
     }
     Ok(())
 }
@@ -124,6 +123,7 @@ pub async fn cancel(pool: &PgPool, owner: &str, id: i64) -> Result<(), ScheduleE
         finished_at = NOW(), scheduled_at = NULL, metadata = metadata || '{\"selection_cancelled\":true}'::jsonb
         WHERE id = $1 AND twitch_user_id = $2")
         .bind(id).bind(owner).execute(&mut *tx).await?;
+    super::test_run::release_test_clip_on(&mut tx, owner, id).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -142,14 +142,7 @@ async fn clear_stale_slots_on(
     owner: &str,
     id: i64,
 ) -> Result<(), ScheduleError> {
-    sqlx::query(
-        "UPDATE social_produced_videos SET scheduled_at = NULL WHERE job_id = $1
-        AND twitch_user_id = $2 AND status IN ('rendering', 'failed', 'rejected', 'expired')",
-    )
-    .bind(id)
-    .bind(owner)
-    .execute(connection)
-    .await?;
+    crate::production_jobs::release_unfinished_slots_on(connection, owner, id).await?;
     Ok(())
 }
 
@@ -214,7 +207,7 @@ async fn discard_review_outputs_on(
     Ok(())
 }
 
-fn retry_metadata(mut metadata: serde_json::Value) -> serde_json::Value {
+pub(super) fn retry_metadata(mut metadata: serde_json::Value) -> serde_json::Value {
     if let Some(object) = metadata.as_object_mut() {
         object.remove("retry_after");
         object.remove("static");
@@ -253,7 +246,8 @@ async fn skip_on(
     .execute(&mut *connection)
     .await?;
     discard_review_outputs_on(connection, owner, id).await?;
-    clear_stale_slots_on(connection, owner, id).await
+    clear_stale_slots_on(connection, owner, id).await?;
+    super::test_run::release_test_clip_on(connection, owner, id).await
 }
 
 async fn process_on(

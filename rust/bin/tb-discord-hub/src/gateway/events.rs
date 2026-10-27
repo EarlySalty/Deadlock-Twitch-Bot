@@ -142,6 +142,15 @@ fn parse_setup_options(options: Option<&Value>) -> SetupOptions {
     parsed
 }
 
+impl std::fmt::Debug for SetupInteraction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetupInteraction")
+            .field("interaction_id", &self.interaction_id)
+            .field("guild_id", &self.guild_id)
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,14 +282,5 @@ mod tests {
             inter.options.invite.as_deref(),
             Some("https://discord.gg/abc")
         );
-    }
-}
-
-impl std::fmt::Debug for SetupInteraction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SetupInteraction")
-            .field("interaction_id", &self.interaction_id)
-            .field("guild_id", &self.guild_id)
-            .finish_non_exhaustive()
     }
 }

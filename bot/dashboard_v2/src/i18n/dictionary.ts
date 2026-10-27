@@ -22,7 +22,9 @@ export const LANGUAGES: Language[] = ['de', 'en'];
 
 export const DEFAULT_LANGUAGE: Language = 'de';
 
-export const LANGUAGE_STORAGE_KEY = 'dashboard.language';
+export const LANGUAGE_STORAGE_KEY = 'dashboard.language.v2';
+
+export const LEGACY_LANGUAGE_STORAGE_KEY = 'dashboard.language';
 
 /** Fuer toLocaleString & Co., damit Datum und Zahlen mitwandern. */
 export const LOCALES: Record<Language, string> = {
@@ -141,10 +143,10 @@ const EN: Record<string, string> = {
   'Die Übersicht ist nicht vollständig abrufbar. Bereits geladene Einträge bleiben sichtbar.': 'The overview could not be fully loaded. Entries already loaded remain visible.',
   'Keine passenden Clips verfügbar': 'No suitable clips available',
   'Wöchentliche Termine fehlen': 'No weekly slots configured',
-  'Eine Prüfung ist offen': 'A review is pending',
+  'Mehrere Prüfungen sind offen': 'Several reviews are pending',
   'Nächster Termin außerhalb des Vorlaufs': 'Next slot outside the production lead time',
   'Neue Produktionen pausiert': 'New productions paused',
-  '{productions} Produktionen & Videos · {clips} Clip-Freigaben': '{productions} productions & videos · {clips} clip approvals',
+  '{reviews} Videos & Aufträge · {clips} Clip-Freigaben': '{reviews} videos & jobs · {clips} clip approvals',
   'Video {id}': 'Video {id}',
   'Der Auto-Pilot wartet auf deine Aktion': 'The autopilot is waiting for your action',
   '{count} Produktionen & Videos prüfen': 'Review {count} productions & videos',
@@ -202,6 +204,7 @@ const EN: Record<string, string> = {
   // -- Seitenrahmen / App ------------------------------------------------
   'Dashboard-Fehler': 'Dashboard error',
   'Ein unerwarteter Fehler ist aufgetreten.': 'An unexpected error occurred.',
+  'Es gibt eine neue Version des Dashboards. Bitte lade die Seite neu.': 'A new version of the dashboard is available. Please reload the page.',
   'Erneut versuchen': 'Try again',
   'Demo-Daten': 'Demo data',
   'Nicht authentifiziert': 'Not authenticated',
@@ -318,9 +321,8 @@ const EN: Record<string, string> = {
   Öffnen: 'Open',
   'Clip-Queue': 'Clip queue',
   'Clips holen': 'Fetch clips',
-  Performance: 'Performance',
+  Kennzahlen: 'Metrics',
   Auswertung: 'Analytics',
-  'Social Studio': 'Social studio',
   'Repo-Default': 'Repo default',
   'Eigenes Layout': 'Custom layout',
   'Clips prüfen, Auto-Pilot steuern, Layout festlegen und Plattformen verwalten.':
@@ -356,7 +358,7 @@ const EN: Record<string, string> = {
   Arbeitsbereich: 'Workspace',
   'Kanal auswählen und verwalten': 'Select and manage a channel',
   'Streamer wählen': 'Select streamer',
-  'Game mittig, Rand verschwommen': 'Game centered, blurred edges',
+  'Spiel mittig, Rand verschwommen': 'Game centered, blurred edges',
   'Blur-Rand': 'Blurred edges',
   'Blur-Rand: das Game liegt mittig, oben und unten ein verschwommener Rand. Ohne Cam.':
     'Blurred edges: the game stays centered with a blurred edge above and below. No camera.',
@@ -512,12 +514,12 @@ const EN: Record<string, string> = {
   'Analytics je Clip und Plattform': 'Analytics per clip and platform',
   'Noch keine veröffentlichten Clips mit Plattform-ID vorhanden.':
     'No published clips with a platform ID yet.',
-  'Views nach Bucket': 'Views by bucket',
+  'Aufrufe nach Zeitraum': 'Views by period',
   'Engagement-Rate': 'Engagement rate',
   'LLM-Reports': 'LLM reports',
   Streamer: 'Streamer',
   'Wochenreport für {streamer}': 'Weekly report for {streamer}',
-  Cross: 'Cross',
+  Kanalübergreifend: 'Cross-channel',
   'Monatsreport über alle Streamer': 'Monthly report across all streamers',
   'Report wird generiert…': 'Generating report…',
   'Letzter Streamer-Report': 'Latest streamer report',
@@ -535,17 +537,16 @@ const EN: Record<string, string> = {
   'Der Ausschnitt gilt danach für alle Clips dieses Kanals.':
     'The crop then applies to every clip on this channel.',
   PiP: 'PiP',
-  Stacked: 'Stacked',
   'Cam an': 'Cam on',
   'Cam aus': 'Cam off',
   'Quelle · Twitch-Bild': 'Source · Twitch frame',
   'Was aus dem Twitch-Bild ausgeschnitten wird.': 'What gets cropped out of the Twitch frame.',
-  'Game-Ausschnitt': 'Game crop',
+  'Spielausschnitt': 'Game crop',
   'Cam-Ausschnitt': 'Cam crop',
   'Ziel · Hochformat 9:16': 'Target · portrait 9:16',
   'Wo der Cam-Ausschnitt im fertigen Video landet.':
     'Where the cam crop ends up in the finished video.',
-  'Cam ist aus: das Game füllt das ganze Bild.': 'Cam is off: the game fills the whole frame.',
+  'Cam ist aus: Das Spiel füllt das ganze Bild.': 'Cam is off: the game fills the whole frame.',
   'Cam-Kachel frei ziehen und an den Ecken skalieren: {box}.':
     'Drag the cam tile freely and scale it at the corners: {box}.',
   'Cam-Streifen oben, Höhe an der Unterkante ziehen: {height} von maximal {max} px.':
@@ -557,8 +558,7 @@ const EN: Record<string, string> = {
   'Twitch-Bild 16:9 · {width}×{height}': 'Twitch frame 16:9 · {width}×{height}',
   'Hochformat · {width}×{height}': 'Portrait · {width}×{height}',
   'Höhe {height}': 'Height {height}',
-  Game: 'Game',
-  'Game füllt das Bild': 'Game fills the frame',
+  'Spiel füllt das Bild': 'Game fills the frame',
   'Cam-Streifen': 'Cam band',
   'Cam-Kachel': 'Cam tile',
 
@@ -627,6 +627,8 @@ const EN: Record<string, string> = {
   'Zugang abgelaufen, bitte neu verbinden': 'Access expired, please reconnect',
   'nutzt die Sammelverbindung': 'uses the shared connection',
   'Verlängert sich automatisch.': 'Renews automatically.',
+  'VODs landen nur auf diesem Kanal, Clips weiter auf deinem YouTube-Konto.': 'VODs go only to this channel, clips stay on your YouTube account.',
+  'Optional: Ohne eigenen VOD-Kanal landen VODs auf deinem YouTube-Konto.': 'Optional: without a separate VOD channel, VODs go to your YouTube account.',
   'Bitte bis {datum} neu verbinden.': 'Please reconnect by {datum}.',
   'Neu verbinden': 'Reconnect',
   '{platform} für {streamer} trennen?': 'Disconnect {platform} for {streamer}?',
@@ -703,6 +705,8 @@ const EN: Record<string, string> = {
   'Twitch antwortet gerade nicht. Bitte später erneut versuchen.':
     'Twitch is not responding right now. Please try again later.',
   'Der Clip konnte nicht eingereiht werden.': 'The clip could not be queued.',
+  'Dieser Kanal veröffentlicht nur noch über den Autopiloten.': 'This channel now publishes only through the autopilot.',
+  'Für diesen Clip läuft auf dieser Plattform schon eine Veröffentlichung.': 'A publication for this clip on this platform is already in progress.',
   'Der Report konnte nicht erzeugt werden.': 'The report could not be generated.',
   'Die Datei ist zu groß, höchstens 200 MB.': 'The file is too large, 200 MB at most.',
   'Falsches Dateiformat, bitte eine MP4 wählen.': 'Wrong file format, please pick an MP4.',
@@ -799,14 +803,20 @@ export function isLanguage(value: unknown): value is Language {
   return value === 'de' || value === 'en';
 }
 
-function readPersistedLanguage(): Language | null {
+function readStorage(key: string): string | null {
   if (typeof window === 'undefined') return null;
   try {
-    const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-    return isLanguage(stored) ? stored : null;
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }
+}
+
+function readPersistedLanguage(): Language | null {
+  const stored = readStorage(LANGUAGE_STORAGE_KEY);
+  if (isLanguage(stored)) return stored;
+  if (isEnglishDashboardHost()) return null;
+  return readStorage(LEGACY_LANGUAGE_STORAGE_KEY) === null ? null : 'de';
 }
 
 export function readStoredLanguage(): Language {
@@ -815,8 +825,10 @@ export function readStoredLanguage(): Language {
 
 export function browserLanguage(): Language {
   if (typeof window === 'undefined' || !window.navigator) return DEFAULT_LANGUAGE;
-  const primary = window.navigator.languages?.[0] ?? window.navigator.language ?? '';
-  return primary.toLowerCase().startsWith('de') ? 'de' : 'en';
+  const preferred = window.navigator.languages?.length
+    ? window.navigator.languages
+    : [window.navigator.language ?? ''];
+  return preferred.some((locale) => locale.toLowerCase().startsWith('de')) ? 'de' : 'en';
 }
 
 export function isEnglishDashboardHost(): boolean {

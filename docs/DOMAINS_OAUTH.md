@@ -10,7 +10,7 @@ OAuth starts and callbacks, including `/twitch/auth/*`, `/callback/*`, raid auth
 
 ## Language and navigation
 
-Resolution order is valid `lang=en|de` query, saved `dashboard.language` choice, English-host default, then the existing browser-language fallback. The provider saves valid query hints and removes only `lang` from the current URL, retaining other parameters and the fragment. Main-domain language behavior otherwise stays unchanged.
+Resolution order is valid `lang=en|de` query, saved `dashboard.language.v2` choice, a legacy `dashboard.language` value (reset to German on the main domain, ignored on the English host), English-host default, then the browser fallback (German when any preferred browser language is German, otherwise English). The provider saves the resolved language on every load, so the first-visit detection runs only once. It removes only `lang` from the current URL, retaining other parameters and the fragment.
 
 Website host detection selects English on both English hosts for every built entry, including legacy and affiliate entries, unless `lang=de` is explicit. Main-domain language defaults are unchanged. W1/W2 supply the existing translations; this routing package does not add translations to legacy pages.
 

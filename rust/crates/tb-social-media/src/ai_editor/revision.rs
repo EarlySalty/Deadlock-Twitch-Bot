@@ -473,6 +473,288 @@ pub(super) async fn reanalysis_estimate(
         .map(Option::flatten)
 }
 
-pub(super) fn request_context(request: &RevisionRequest, base: &Planning) -> Value {
-    json!({"feedback":request.feedback,"previous":base,"reanalysis_confirmed":request.reanalysis_confirmed,"instruction":"Interpret feedback as a bounded edit of saved analysis. Set reanalyze=true only if new visual understanding is necessary and not yet authorized. Mark substantial changes for confirmation. Subtitle size may change only through subtitle_scale_percent. Preserve real speech and its language, stable layout and original audio. Explain unsupported layout, creative or speech-rewriting requests honestly in the summary; never fabricate commands or cost estimates. Return a complete main plan and no extra variants for ordinary revisions."})
+pub(super) fn changes_output(base: &Planning, next: &Planning, clip_title: &str) -> bool {
+    output_identity(base, clip_title) != output_identity(next, clip_title)
+}
+
+fn output_identity(planning: &Planning, clip_title: &str) -> Value {
+    let cut = |plan: &super::EditPlan| {
+        plan.kept_intervals
+            .iter()
+            .map(|interval| (interval.start_ms, interval.end_ms))
+            .collect::<Vec<_>>()
+    };
+    let hook = |plan: &super::EditPlan| {
+        plan.hook
+            .as_ref()
+            .map(|interval| (interval.start_ms, interval.end_ms))
+    };
+    json!({
+        "cut": cut(&planning.plan),
+        "hook": hook(&planning.plan),
+        "subtitles": planning.subtitles_enabled.then_some(planning.subtitle_scale_percent),
+        "overlay": planning.overlay_title.resolve(clip_title),
+        "platforms": planning.platforms,
+        "variants": planning.variants.iter().map(|variant| json!({
+            "cut": cut(&variant.plan),
+            "hook": hook(&variant.plan),
+            "subtitles": variant.subtitles_enabled.then_some(variant.subtitle_scale_percent),
+            "overlay": variant.overlay_title.resolve(clip_title),
+            "platforms": variant.platforms,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+pub(super) const REVISION_INSTRUCTION: &str = "Interpret feedback as a bounded edit of saved analysis. Set reanalyze=true only if new visual understanding is necessary and not yet authorized. Mark substantial changes for confirmation. The video shows exactly two kinds of text and each has its own control. Speech captions are the burned-in lines of the real speech in the lower part of the picture during the whole video: subtitles_enabled switches them on or off and subtitle_scale_percent only changes their size. The hook title is the large text at the very start of the video, previous_overlay_text shows what the previous version displayed: overlay_title controls it (mode clip_title shows clip_title, custom shows text, none shows no title). Map the feedback like this. Untertitel, Untertitel entfernen, subtitle, subtitles, caption, captions or the spoken words mean the speech captions: set subtitles_enabled=false to remove them or change subtitle_scale_percent to resize them. Titel, title, hook title, Überschrift or the big text at the start mean overlay_title. Kein Text, ohne Text, alle Texte entfernen, no text, remove every text or remove all text mean both: set subtitles_enabled=false and overlay_title.mode=none; the small channel name stays as source credit and cannot be removed, so say that in impact. Ambiguous wording about subtitles or captions always targets the speech captions and never the title; change the title only when the feedback names the title or all text. Keep every element the feedback does not mention exactly as in previous. kept_intervals and hook control the cut and the teaser. A cut the feedback asks for, such as starting later, ending earlier, making the video shorter or cutting after a moment, takes precedence over the analysis highlights: apply it to kept_intervals even when it removes part of a highlight. Start and end requests refer to the first and last kept interval of previous. The output length is the kept intervals plus the hook, so for a shorter video also shorten or drop the hook, and keep the hook inside the kept footage. Caption wording cannot change because it is the real speech; preserve real speech and its language, stable layout and original audio. The server derives the list of changes from the real difference between previous and your plan and shows it to the user, so summary only needs a short note. Use impact to explain in German in one or two plain sentences what the change means for the video, or what could not be done and why, and never claim an edit that your returned plan does not contain. If nothing of the requested change can be done, return the previous plan unchanged and explain in impact what could not be done and why; no new version is produced then. Explain unsupported layout, creative or speech-rewriting requests honestly; never fabricate commands or cost estimates. Return a complete main plan and no extra variants for ordinary revisions. previous.plan leaves out review_reasons and lists observed_highlights only by time; write each observation from the analysis.highlights entry that overlaps it.";
+
+pub(super) fn request_context(
+    request: &RevisionRequest,
+    base: &Planning,
+    clip_title: &str,
+) -> Value {
+    json!({"feedback":request.feedback,"previous":compact_previous(base),"previous_overlay_text":base.overlay_title.resolve(clip_title),"reanalysis_confirmed":request.reanalysis_confirmed,"instruction":REVISION_INSTRUCTION})
+}
+
+fn compact_previous(base: &Planning) -> Value {
+    let highlights = base
+        .plan
+        .observed_highlights
+        .iter()
+        .map(|highlight| json!({"start_ms": highlight.start_ms, "end_ms": highlight.end_ms}))
+        .collect::<Vec<_>>();
+    let mut plan = json!(base.plan);
+    if let Some(plan) = plan.as_object_mut() {
+        plan.remove("review_reasons");
+        plan.insert("observed_highlights".into(), Value::Array(highlights));
+    }
+    let mut previous = json!({"plan": plan, "platforms": base.platforms, "subtitle_scale_percent": base.subtitle_scale_percent, "overlay_title": base.overlay_title, "subtitles_enabled": base.subtitles_enabled});
+    if !base.variants.is_empty() {
+        previous["variants"] = json!(base.variants);
+    }
+    previous
+}
+
+pub(super) fn plan_changes(base: &Planning, next: &Planning, clip_title: &str) -> Vec<String> {
+    let mut changes = Vec::new();
+    match (base.subtitles_enabled, next.subtitles_enabled) {
+        (true, false) => changes.push("Untertitel ausgeblendet".to_owned()),
+        (false, true) => changes.push("Untertitel wieder eingeblendet".to_owned()),
+        (true, true) if base.subtitle_scale_percent != next.subtitle_scale_percent => {
+            changes.push(format!(
+                "Untertitelgröße von {} % auf {} % geändert",
+                base.subtitle_scale_percent, next.subtitle_scale_percent
+            ))
+        }
+        _ => {}
+    }
+    let raw_before = base.overlay_title.resolve(clip_title);
+    let raw_after = next.overlay_title.resolve(clip_title);
+    if raw_before != raw_after {
+        let (before, after) = (one_line(&raw_before), one_line(&raw_after));
+        changes.push(match (before.is_empty(), after.is_empty()) {
+            (false, true) => format!("Titel „{before}“ entfernt"),
+            (true, false) => format!("Titel „{after}“ eingeblendet"),
+            _ if before == after => "Titel geändert".to_owned(),
+            _ => format!("Titel von „{before}“ auf „{after}“ geändert"),
+        });
+    }
+    let old = output_identity(base, clip_title);
+    let new = output_identity(next, clip_title);
+    if old["cut"] != new["cut"] {
+        changes.extend(cut_changes(&base.plan, &next.plan));
+    }
+    if old["hook"] != new["hook"] {
+        let hook = match (old["hook"].is_null(), new["hook"].is_null()) {
+            (true, false) => "Vorschau am Anfang hinzugefügt",
+            (false, true) => "Vorschau am Anfang entfernt",
+            _ => "Vorschau am Anfang geändert",
+        };
+        changes.push(hook.to_owned());
+    }
+    if old["platforms"] != new["platforms"] {
+        changes.push("Plattformtexte geändert".to_owned());
+    }
+    if old["variants"] != new["variants"] {
+        changes.push("Zusätzliche Fassungen geändert".to_owned());
+    }
+    changes
+}
+
+const CHANNEL_NOTE: &str = "Der Kanalname bleibt als Quellenangabe eingeblendet.";
+
+pub(super) fn revision_summary(
+    base: &Planning,
+    next: &Planning,
+    clip_title: &str,
+    max_bytes: usize,
+) -> String {
+    let only_channel_left =
+        !next.subtitles_enabled && next.overlay_title.resolve(clip_title).trim().is_empty();
+    let length = (cut_identity(&base.plan) != cut_identity(&next.plan))
+        .then(|| format!("jetzt {} s lang", seconds(output_ms(&next.plan))));
+    change_summary(
+        &plan_changes(base, next, clip_title),
+        length.as_deref(),
+        only_channel_left.then_some(CHANNEL_NOTE),
+        max_bytes,
+    )
+}
+
+const UNCHANGED_VERSION: &str = "Die bisherige Fassung bleibt unverändert.";
+
+pub(super) fn rejected_proposal(reason: &str, max_bytes: usize) -> RevisionProposal {
+    let full = format!("{reason} {UNCHANGED_VERSION}");
+    let summary = if full.len() <= max_bytes {
+        full
+    } else {
+        truncate_to(reason, max_bytes)
+    };
+    RevisionProposal {
+        summary,
+        impact: String::new(),
+        reanalyze: false,
+        requires_confirmation: false,
+        estimated_provider_cost_usd: Some(0.0),
+    }
+}
+
+fn output_ms(plan: &super::EditPlan) -> u64 {
+    plan.kept_intervals
+        .iter()
+        .chain(&plan.hook)
+        .map(|interval| interval.end_ms.saturating_sub(interval.start_ms))
+        .sum()
+}
+
+type CutIdentity = (Vec<(u64, u64)>, Option<(u64, u64)>);
+
+fn cut_identity(plan: &super::EditPlan) -> CutIdentity {
+    let bounds = |interval: &super::KeptInterval| (interval.start_ms, interval.end_ms);
+    (
+        plan.kept_intervals.iter().map(bounds).collect(),
+        plan.hook.as_ref().map(bounds),
+    )
+}
+
+fn seconds(ms: u64) -> String {
+    let tenths = ms.saturating_add(50) / 100;
+    match tenths % 10 {
+        0 => format!("{}", tenths / 10),
+        rest => format!("{},{rest}", tenths / 10),
+    }
+}
+
+fn shift(label: &str, from_ms: u64, to_ms: u64) -> Option<String> {
+    let amount = from_ms.abs_diff(to_ms);
+    if amount < 100 {
+        return None;
+    }
+    let value = seconds(amount);
+    let unit = if value == "1" { "Sekunde" } else { "Sekunden" };
+    let direction = if to_ms > from_ms {
+        "später"
+    } else {
+        "früher"
+    };
+    Some(format!("{label} {value} {unit} {direction}"))
+}
+
+fn cut_changes(base: &super::EditPlan, next: &super::EditPlan) -> Vec<String> {
+    let edges = |plan: &super::EditPlan| {
+        plan.kept_intervals
+            .first()
+            .zip(plan.kept_intervals.last())
+            .map(|(first, last)| (first.start_ms, last.end_ms))
+    };
+    let (Some((base_start, base_end)), Some((next_start, next_end))) = (edges(base), edges(next))
+    else {
+        return vec!["Schnitt geändert".to_owned()];
+    };
+    let mut changes = [
+        shift("Start", base_start, next_start),
+        shift("Ende", base_end, next_end),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let inner = |plan: &super::EditPlan| {
+        let mut bounds = cut_identity(plan).0;
+        if let Some(first) = bounds.first_mut() {
+            first.0 = 0;
+        }
+        if let Some(last) = bounds.last_mut() {
+            last.1 = 0;
+        }
+        bounds
+    };
+    if inner(base) != inner(next) {
+        let label = if changes.is_empty() {
+            "Schnitt geändert"
+        } else {
+            "Mittelteil neu geschnitten"
+        };
+        changes.push(label.to_owned());
+    }
+    if changes.is_empty() {
+        changes.push("Schnitt geändert".to_owned());
+    }
+    changes
+}
+
+pub(super) fn change_summary(
+    changes: &[String],
+    length: Option<&str>,
+    note: Option<&str>,
+    max_bytes: usize,
+) -> String {
+    let tail = length.map(|text| format!(", {text}")).unwrap_or_default();
+    let sentence = |items: &[String]| match items {
+        [] => "Am Video wurde nichts geändert.".to_owned(),
+        [only] => format!("Geändert: {only}{tail}."),
+        [rest @ .., last] => format!("Geändert: {} und {last}{tail}.", rest.join(", ")),
+    };
+    let bases = if changes.is_empty() {
+        vec![sentence(changes), "Nichts geändert.".to_owned()]
+    } else {
+        let compact = changes
+            .iter()
+            .map(|change| {
+                if change.starts_with("Titel ") {
+                    "Titel geändert".to_owned()
+                } else {
+                    change.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        vec![
+            sentence(changes),
+            sentence(&compact),
+            "Video geändert.".to_owned(),
+        ]
+    };
+    let mut candidates = bases
+        .iter()
+        .filter_map(|base| note.map(|note| format!("{base} {note}")))
+        .chain(bases.iter().cloned());
+    let shortest = bases.last().cloned().unwrap_or_default();
+    candidates
+        .find(|candidate| candidate.len() <= max_bytes)
+        .unwrap_or_else(|| truncate_to(&shortest, max_bytes))
+}
+
+fn truncate_to(text: &str, max_bytes: usize) -> String {
+    let mut end = text.len().min(max_bytes);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].trim_end().to_owned()
+}
+
+fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }

@@ -18,7 +18,7 @@ Es gibt **zwei Hosts**, die auf **dasselbe** Backend (`tb-dashboard`, `127.0.0.1
 
 | Host | Rolle | `/twitch/analyse`, `/twitch/social-media`, generisches `/twitch/*` |
 |------|-------|------------------------------------------------------|
-| `deutsche-deadlock-community.de` | öffentlich / Partner | **erlaubt** |
+| `deutsche-deadlock-community.de` | öffentlich / Partner | **erlaubt** (`/twitch/demo`, `/twitch/rundgang` inklusive) |
 | `admin.deutsche-deadlock-community.de` | Admin-Dashboard | **bewusst 404** |
 
 Caddy unterscheidet die beiden über den weitergereichten `Host`-Header

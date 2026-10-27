@@ -104,7 +104,6 @@ pub async fn finish(completion: Completion) {
         tracing::error!(recovery = %recovery, "LLM_USAGE_RECOVERY: Abschluss aus dem Journal nachliefern");
     }
 }
-/// Idempotente Wiederaufnahme eines Abschlusses aus LLM_USAGE_RECOVERY.
 pub async fn recover(c: &Completion) -> Result<(), RecoveryError> {
     let pool = POOL.get().ok_or(RecoveryError)?;
     let (project, service) = IDENTITY.get().ok_or(RecoveryError)?;
@@ -126,6 +125,57 @@ pub struct Recovery {
     pub service: String,
     pub completion: Completion,
 }
+pub const PROVIDER_REJECTED_UNBILLED: &str = "provider_rejected_unbilled";
+pub const SUBSCRIPTION_INCLUDED: &str = "subscription_included";
+pub const SUBSCRIPTION_PROVIDER: &str = "claude_subscription";
+
+pub fn is_rejected_client_status(status: i32) -> bool {
+    (400..500).contains(&status) && status != 408 && status != 429
+}
+
+fn social_accounting_valid(c: &Completion, social: &SocialAccounting) -> bool {
+    if social.cost_basis == SUBSCRIPTION_INCLUDED {
+        return social.reserved_micro_usd == 0
+            && social.estimated_micro_usd == Some(0)
+            && c.http_status.is_none()
+            && [
+                c.tokens_in,
+                c.tokens_out,
+                c.total,
+                social.cache_creation_input_tokens,
+                social.cache_read_input_tokens,
+            ]
+            .iter()
+            .all(|count| count.is_none_or(|n| n >= 0));
+    }
+    if social.reserved_micro_usd <= 0
+        || social.cache_creation_input_tokens.is_some_and(|n| n < 0)
+        || social.cache_read_input_tokens.is_some_and(|n| n < 0)
+    {
+        return false;
+    }
+    if social.cost_basis == PROVIDER_REJECTED_UNBILLED {
+        return !c.success
+            && social.estimated_micro_usd == Some(0)
+            && c.tokens_in.is_none()
+            && c.tokens_out.is_none()
+            && c.total.is_none()
+            && social.cache_creation_input_tokens.is_none()
+            && social.cache_read_input_tokens.is_none()
+            && c.http_status.is_some_and(is_rejected_client_status);
+    }
+    social.estimated_micro_usd.is_none_or(|n| n > 0)
+        && social.cost_basis
+            == if social
+                .estimated_micro_usd
+                .is_some_and(|n| c.success || n > social.reserved_micro_usd)
+            {
+                "usage_priced_estimate"
+            } else {
+                "reserved_upper_bound"
+            }
+}
+
 pub async fn recover_with_pool(
     pool: &PgPool,
     c: &Completion,
@@ -134,49 +184,42 @@ pub async fn recover_with_pool(
 ) -> Result<(), RecoveryError> {
     let state = if c.success { "succeeded" } else { "failed" };
     if let Some(social) = &c.social_accounting {
-        if social.reserved_micro_usd <= 0
-            || social.estimated_micro_usd.is_some_and(|n| n <= 0)
-            || social.cache_creation_input_tokens.is_some_and(|n| n < 0)
-            || social.cache_read_input_tokens.is_some_and(|n| n < 0)
-            || social.cost_basis
-                != if social
-                    .estimated_micro_usd
-                    .is_some_and(|n| c.success || n > social.reserved_micro_usd)
-                {
-                    "usage_priced_estimate"
-                } else {
-                    "reserved_upper_bound"
-                }
-        {
+        if !social_accounting_valid(c, social) {
             return Err(RecoveryError);
         }
-        let result = sqlx::query("UPDATE public.llm_usage SET tokens_in=$2,tokens_out=$3,total=$4,success=$5,attempt_state=$6,request_id=$7,error_code=$8,http_status=$9,latency_ms=$10,finished_at=now(),estimated_micro_usd=$11,cost_basis=$12,cache_creation_input_tokens=$13,cache_read_input_tokens=$14 WHERE id=$1 AND attempt_state='started' AND project=$15 AND service=$16 AND purpose='social_editor' AND provider='anthropic' AND reserved_micro_usd=$17")
+        let provider = if social.cost_basis == SUBSCRIPTION_INCLUDED {
+            SUBSCRIPTION_PROVIDER
+        } else {
+            "anthropic"
+        };
+        let result = sqlx::query("UPDATE public.llm_usage SET tokens_in=$2,tokens_out=$3,total=$4,success=$5,attempt_state=$6,request_id=$7,error_code=$8,http_status=$9,latency_ms=$10,finished_at=now(),estimated_micro_usd=$11,cost_basis=$12,cache_creation_input_tokens=$13,cache_read_input_tokens=$14 WHERE id=$1 AND attempt_state='started' AND project=$15 AND service=$16 AND purpose='social_editor' AND provider=$18 AND reserved_micro_usd=$17")
             .bind(c.id).bind(c.tokens_in).bind(c.tokens_out).bind(c.total)
             .bind(i64::from(c.success)).bind(state).bind(&c.request_id).bind(&c.error_code)
             .bind(c.http_status).bind(c.latency_ms).bind(social.estimated_micro_usd)
             .bind(&social.cost_basis).bind(social.cache_creation_input_tokens)
             .bind(social.cache_read_input_tokens).bind(project).bind(service)
-            .bind(social.reserved_micro_usd)
+            .bind(social.reserved_micro_usd).bind(provider)
             .execute(pool).await.map_err(|_| RecoveryError)?;
         if result.rows_affected() == 1 {
             return Ok(());
         }
-        let matching: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM public.llm_usage WHERE id=$1 AND project=$2 AND service=$3 AND purpose='social_editor' AND provider='anthropic' AND reserved_micro_usd=$4 AND attempt_state=$5 AND success=$6 AND tokens_in IS NOT DISTINCT FROM $7 AND tokens_out IS NOT DISTINCT FROM $8 AND total IS NOT DISTINCT FROM $9 AND request_id IS NOT DISTINCT FROM $10 AND error_code IS NOT DISTINCT FROM $11 AND http_status IS NOT DISTINCT FROM $12 AND latency_ms=$13 AND estimated_micro_usd IS NOT DISTINCT FROM $14 AND cost_basis=$15 AND cache_creation_input_tokens IS NOT DISTINCT FROM $16 AND cache_read_input_tokens IS NOT DISTINCT FROM $17)")
+        let matching: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM public.llm_usage WHERE id=$1 AND project=$2 AND service=$3 AND purpose='social_editor' AND provider=$18 AND reserved_micro_usd=$4 AND attempt_state=$5 AND success=$6 AND tokens_in IS NOT DISTINCT FROM $7 AND tokens_out IS NOT DISTINCT FROM $8 AND total IS NOT DISTINCT FROM $9 AND request_id IS NOT DISTINCT FROM $10 AND error_code IS NOT DISTINCT FROM $11 AND http_status IS NOT DISTINCT FROM $12 AND latency_ms=$13 AND estimated_micro_usd IS NOT DISTINCT FROM $14 AND cost_basis=$15 AND cache_creation_input_tokens IS NOT DISTINCT FROM $16 AND cache_read_input_tokens IS NOT DISTINCT FROM $17)")
             .bind(c.id).bind(project).bind(service).bind(social.reserved_micro_usd)
             .bind(state).bind(i64::from(c.success)).bind(c.tokens_in).bind(c.tokens_out)
             .bind(c.total).bind(&c.request_id).bind(&c.error_code).bind(c.http_status)
             .bind(c.latency_ms).bind(social.estimated_micro_usd).bind(&social.cost_basis)
             .bind(social.cache_creation_input_tokens).bind(social.cache_read_input_tokens)
+            .bind(provider)
             .fetch_one(pool).await.map_err(|_| RecoveryError)?;
         return if matching { Ok(()) } else { Err(RecoveryError) };
     }
-    let result = sqlx::query("UPDATE public.llm_usage SET tokens_in=$2,tokens_out=$3,total=$4,success=$5,attempt_state=$6,request_id=$7,error_code=$8,http_status=$9,latency_ms=$10,finished_at=now(),model=COALESCE($13,model) WHERE id=$1 AND attempt_state='started' AND project=$11 AND service=$12 AND (purpose IS DISTINCT FROM 'social_editor' OR provider IS DISTINCT FROM 'anthropic')")
+    let result = sqlx::query("UPDATE public.llm_usage SET tokens_in=$2,tokens_out=$3,total=$4,success=$5,attempt_state=$6,request_id=$7,error_code=$8,http_status=$9,latency_ms=$10,finished_at=now(),model=COALESCE($13,model) WHERE id=$1 AND attempt_state='started' AND project=$11 AND service=$12 AND (purpose IS DISTINCT FROM 'social_editor' OR provider IS NULL OR provider NOT IN ('anthropic','claude_subscription'))")
         .bind(c.id).bind(c.tokens_in).bind(c.tokens_out).bind(c.total)
         .bind(i64::from(c.success)).bind(state)
         .bind(&c.request_id).bind(&c.error_code).bind(c.http_status).bind(c.latency_ms).bind(project).bind(service).bind(&c.model)
         .execute(pool).await.map_err(|_| RecoveryError)?;
     if result.rows_affected() == 0 {
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM public.llm_usage WHERE id=$1 AND project=$2 AND service=$3 AND attempt_state IN ('succeeded','failed') AND (purpose IS DISTINCT FROM 'social_editor' OR provider IS DISTINCT FROM 'anthropic'))")
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM public.llm_usage WHERE id=$1 AND project=$2 AND service=$3 AND attempt_state IN ('succeeded','failed') AND (purpose IS DISTINCT FROM 'social_editor' OR provider IS NULL OR provider NOT IN ('anthropic','claude_subscription')))")
             .bind(c.id).bind(project).bind(service).fetch_one(pool).await.map_err(|_| RecoveryError)?;
         if !exists {
             return Err(RecoveryError);

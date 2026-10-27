@@ -1,0 +1,17 @@
+Baseline 14bc1f47
+not ok 1 - kein Hex-Wert ausserhalb der Industrial-Gold-Palette
+not ok 2 - keine Tailwind-Standardfarben (die ueberleben jeden Farb-Remap)
+not ok 3 - kein weisser Text auf heller Markenflaeche
+not ok 30 - der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite
+# tests 48
+# pass 44
+# fail 4
+
+Vorschau
+not ok 1 - kein Hex-Wert ausserhalb der Industrial-Gold-Palette
+not ok 2 - keine Tailwind-Standardfarben (die ueberleben jeden Farb-Remap)
+not ok 3 - kein weisser Text auf heller Markenflaeche
+not ok 30 - der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite
+# tests 48
+# pass 44
+# fail 4

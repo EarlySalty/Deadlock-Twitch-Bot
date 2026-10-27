@@ -16,7 +16,8 @@
 
 use axum::{
     extract::Query,
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderValue, Method, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
@@ -59,8 +60,7 @@ fn with_demo_csp(mut resp: Response) -> Response {
 
 // ── HTML-/Asset-Serving (geteilter Dist mit /analyse) ────────────────────────
 
-/// `GET /twitch/demo` (+ `/twitch/demo/`) — SPA-Shell im Demo-Modus.
-pub async fn demo_index_handler() -> Response {
+async fn serve_demo_index(asset_prefix: &str) -> Response {
     let index = spa::dist_root().join("index.html");
     let html = match tokio::fs::read_to_string(&index).await {
         Ok(s) => s,
@@ -74,11 +74,59 @@ pub async fn demo_index_handler() -> Response {
             )
         }
     };
-    // Asset-Prefix auf den Demo-Pfad umschreiben + Demo-Runtime injizieren.
     let html = html
-        .replace("/twitch/dashboard-v2/", "/twitch/demo/dashboard-v2/")
+        .replace("/twitch/dashboard-v2/", asset_prefix)
         .replacen("</head>", &format!("{DEMO_RUNTIME_SCRIPT}\n  </head>"), 1);
     with_demo_csp(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
+}
+
+/// `GET /twitch/demo` (+ `/twitch/demo/`) — SPA-Shell im Demo-Modus.
+pub async fn demo_index_handler() -> Response {
+    serve_demo_index("/twitch/demo/dashboard-v2/").await
+}
+
+pub async fn rundgang_index_handler() -> Response {
+    serve_demo_index("/twitch/rundgang/dashboard-v2/").await
+}
+
+const RUNDGANG_PAGES: &[&str] = &[
+    "dashboard",
+    "analyse",
+    "social-media",
+    "uplink",
+    "verwaltung",
+    "overlay",
+    "titel",
+    "pricing",
+    "feedback",
+    "hilfe",
+    "challenges",
+];
+
+fn is_rundgang_page(path: &str) -> bool {
+    let page = path.trim_matches('/');
+    RUNDGANG_PAGES.contains(&page) || page.starts_with("social-media/")
+}
+
+pub async fn rundgang_page_handler(
+    axum::extract::Path(page_path): axum::extract::Path<String>,
+) -> Response {
+    if !is_rundgang_page(&page_path) {
+        return with_demo_csp(
+            (
+                StatusCode::NOT_FOUND,
+                "Diese Seite gibt es im Rundgang nicht.",
+            )
+                .into_response(),
+        );
+    }
+    rundgang_index_handler().await
+}
+
+pub async fn rundgang_assets_handler(
+    axum::extract::Path(asset_path): axum::extract::Path<String>,
+) -> Response {
+    with_demo_csp(spa::serve_asset(asset_path.trim_start_matches('/')).await)
 }
 
 /// `GET /twitch/demo/dashboard-v2/{path}` — statische Assets (geteilter Dist).
@@ -1155,12 +1203,203 @@ pub async fn demo_raid_analytics(Query(q): Query<DemoAnalyticsQuery>) -> Respons
     .into_response()
 }
 
+const DEMO_WRITE_BLOCKED_MESSAGE: &str = "In der Demo kannst du nichts ändern.";
+
+async fn demo_write_blocked() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": "demo_readonly",
+            "message": DEMO_WRITE_BLOCKED_MESSAGE,
+        })),
+    )
+        .into_response()
+}
+
+async fn reject_demo_writes(req: axum::extract::Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    if method == Method::GET || method == Method::HEAD || method == Method::OPTIONS {
+        return next.run(req).await;
+    }
+    if method == Method::POST && path == "/twitch/demo/api/v2/ai/analysis" {
+        return next.run(req).await;
+    }
+    if path.starts_with("/twitch/demo/api/v2/") {
+        return demo_write_blocked().await;
+    }
+    next.run(req).await
+}
+
+const DEMO_UNAVAILABLE_MESSAGE: &str = "In der Demo nicht verfügbar.";
+
+async fn demo_api_unavailable() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "error": "demo_unavailable",
+            "message": DEMO_UNAVAILABLE_MESSAGE,
+        })),
+    )
+        .into_response()
+}
+
+async fn demo_internal_home() -> Response {
+    Json(json!({
+        "profile": {
+            "twitch_login": DEMO_LOGIN,
+            "twitch_user_id": "123456789",
+            "display_name": "MidCore Live"
+        },
+        "status": {
+            "oauth": {
+                "connected": true,
+                "status": "connected",
+                "granted_scopes": [
+                    "channel:manage:raids",
+                    "moderator:read:followers",
+                    "channel:read:subscriptions"
+                ],
+                "missing_scopes": [],
+                "reconnect_url": "/twitch/dashboard",
+                "profile_url": "/twitch/dashboard"
+            },
+            "discord": { "connected": true, "status": "connected" },
+            "steam": { "connected": true, "status": "connected" },
+            "raid_status": { "state": "active", "read_only": true }
+        },
+        "kpis": {
+            "streams_count": 18,
+            "avg_viewers": 126,
+            "follower_delta": 214,
+            "bot_bans_keyword_count": 7
+        },
+        "recent_streams": [
+            {
+                "started_at": "2026-04-21T17:00:00Z",
+                "ended_at": "2026-04-21T20:10:00Z",
+                "duration_seconds": 11400,
+                "avg_viewers": 142,
+                "peak_viewers": 221,
+                "follower_delta": 34,
+                "title": "Deadlock Ranked | Community"
+            }
+        ],
+        "changelog": {
+            "can_write": false,
+            "max_entries": 10,
+            "entries": []
+        },
+        "generated_at": "2026-04-22T09:30:00Z"
+    }))
+    .into_response()
+}
+
+async fn demo_billing_catalog() -> Response {
+    Json(json!({
+        "plans": [
+            {
+                "id": "free",
+                "name": "Netzwerk Free",
+                "tier": "free",
+                "price_monthly": 0,
+                "buchbar": true,
+                "is_current": false
+            },
+            {
+                "id": "studio_ki",
+                "name": "Studio KI",
+                "tier": "extended",
+                "price_monthly": 15,
+                "buchbar": false,
+                "is_current": true
+            }
+        ]
+    }))
+    .into_response()
+}
+
+async fn demo_title_insights() -> Response {
+    Json(json!({
+        "insight": {
+            "strengths": "Klare Spiel- und Kontextsignale machen die Titel gut lesbar.",
+            "weaknesses": "Zu generische Wortwahl reduziert den eigentlichen Hook.",
+            "patterns": "Titel mit Deadlock und konkretem Ziel performen stabiler.",
+            "recommendations": "Den Spielkontext in den Kern des Titels legen.",
+            "generated_at": "2026-04-22T09:30:00Z"
+        }
+    }))
+    .into_response()
+}
+
+async fn demo_title_settings() -> Response {
+    Json(json!({
+        "style_preference": "Direkt, trocken, eher ein Satz als Keyword-Liste.",
+        "experimental_auto_set": false,
+        "never_words": [],
+        "style_summary": "Eher ruhige Satzzeichen, Deadlock im Kern.",
+        "oauth_connected": true,
+        "oauth_url": "/twitch/raid/auth?scope_profile=title&source=title_generator",
+        "model": "glm-5.3-flash"
+    }))
+    .into_response()
+}
+
+async fn demo_feedback_counts() -> Response {
+    Json(json!({ "total": 0, "unread": 0 })).into_response()
+}
+
+async fn demo_challenges_me() -> Response {
+    Json(json!({
+        "twitch_user_id": "123456789",
+        "next_reset_at": "2026-05-01T00:00:00Z",
+        "generated_at": "2026-04-22T09:30:00Z",
+        "timezone": "Europe/Berlin",
+        "streamer": DEMO_LOGIN,
+        "quests": [
+            {
+                "key": "stream_hours",
+                "text": "8 Stunden streamen",
+                "progress": 5,
+                "goal": 8,
+                "completed": false
+            }
+        ],
+        "quest_assignment_status": "assigned",
+        "streak": { "freeze_used_this_month": false, "current": 4, "longest": 11 },
+        "level": {
+            "level": 6,
+            "total_points": 420,
+            "current_threshold": 350,
+            "next_threshold": 500
+        },
+        "next_goal": { "missing_points": 80, "fastest_route": "Noch 3 Stunden streamen" },
+        "achievements": [],
+        "with_us": {
+            "people_brought_in_who_stayed": 6,
+            "community_hours": 18,
+            "received_raids": 4
+        },
+        "season": {
+            "next_reset_at": "2026-05-01T00:00:00Z",
+            "month": "2026-04",
+            "points": 420,
+            "rank": 12,
+            "active_partners": 48
+        }
+    }))
+    .into_response()
+}
+
 /// Baut den öffentlichen Demo-Router (kein Auth, kein Pool).
 pub fn build_demo_router() -> Router {
     Router::new()
         .route("/twitch/demo", get(demo_index_handler))
         .route("/twitch/demo/", get(demo_index_handler))
-        .route("/twitch/demo/dashboard-v2/{*path}", get(demo_assets_handler))
+        .route(
+            "/twitch/demo/dashboard-v2/{*path}",
+            get(demo_assets_handler),
+        )
         .route("/twitch/demo/api/v2/auth-status", get(demo_auth_status))
         .route("/twitch/demo/api/v2/streamers", get(demo_streamers))
         .route("/twitch/demo/api/v2/overview", get(demo_overview))
@@ -1240,6 +1479,33 @@ pub fn build_demo_router() -> Router {
             "/twitch/demo/api/v2/raid-analytics",
             get(demo_raid_analytics),
         )
+        .route("/twitch/demo/api/v2/internal-home", get(demo_internal_home))
+        .route(
+            "/twitch/demo/api/v2/billing/catalog",
+            get(demo_billing_catalog),
+        )
+        .route(
+            "/twitch/demo/api/v2/title/insights",
+            get(demo_title_insights),
+        )
+        .route(
+            "/twitch/demo/api/v2/title/settings",
+            get(demo_title_settings),
+        )
+        .route(
+            "/twitch/demo/api/v2/feedback/counts",
+            get(demo_feedback_counts),
+        )
+        .route("/twitch/demo/api/v2/challenges/me", get(demo_challenges_me))
+        .route("/twitch/demo/api/v2/{*path}", get(demo_api_unavailable))
+        .route("/twitch/rundgang", get(rundgang_index_handler))
+        .route("/twitch/rundgang/", get(rundgang_index_handler))
+        .route(
+            "/twitch/rundgang/dashboard-v2/{*path}",
+            get(rundgang_assets_handler),
+        )
+        .route("/twitch/rundgang/{*path}", get(rundgang_page_handler))
+        .layer(middleware::from_fn(reject_demo_writes))
 }
 
 #[cfg(test)]
@@ -1867,5 +2133,115 @@ mod tests {
         let csp = resp.headers().get(header::CONTENT_SECURITY_POLICY);
         assert!(csp.is_some(), "Demo-Index muss frame-ancestors-CSP setzen");
         assert!(csp.unwrap().to_str().unwrap().contains("frame-ancestors"));
+    }
+
+    #[tokio::test]
+    async fn rundgang_index_setzt_demo_csp() {
+        let app = build_demo_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/twitch/rundgang/analyse")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let csp = resp.headers().get(header::CONTENT_SECURITY_POLICY);
+        assert!(
+            csp.is_some(),
+            "Rundgang-Index muss frame-ancestors-CSP setzen"
+        );
+        assert!(csp.unwrap().to_str().unwrap().contains("frame-ancestors"));
+    }
+
+    #[test]
+    fn rundgang_bedient_nur_freigegebene_seiten() {
+        for page in ["analyse", "verwaltung/", "/pricing", "social-media/konten"] {
+            assert!(is_rundgang_page(page), "{page} gehört zum Rundgang");
+        }
+        for page in [
+            "guild-onboarding",
+            "kategorie",
+            "admin",
+            "",
+            "analyse/x",
+            "auth/login",
+        ] {
+            assert!(!is_rundgang_page(page), "{page} gehört nicht zum Rundgang");
+        }
+    }
+
+    #[tokio::test]
+    async fn rundgang_unbekannte_seite_liefert_404() {
+        let resp = build_demo_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/twitch/rundgang/guild-onboarding")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        assert_eq!(
+            &bytes[..],
+            "Diese Seite gibt es im Rundgang nicht.".as_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn rundgang_fixtures_und_writes() {
+        let home = demo_json("/twitch/demo/api/v2/internal-home").await;
+        assert_eq!(home["profile"]["twitch_login"], DEMO_LOGIN);
+        assert_eq!(home["changelog"]["can_write"], false);
+
+        let catalog = demo_json("/twitch/demo/api/v2/billing/catalog").await;
+        assert!(catalog["plans"].is_array());
+        assert_eq!(catalog["plans"][1]["id"], "studio_ki");
+
+        let unknown = build_demo_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/twitch/demo/api/v2/category-comparison")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (unknown_status, unknown_json) = json_body(unknown).await;
+        assert_eq!(unknown_status, StatusCode::NOT_FOUND);
+        assert_eq!(unknown_json["error"], "demo_unavailable");
+
+        let resp = build_demo_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/twitch/demo/api/v2/internal-home")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, json) = json_body(resp).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(json["error"], "demo_readonly");
+
+        let put_ai = build_demo_router()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/twitch/demo/api/v2/ai/analysis")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (put_status, put_json) = json_body(put_ai).await;
+        assert_eq!(put_status, StatusCode::FORBIDDEN);
+        assert_eq!(put_json["error"], "demo_readonly");
     }
 }

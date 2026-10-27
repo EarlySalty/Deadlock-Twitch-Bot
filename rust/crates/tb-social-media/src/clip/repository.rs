@@ -23,6 +23,23 @@ impl ClipRepository {
         crate::clip_pool::is_managed(&self.pool, owner).await
     }
 
+    pub async fn social_access_granted(&self, owner: &str) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM social_media_partner_access WHERE twitch_user_id = $1 AND granted)",
+        )
+        .bind(owner)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn start_pool_import(
+        &self,
+        owner: &str,
+        login: &str,
+    ) -> Result<crate::clip_pool::ImportJob, crate::clip_pool::PoolError> {
+        crate::clip_pool::start_import(&self.pool, owner, login).await
+    }
+
     pub async fn register_recent_pool(
         &self,
         owner: &str,
@@ -106,6 +123,29 @@ impl ClipRepository {
         tx.commit().await?;
         self.apply_layout(result.0, &rec.streamer_login).await;
         Ok(result)
+    }
+
+    pub async fn game_ids_without_name(&self, limit: i64) -> Result<Vec<String>, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT DISTINCT game_id FROM twitch_clips_social_media \
+              WHERE game_id IS NOT NULL AND game_id <> '' AND (game_name IS NULL OR game_name = '') \
+              ORDER BY game_id LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    pub async fn fill_game_name(&self, game_id: &str, game_name: &str) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE twitch_clips_social_media SET game_name = $2 \
+              WHERE game_id = $1 AND (game_name IS NULL OR game_name = '')",
+        )
+        .bind(game_id)
+        .bind(game_name)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 
     /// Belegt das Clip-Override mit dem Streamer-Default (best-effort, mirror

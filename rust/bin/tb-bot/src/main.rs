@@ -461,6 +461,85 @@ impl PollHooks for SubscriptionPollHooks {
     }
 }
 
+fn social_cutover_command(
+    remaining: &[std::ffi::OsString],
+) -> Option<tb_social_media::pipeline_migration::CutoverCommand> {
+    let arguments: Option<Vec<&str>> = remaining.iter().map(|value| value.to_str()).collect();
+    tb_social_media::pipeline_migration::CutoverCommand::parse(&arguments?)
+}
+
+async fn cutover_new_social_owners(pool: &sqlx::PgPool) -> bool {
+    match tb_social_media::pipeline_migration::cutover_new_owners(pool).await {
+        Ok(results) => results.iter().fold(false, |activated, (owner, result)| {
+            log_owner_cutover(owner, result) || activated
+        }),
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                "Neue Social-Media-Kanäle konnten nicht umgestellt werden"
+            );
+            false
+        }
+    }
+}
+
+fn log_owner_cutover(
+    owner: &str,
+    result: &Result<
+        tb_social_media::pipeline_migration::CutoverReport,
+        tb_social_media::pipeline_migration::MigrationError,
+    >,
+) -> bool {
+    use tb_social_media::pipeline_migration::CutoverOutcome;
+    match result {
+        Ok(report) if report.outcome == CutoverOutcome::Activated => {
+            tracing::info!(
+                owner,
+                autopilot_enabled = report.autopilot_enabled,
+                "Neuer Social-Media-Kanal auf den Autopiloten umgestellt"
+            );
+            true
+        }
+        Ok(report) => {
+            tracing::warn!(
+                owner,
+                outcome = ?report.outcome,
+                unresolved = report.unresolved,
+                "Social-Media-Kanal noch nicht umgestellt, nächster Versuch folgt"
+            );
+            false
+        }
+        Err(error) => {
+            tracing::error!(
+                owner,
+                error = %error,
+                "Social-Media-Kanal konnte nicht umgestellt werden"
+            );
+            false
+        }
+    }
+}
+
+async fn social_cutover_heal_loop(pool: sqlx::PgPool) {
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tick.tick().await;
+    loop {
+        tick.tick().await;
+        if !cutover_new_social_owners(&pool).await {
+            continue;
+        }
+        if let Err(error) =
+            tb_social_media::pipeline_migration::clear_legacy_review_jam(&pool).await
+        {
+            tracing::error!(
+                error = %error,
+                "Clips neuer Social-Media-Kanäle konnten nicht in den Bestand zurück"
+            );
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     if print_build_revision() {
@@ -493,7 +572,8 @@ async fn main() {
         return;
     }
     let migrate_token_storage = remaining == ["--migrate-token-storage", "--apply"];
-    if !remaining.is_empty() && !migrate_token_storage {
+    let social_cutover = social_cutover_command(&remaining);
+    if !remaining.is_empty() && !migrate_token_storage && social_cutover.is_none() {
         eprintln!("Der Bot-Start akzeptiert nur --config mit absolutem Dateipfad.");
         std::process::exit(2);
     }
@@ -549,9 +629,9 @@ async fn main() {
     }
     let supervisor = task_supervisor::TaskSupervisor::start();
 
-    // Native sqlx-Migrationen anwenden. Schema-/Migrationsfehler sind fatal:
-    // mit kaputtem oder halb migriertem Schema darf der Bot nicht starten.
-    if config.bot.run_database_migrations {
+    let dry_run =
+        social_cutover == Some(tb_social_media::pipeline_migration::CutoverCommand::DryRun);
+    if config.bot.run_database_migrations && !dry_run {
         match tb_db::run_migrations(&pool).await {
             Ok(()) => tracing::info!("DB-Migrationen angewendet (oder bereits aktuell)"),
             Err(e) => {
@@ -559,8 +639,43 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-    } else {
+    } else if !dry_run {
         tracing::warn!("DB-Migrationen laut Betriebskonfiguration deaktiviert");
+    }
+    if social_cutover.is_none() {
+        cutover_new_social_owners(&pool).await;
+    }
+    if !dry_run {
+        match tb_social_media::pipeline_migration::clear_legacy_review_jam(&pool).await {
+            Ok(report) => tracing::info!(
+                jobs_cleared = report.jobs_cleared,
+                clips_unpinned = report.clips_unpinned,
+                awaiting_returned = report.awaiting_returned,
+                "Studio-Jobs ohne Video wurden in den Clip-Bestand zurückgelegt"
+            ),
+            Err(error) => tracing::error!(
+                error = %error,
+                "Studio-Jobs ohne Video konnten nicht zurückgelegt werden"
+            ),
+        }
+    }
+    if let Some(command) = social_cutover {
+        let result = tb_social_media::pipeline_migration::run_command(&pool, &command).await;
+        pool.close().await;
+        match result {
+            Ok(report) => {
+                let lines = report["channel_lines"].as_array().into_iter().flatten();
+                for line in lines.filter_map(serde_json::Value::as_str) {
+                    println!("{line}");
+                }
+                println!("{report:#}");
+            }
+            Err(error) => {
+                eprintln!("Social-Media-Umstellung nicht abgeschlossen: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
     }
 
     supervisor.spawn(
@@ -1375,6 +1490,7 @@ async fn main() {
                     brain_service_token: settings.internal_api.token.clone(),
                     chat_persist_all_games: config.bot.chat_persist_all_games,
                     lfg_pitch_enabled: config.bot.lfg_pitch_enabled,
+                    impersonation_guard_enabled: config.bot.impersonation_guard_enabled,
                     invite_channel_id: config
                         .twitch
                         .notify_channel_id
@@ -1743,6 +1859,10 @@ async fn main() {
             yt_dlp_path(snapshot).to_string_lossy().into_owned(),
         );
         supervisor.spawn("social_clip_prep_worker", async move { prep.run().await });
+        supervisor.spawn(
+            "social_cutover_heal",
+            social_cutover_heal_loop(pool.clone()),
+        );
 
         // Vorschau-Render: erzeugt on-demand das fertige Hochformat-Video eines
         // Clips (Layout, Blur-Rand, Untertitel) fuers Dashboard. Der Bot schreibt
@@ -1759,10 +1879,26 @@ async fn main() {
 
         match tb_social_media::ai_editor::EditorRuntime::load_packaged() {
             Ok(runtime) => {
+                if let Some(observer) = runtime.limits.video_observer.clone() {
+                    supervisor.spawn(
+                        "gemini_session_keeper",
+                        tb_social_media::ai_editor::keep_gemini_session(pool.clone(), observer),
+                    );
+                    supervisor.spawn(
+                        "social_observer_comparisons",
+                        tb_social_media::ai_editor::run_observer_comparisons(
+                            pool.clone(),
+                            runtime.clone(),
+                        ),
+                    );
+                }
                 let worker = tb_social_media::ai_editor::ManualWorker::new(
                     pool.clone(),
                     runtime,
                     Some(settings.internal_api.token.clone()),
+                    Arc::new(tb_social_media::clip_prep_worker::YtDlpDownloader::new(
+                        yt_dlp_path(snapshot).to_string_lossy().into_owned(),
+                    )),
                 );
                 supervisor.spawn("social_manual_ai_worker", async move {
                     tracing::info!(task = "social_manual_ai_worker", "SOCIAL_AI_WORKER_STARTED");
@@ -1836,7 +1972,8 @@ async fn main() {
                 let mut executor = tb_social_media::autopilot_publish::PublishExecutor::new(
                     pool.clone(),
                     Arc::new(publisher),
-                );
+                )
+                .with_tiktok_dispatch(true);
                 match BrokerRelay::new(&settings.broker) {
                     Ok(relay) => {
                         let dm = token_lifecycle_wiring::BrokerTokenLifecycleNotifier::from_config(
@@ -2788,5 +2925,6 @@ mod tests {
 mod test_sql;
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../test-support/postgres.rs"]
 mod role_test_postgres;

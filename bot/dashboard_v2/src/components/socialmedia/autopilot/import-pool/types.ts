@@ -1,3 +1,6 @@
+import type { QueueStage } from '../../queuePresentation';
+import type { LoadSourcesPage } from "../../pipelineApi";
+
 export type ClipDateFilter =
   | { kind: "all" }
   | { kind: "year"; year: number }
@@ -106,6 +109,7 @@ export interface ImportPoolApi {
     clipId: string,
     selected: boolean,
   ): Promise<PoolSelection>;
+  getSources?: LoadSourcesPage;
 }
 
 export interface ImportPoolPanelProps {
@@ -113,4 +117,5 @@ export interface ImportPoolPanelProps {
   api?: ImportPoolApi;
   onChanged?: () => void;
   reloadKey?: number;
+  initialStage?: QueueStage;
 }

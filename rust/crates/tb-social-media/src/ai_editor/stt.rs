@@ -32,6 +32,8 @@ pub struct SttJobConfig {
     pub shutdown_deadline: Duration,
     pub poll_interval: Duration,
     pub max_upload_bytes: u64,
+    pub prompt: String,
+    pub voice_filter: String,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -349,7 +351,9 @@ impl SttLease {
             config.request_deadline,
         )
         .map_err(|_| SttError::InvalidConfig)?
-        .with_temp_dir(&directory);
+        .with_temp_dir(&directory)
+        .with_prompt(config.prompt.clone())
+        .with_audio_filter(config.voice_filter.clone());
         let mut lease = Self {
             child: Some(child),
             directory,
@@ -479,15 +483,15 @@ impl SttLease {
         if !self.stop_inner().await {
             return Err(SttError::ShutdownFailed);
         }
-        let segments = if output.text.is_empty() {
-            Vec::new()
+        let (segments, language) = if output.text.is_empty() {
+            (Vec::new(), None)
         } else {
-            output.segments
+            (output.segments, output.language)
         };
         Ok(SttTranscript {
             text: output.text,
             segments,
-            language: None,
+            language,
             model: output.model,
             duration_seconds: output.duration_seconds,
             startup_elapsed: self.startup_elapsed,

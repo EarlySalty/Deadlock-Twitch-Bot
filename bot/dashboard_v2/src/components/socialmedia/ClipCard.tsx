@@ -1,5 +1,5 @@
 import { StatusChip } from './StatusChip';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Archive, Film, Loader2, ExternalLink, Pencil, XCircle, Clapperboard, Crop, MoreHorizontal, Trophy } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
@@ -37,6 +37,49 @@ function formatRetention(retentionUntil: string | null, t: Translate): string {
 }
 
 type EditMode = 'layout' | 'enrichment';
+
+export const CLIP_MENU_ITEM = 'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5';
+
+export function ClipActionMenu({ children, footer }: { children: (run: (action: () => void) => void) => ReactNode; footer?: ReactNode }) {
+  const { t } = useLanguage();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menu, setMenu] = useState<HTMLDetailsElement | null>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!menu?.contains(event.target as Node)) menu?.removeAttribute('open');
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        menu?.removeAttribute('open');
+        menu?.querySelector('summary')?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [menu, menuOpen]);
+  const run = (action: () => void) => {
+    const trigger = menu?.querySelector('summary');
+    menu?.removeAttribute('open');
+    trigger?.focus();
+    action();
+  };
+  return (
+    <details ref={setMenu} className="relative" onToggle={(event) => setMenuOpen(event.currentTarget.open)}>
+      <summary className="studio-icon-button" aria-label={t('Weitere Aktionen')}>
+        <MoreHorizontal className="h-4 w-4" />
+      </summary>
+      <div className="studio-menu">
+        {children(run)}
+        {footer}
+      </div>
+    </details>
+  );
+}
 
 interface ClipCardProps {
   clip: SocialClipMitPosting;
@@ -112,26 +155,6 @@ export function ClipCard({
     if (!touchedPlatforms.current) setSelectedPlatforms(JSON.parse(platformKey));
   }, [platformKey]);
   const [vorschauFehlt, setVorschauFehlt] = useState<string | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menu = useRef<HTMLDetailsElement>(null);
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = (event: PointerEvent) => {
-      if (!menu.current?.contains(event.target as Node)) menu.current?.removeAttribute('open');
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        menu.current?.removeAttribute('open');
-        menu.current?.querySelector('summary')?.focus();
-      }
-    };
-    document.addEventListener('pointerdown', close);
-    document.addEventListener('keydown', escape);
-    return () => {
-      document.removeEventListener('pointerdown', close);
-      document.removeEventListener('keydown', escape);
-    };
-  }, [menuOpen]);
   const [previewActive, setPreviewActive] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewKey = ['social-media', 'preview', clip.clip_db_id];
@@ -164,12 +187,6 @@ export function ClipCard({
     render.isPending || preview.data?.status === 'pending' || preview.data?.status === 'rendering';
   const ready = preview.data?.status === 'ready';
   const fehlerZeile = fehlerText(fehler, t);
-  const runMenu = (action: () => void) => {
-    const trigger = menu.current?.querySelector('summary');
-    menu.current?.removeAttribute('open');
-    trigger?.focus();
-    action();
-  };
   return (
     <article className="studio-clip" aria-label={displayTitle || clip.title}>
       <div className="studio-clip-row">
@@ -221,7 +238,7 @@ export function ClipCard({
               : stoppbar
                 ? t('Geplant')
                 : tiktokInbox && !clip.platform_status.youtube && !clip.platform_status.instagram
-                  ? t('Im TikTok-Postfach')
+                  ? t('Als Entwurf in TikTok')
                   : clip.youtube_visibility === 'private' && clip.platform_status.youtube && !clip.platform_status.tiktok && !clip.platform_status.instagram
                     ? t('Privat auf YouTube')
                     : t(status.label)}
@@ -387,7 +404,7 @@ export function ClipCard({
                 || (clip.upload_states?.tiktok === 'waiting_tiktok_approval'
                   && (!clip.scheduled_at?.tiktok || Date.parse(clip.scheduled_at.tiktok) <= now))
                 ? t('TikTok erneut einplanen')
-                : t('TikTok-Veröffentlichung vorbereiten')}
+                : t('TikTok-Entwurf vorbereiten')}
             </button>
           )}
           {canDecide ? (
@@ -437,20 +454,17 @@ export function ClipCard({
                 {t('Archivieren')}
               </button>
           )}
-          <details
-            ref={menu}
-            className="relative"
-            onToggle={(event) => setMenuOpen(event.currentTarget.open)}
-          >
-            <summary className="studio-icon-button" aria-label={t('Weitere Aktionen')}>
-              <MoreHorizontal className="h-4 w-4" />
-            </summary>
-            <div className="studio-menu">
+          <ClipActionMenu footer={
+              <p className="mt-2 border-t border-border px-3 pt-2 text-xs text-text-secondary">
+                {t('Aufbewahrung')}: {formatRetention(clip.retention_until, t)}
+              </p>
+            }>
+            {(runMenu) => (<>
               <button
                 type="button"
                 disabled={terminal || clip.status === 'publishing' || clip.source_kind === 'manual_upload'}
                 onClick={() => runMenu(onOpenAiEditor)}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
+                className={CLIP_MENU_ITEM}
               >
                 <Clapperboard className="h-4 w-4" />
                 {t('Mit KI bearbeiten')}
@@ -459,7 +473,7 @@ export function ClipCard({
                 type="button"
                 disabled={approvalPending || terminal || clip.status === 'publishing'}
                 onClick={() => runMenu(() => onOpenEditor('layout'))}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
+                className={CLIP_MENU_ITEM}
               >
                 <Crop className="h-4 w-4" />
                 {t('Layout anpassen')}
@@ -468,7 +482,7 @@ export function ClipCard({
                 type="button"
                 disabled={approvalPending || terminal || clip.status === 'publishing'}
                 onClick={() => runMenu(() => onOpenEditor('enrichment'))}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
+                className={CLIP_MENU_ITEM}
               >
                 <Pencil className="h-4 w-4" />
                 {t('Titel, Beschreibung & Hashtags')}
@@ -477,7 +491,7 @@ export function ClipCard({
                 type="button"
                 disabled={preview.isFetching || terminal}
                 onClick={() => runMenu(() => { setPreviewActive(true); if (previewActive) void preview.refetch(); })}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
+                className={CLIP_MENU_ITEM}
               >
                 <Film className="h-4 w-4" />
                 {t('Vorschau prüfen')}
@@ -486,7 +500,7 @@ export function ClipCard({
                 type="button"
                 disabled={rendering || terminal}
                 onClick={() => runMenu(() => render.mutate())}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
+                className={CLIP_MENU_ITEM}
               >
                 <Clapperboard className="h-4 w-4" />
                 {ready ? t('Vorschau neu rendern') : t('Vorschau rendern')}
@@ -496,7 +510,7 @@ export function ClipCard({
                   type="button"
                   disabled={contest.isPending || contest.data?.status === 'accepted'}
                   onClick={() => runMenu(() => contest.mutate())}
-                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
+                  className={CLIP_MENU_ITEM}
                 >
                   <Trophy className="h-4 w-4" />
                   {t('Für Clip-Contest einreichen')}
@@ -513,11 +527,8 @@ export function ClipCard({
                   {t('Original ansehen')}
                 </a>
               )}
-              <p className="mt-2 border-t border-border px-3 pt-2 text-xs text-text-secondary">
-                {t('Aufbewahrung')}: {formatRetention(clip.retention_until, t)}
-              </p>
-            </div>
-          </details>
+            </>)}
+          </ClipActionMenu>
         </div>
       </div>
     </article>

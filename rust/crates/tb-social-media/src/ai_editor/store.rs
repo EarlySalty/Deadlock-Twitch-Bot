@@ -25,6 +25,8 @@ pub enum AiStoreError {
     Lease(#[from] crate::production_lease::ProductionLeaseError),
     #[error("Gespeicherte Auftragsdaten sind ungültig.")]
     InvalidStoredData,
+    #[error("Für diesen Clip läuft auf dieser Plattform schon eine Veröffentlichung.")]
+    PipelineBusy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -306,6 +308,12 @@ pub struct AiVideoVersion {
     pub original_url: Option<String>,
     pub decisions: Vec<TimelineEntry>,
     pub approved_platforms: Vec<String>,
+    #[serde(default)]
+    pub rating: Option<String>,
+    #[serde(default)]
+    pub layout_mode: Option<String>,
+    #[serde(default)]
+    pub streamer_layout_configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -410,6 +418,23 @@ fn parse_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, AiStoreE
     serde_json::from_str(value).map_err(|_| AiStoreError::InvalidStoredData)
 }
 
+fn notice_key(notice: &str) -> String {
+    notice
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn distinct_notices(notices: Vec<String>, shown: &[String]) -> Vec<String> {
+    let mut seen: std::collections::HashSet<String> =
+        shown.iter().map(|notice| notice_key(notice)).collect();
+    notices
+        .into_iter()
+        .filter(|notice| seen.insert(notice_key(notice)))
+        .collect()
+}
+
 macro_rules! public_job_query {
     ($tail:literal) => {
         concat!(
@@ -453,6 +478,11 @@ fn view_from_row(row: &PgRow, limit: AttemptLimit) -> Result<AiJobView, AiStoreE
         && source_eligible
         && !active_sibling
         && attempts.get(&stage).copied().unwrap_or(0) < limit.0;
+    let uncertainty = distinct_notices(parse_json(row.try_get("uncertainty_text")?)?, &[]);
+    let review_reasons = distinct_notices(
+        parse_json(row.try_get("review_reasons_text")?)?,
+        &uncertainty,
+    );
     Ok(AiJobView {
         id: row.try_get("id")?,
         clip_db_id: row.try_get("clip_db_id")?,
@@ -475,8 +505,8 @@ fn view_from_row(row: &PgRow, limit: AttemptLimit) -> Result<AiJobView, AiStoreE
         cost_basis: cost_basis.to_string(),
         highlights: parse_json(row.try_get("highlights_text")?)?,
         decisions: parse_json(row.try_get("decisions_text")?)?,
-        uncertainty: parse_json(row.try_get("uncertainty_text")?)?,
-        review_reasons: parse_json(row.try_get("review_reasons_text")?)?,
+        uncertainty,
+        review_reasons,
         original_url: None,
         versions: Vec::new(),
         failure_code: row.try_get("failure_code")?,
@@ -504,10 +534,17 @@ async fn load_versions(
     let ids: Vec<i64> = jobs.iter().map(|job| job.id).collect();
     let rows = sqlx::query(
         "SELECT j.id AS job_id, p.id, p.version_no, p.created_at, p.status, \
-         p.duration_ms, p.parent_version_id, p.variant_index, p.maker_job_id, p.decisions_text, p.planning_text FROM social_ai_jobs j \
+         p.duration_ms, p.parent_version_id, p.variant_index, p.maker_job_id, p.decisions_text, p.planning_text, \
+         (SELECT CASE e.event_kind WHEN 'version_accepted' THEN 'accepted' ELSE 'rejected' END \
+         FROM social_ai_revision_events e WHERE e.twitch_user_id = j.twitch_user_id AND e.produced_video_id = p.id \
+         AND e.event_kind IN ('version_accepted','version_rejected') ORDER BY e.id DESC LIMIT 1) AS rating, \
+         p.layout_mode, \
+         EXISTS (SELECT 1 FROM social_media_streamer_layout l WHERE l.twitch_user_id = j.twitch_user_id::text) AS streamer_layout_configured \
+         FROM social_ai_jobs j \
          JOIN LATERAL (SELECT p.id, p.version_no, p.created_at, \
          CASE WHEN p.status IN ('rendering','review','failed') AND p.expires_at <= NOW() THEN 'expired' ELSE p.status END AS status, \
-         p.duration_ms, p.parent_version_id, p.variant_index, maker.id AS maker_job_id, maker.decisions::text AS decisions_text, (p.metadata->'planning')::text AS planning_text FROM social_ai_jobs maker \
+         p.duration_ms, p.parent_version_id, p.variant_index, maker.id AS maker_job_id, maker.decisions::text AS decisions_text, (p.metadata->'planning')::text AS planning_text, \
+         COALESCE(maker.checkpoints->'preparing'->'result'->'snapshot'->'layout'->>'mode','blur_pad') AS layout_mode FROM social_ai_jobs maker \
          JOIN social_produced_videos p ON p.metadata->>'manual_ai_job_id'=maker.id::text \
          WHERE COALESCE(maker.root_job_id,maker.id)=COALESCE(j.root_job_id,j.id) AND maker.twitch_user_id=j.twitch_user_id AND maker.clip_db_id=j.clip_db_id \
          AND p.twitch_user_id = j.twitch_user_id::text AND p.clip_id = j.clip_db_id \
@@ -527,7 +564,7 @@ async fn load_versions(
             let planning: super::stage_contract::Planning = parse_json(&text)?;
             decisions = planning
                 .plan
-                .kept_intervals
+                .timeline()
                 .into_iter()
                 .map(|interval| TimelineEntry {
                     start_ms: interval.start_ms as i64,
@@ -552,6 +589,9 @@ async fn load_versions(
                 original_url: None,
                 decisions,
                 approved_platforms: Vec::new(),
+                rating: row.try_get("rating")?,
+                layout_mode: row.try_get("layout_mode")?,
+                streamer_layout_configured: row.try_get("streamer_layout_configured")?,
             });
     }
     for job in jobs {
@@ -842,7 +882,11 @@ pub async fn save_stage(
          highlights = COALESCE($6::jsonb, highlights), \
          decisions = COALESCE($7::jsonb, decisions), \
          uncertainty = COALESCE($8::jsonb, uncertainty), \
-         review_reasons = CASE WHEN $3 = 'validating' THEN review_reasons || $9::jsonb \
+         review_reasons = CASE WHEN $3 = 'validating' THEN \
+             (SELECT COALESCE(jsonb_agg(value ORDER BY ord), '[]'::jsonb) FROM \
+             (SELECT DISTINCT ON (value) value, ord \
+             FROM jsonb_array_elements(review_reasons || $9::jsonb) WITH ORDINALITY AS r(value, ord) \
+             ORDER BY value, ord) distinct_reasons) \
              ELSE COALESCE($9::jsonb, review_reasons) END, \
          original_duration_ms = COALESCE($10::bigint, original_duration_ms), \
          output_duration_ms = COALESCE($11::bigint, output_duration_ms), \
@@ -903,12 +947,15 @@ pub enum JobFailure {
     RenderingFailed,
     ValidationFailed,
     ProviderUnavailable,
+    ProviderAccess,
     BudgetExceeded,
     ConsentMissing,
+    RevisionUnchanged,
+    RequestTooLarge,
 }
 
 impl JobFailure {
-    fn code(self) -> &'static str {
+    pub(super) fn code(self) -> &'static str {
         match self {
             Self::SourceUnavailable => "source_unavailable",
             Self::TranscriptionFailed => "transcription_failed",
@@ -917,8 +964,11 @@ impl JobFailure {
             Self::RenderingFailed => "rendering_failed",
             Self::ValidationFailed => "validation_failed",
             Self::ProviderUnavailable => "provider_unavailable",
+            Self::ProviderAccess => "provider_access",
             Self::BudgetExceeded => "budget_exceeded",
             Self::ConsentMissing => "consent_missing",
+            Self::RevisionUnchanged => "revision_unchanged",
+            Self::RequestTooLarge => "request_too_large",
         }
     }
 
@@ -931,8 +981,17 @@ impl JobFailure {
             Self::RenderingFailed => "Das Video konnte nicht erstellt werden.",
             Self::ValidationFailed => "Das Video konnte nicht geprüft werden.",
             Self::ProviderUnavailable => "Der KI-Dienst ist derzeit nicht verfügbar.",
+            Self::ProviderAccess => {
+                "Der KI-Zugang ist auf dem Server nicht vollständig eingerichtet."
+            }
             Self::BudgetExceeded => "Das Kostenlimit ist erreicht.",
             Self::ConsentMissing => "Für die externe KI-Verarbeitung fehlt die Einwilligung.",
+            Self::RevisionUnchanged => {
+                "Die gewünschte Änderung ließ sich nicht umsetzen. Es wurde keine neue Fassung erstellt."
+            }
+            Self::RequestTooLarge => {
+                "Dieser Clip ist für die KI-Bearbeitung zu umfangreich. Es wurde keine neue Fassung erstellt."
+            }
         }
     }
 }
@@ -980,6 +1039,27 @@ pub async fn fail_job(
     .bind(totals.and_then(|value| value.measured_provider_cost_usd))
     .execute(&mut *lease.connection)
     .await?;
+    if changed.rows_affected() == 1 {
+        Ok(())
+    } else {
+        Err(AiStoreError::Conflict)
+    }
+}
+
+pub(super) async fn save_revision_answer(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    job_id: i64,
+    proposal: &super::revision::RevisionProposal,
+) -> Result<(), AiStoreError> {
+    let owner = numeric_owner(twitch_user_id)?;
+    let proposal = serde_json::to_string(proposal).map_err(|_| AiStoreError::InvalidInput)?;
+    let changed = sqlx::query("UPDATE social_ai_jobs SET revision_proposal=$3::jsonb, updated_at=NOW() WHERE id=$1 AND twitch_user_id=$2 AND status='planning' AND revision_feedback IS NOT NULL")
+        .bind(job_id)
+        .bind(owner)
+        .bind(proposal)
+        .execute(pool)
+        .await?;
     if changed.rows_affected() == 1 {
         Ok(())
     } else {
@@ -1058,7 +1138,8 @@ pub async fn retry_job(
     }
     let changed = sqlx::query(
         "UPDATE social_ai_jobs SET status = 'queued', failure_code = NULL, \
-         failure_message = NULL, updated_at = NOW() \
+         failure_message = NULL, updated_at = NOW(), \
+         revision_proposal = CASE WHEN stage = 'planning' THEN NULL ELSE revision_proposal END \
          WHERE id = $1 AND twitch_user_id = $2 AND status = 'failed' \
          AND COALESCE((attempts ->> stage)::integer, 0) < $3 \
          AND EXISTS (SELECT 1 FROM twitch_clips_social_media c \

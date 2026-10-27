@@ -137,13 +137,18 @@ pub struct StreamerZugang {
 #[async_trait]
 impl HochladerQuelle for StreamerZugang {
     async fn fuer(&self, twitch_user_id: &str) -> Option<Arc<dyn TeilHochlader>> {
+        let platform = self
+            .credentials
+            .vod_platform_for_id(twitch_user_id)
+            .await
+            .ok()?;
         let status = self
             .credentials
             .get_all_platforms_status(Some(twitch_user_id))
             .await
             .ok()?;
         if !status.iter().any(|status| {
-            status.platform == "youtube"
+            status.platform == platform
                 && status.connected
                 && !status.expired
                 && !status.needs_reauth
@@ -153,7 +158,7 @@ impl HochladerQuelle for StreamerZugang {
         }
         let creds = self
             .credentials
-            .get_channel_credentials_for_id("youtube", twitch_user_id)
+            .get_channel_credentials_for_id(platform, twitch_user_id)
             .await?;
         if !creds.scopes.as_deref().is_some_and(|scopes| {
             scopes.split_whitespace().any(|scope| {

@@ -1,6 +1,6 @@
 import type { UsageTotals } from '../api/socialAiTypes.ts';
 
-export const GLOBAL_CAP_MICRO_USD = 2_000_000;
+export const GLOBAL_CAP_MICRO_USD = 20_000_000;
 
 export function formatMicroUsd(value: number | null | undefined): string {
   if (value == null || !Number.isSafeInteger(value) || value < 0) return 'Unbekannt';

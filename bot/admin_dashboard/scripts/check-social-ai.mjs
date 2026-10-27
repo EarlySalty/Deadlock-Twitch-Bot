@@ -8,6 +8,7 @@ if (!playwrightPath || !cdpUrl || !origin || !evidenceDir) throw new Error('Play
 const { chromium } = await import(pathToFileURL(playwrightPath).href);
 const browser = await chromium.connectOverCDP(cdpUrl);
 const results = [];
+const groupTable = '.social-ai-table[aria-label^="Verbrauch nach Gruppierung"]';
 await mkdir(evidenceDir, { recursive: true });
 
 async function run(width) {
@@ -38,6 +39,7 @@ async function run(width) {
     if (url.pathname.endsWith('/auth-status')) return send({ authenticated: true, isAdmin: true, csrfToken: 'synthetic-csrf', loginUrl: '/synthetic-login', discordLoginUrl: '/synthetic-login', displayName: 'Synthetische Testdaten, kein Livebetrieb' });
     if (!url.pathname.includes('/social-ai/')) return send([]);
     if (mode === 'unavailable') return send({ error: 'synthetic-unavailable' }, 404);
+    if (url.pathname.endsWith('/external-consent')) return send({ enabled: false });
     if (request.method() === 'POST') {
       writes++;
       const body = request.postDataJSON() ?? await page.evaluate(() => JSON.parse(window.syntheticRequestBodies.at(-1)));
@@ -121,12 +123,12 @@ async function run(width) {
     assert.ok(page.url().endsWith('/content/social-ai/usage'));
     assert.equal(await page.locator('.social-ai nav a').count(), 3);
     assert.equal(await page.locator('a[href*="social-ai/skills"]').count(), 1);
-    await page.locator('.social-ai-table').waitFor({ state: 'attached' });
+    await page.locator(groupTable).waitFor({ state: 'attached' });
     await page.screenshot();
     await capture('usage');
     await setGrouping('job');
-    await page.waitForFunction(() => document.querySelector('.social-ai-table')?.textContent.includes('Gesamtlaufzeit'));
-    const table = await page.locator('.social-ai-table').textContent();
+    await page.waitForFunction(() => document.querySelector('.social-ai-table[aria-label^="Verbrauch nach Gruppierung"]')?.textContent.includes('Gesamtlaufzeit'));
+    const table = await page.locator(groupTable).textContent();
     assert.ok(table.includes('18,4 s') && table.includes('6,8 s') && table.includes('8,4 s'));
     await page.getByLabel('Anbieter', { exact: true }).fill('synthetic-filter');
     await clickButton('Filter anwenden');
@@ -145,10 +147,10 @@ async function run(width) {
     await setGrouping('user');
     await held;
     await setGrouping('provider');
-    await page.locator('.social-ai-table').waitFor({ state: 'attached' });
+    await page.locator(groupTable).waitFor({ state: 'attached' });
     await page.screenshot();
     releaseStale();
-    assert.equal(await page.locator('.social-ai-table').textContent().then(text => text.includes('Veraltete Antwort')), false);
+    assert.equal(await page.locator(groupTable).textContent().then(text => text.includes('Veraltete Antwort')), false);
     mode = 'empty';
     await clickButton('Stand neu laden');
     await page.locator('.social-ai .empty-state').waitFor({ state: 'attached' });
@@ -157,7 +159,7 @@ async function run(width) {
     await clickButton('Stand neu laden');
     await page.getByRole('alert').waitFor({ state: 'attached' });
     await page.screenshot();
-    assert.equal(await page.locator('.social-ai-table').count(), 0);
+    assert.equal(await page.locator(groupTable).count(), 0);
 
     mode = 'normal';
     await clickButton('Verarbeitungsgrenzen', 'link');
@@ -167,17 +169,17 @@ async function run(width) {
     await checkPause();
     await page.getByLabel('Begründung für die globale Änderung', { exact: true }).fill('Synthetischer Pausentest');
     conflict = true;
-    await clickButton('Globale Pause speichern');
+    await clickButton('Globale Grenzen speichern');
     await page.getByRole('alert').waitFor({ state: 'attached' });
     await page.screenshot();
-    assert.equal(await page.getByRole('button', { name: 'Globale Pause speichern', exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Globale Grenzen speichern', exact: true }).isDisabled(), true);
     await clickButton('Stand neu laden');
     await checkPause();
     await page.getByLabel('Begründung für die globale Änderung', { exact: true }).fill('Synthetischer Pausentest nach Konflikt');
-    await clickButton('Globale Pause speichern');
+    await clickButton('Globale Grenzen speichern');
     await page.waitForFunction(() => document.querySelector('.social-ai')?.textContent.includes('Revision 2'));
     await page.getByLabel('Twitch-Nutzer-ID', { exact: true }).fill('100000002');
-    await page.getByLabel(/^Monatsbudget in USD/).fill('2,000001');
+    await page.getByLabel(/^Monatsbudget in USD/).fill('20,000001');
     await page.getByLabel('Begründung für die Nutzergrenze', { exact: true }).fill('Synthetische Nutzergrenze');
     assert.equal(await page.getByRole('button', { name: 'Nutzergrenze speichern', exact: true }).isDisabled(), true);
     await page.getByLabel(/^Monatsbudget in USD/).fill('0');

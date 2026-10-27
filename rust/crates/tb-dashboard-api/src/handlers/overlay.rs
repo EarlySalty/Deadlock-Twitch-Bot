@@ -37,7 +37,7 @@ static OVERLAY_CACHE: OnceLock<Mutex<OverlayCache>> = OnceLock::new();
 static HERO_ICON_CACHE: OnceLock<Mutex<HeroIconCache>> = OnceLock::new();
 
 #[derive(Default)]
-struct OverlayCache {
+pub(crate) struct OverlayCache {
     entries: HashMap<String, CacheEntry>,
     inflight: HashMap<String, Arc<Notify>>,
 }
@@ -327,7 +327,11 @@ impl Drop for InflightGuard {
     }
 }
 
-async fn cached_or_compute<F, Fut>(
+pub(crate) fn forget_cached(cache: &Mutex<OverlayCache>, key: &str) {
+    lock_cache(cache).entries.remove(key);
+}
+
+pub(crate) async fn cached_or_compute<F, Fut>(
     cache: &'static Mutex<OverlayCache>,
     key: String,
     ttl: Duration,
@@ -372,10 +376,14 @@ where
                 let body = compute().await;
                 {
                     let mut cache = lock_cache(cache);
+                    let now = Instant::now();
+                    cache
+                        .entries
+                        .retain(|_, entry| now.duration_since(entry.inserted_at) < ttl);
                     cache.entries.insert(
                         key.clone(),
                         CacheEntry {
-                            inserted_at: Instant::now(),
+                            inserted_at: now,
                             body: body.clone(),
                         },
                     );

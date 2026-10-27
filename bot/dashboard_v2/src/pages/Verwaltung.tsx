@@ -1,6 +1,4 @@
-import { globalTimezoneOwner } from '@/utils/socialMediaChannel';
 import { useLanguage, useT } from '../context/LanguageContext';
-import { GlobalTimezone } from '@/components/verwaltung/GlobalTimezone';
 import { useEffect, useState, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import { Rise } from '../motion/Rise';
@@ -21,8 +19,10 @@ import { TitleCommandSection } from '@/components/verwaltung/TitleCommandSection
 import { ClipCommandSection } from '@/components/verwaltung/ClipCommandSection';
 import { DisconnectBotSection } from '@/components/verwaltung/DisconnectBotSection';
 import { GreetingSection } from '@/components/verwaltung/GreetingSection';
+import { FollowHintSection } from '@/components/verwaltung/FollowHintSection';
 import { LurkCommandSection } from '@/components/verwaltung/LurkCommandSection';
 import { LurkerTaxSection } from '@/components/verwaltung/LurkerTaxSection';
+import { CommunityHinweiseSection } from '@/components/verwaltung/CommunityHinweiseSection';
 import { SilentNotificationsSection } from '@/components/verwaltung/SilentNotificationsSection';
 import { ModerationSection } from '@/components/verwaltung/ModerationSection';
 import { ScamGuardSection } from '@/components/verwaltung/ScamGuardSection';
@@ -30,6 +30,7 @@ import { PrivateVodSection } from '@/components/verwaltung/PrivateVodSection';
 import { OtherCommandNames } from '@/components/verwaltung/OtherCommandsSection';
 import { ConnectionCard, ScopeDisclosure, type ConnectionTone } from '@/components/verwaltung/ConnectionCard';
 import { SectionCard } from '@/components/verwaltung/ui';
+import { LanguageSwitch } from '@/components/layout/LanguageSwitch';
 import { STAT_COMMANDS } from '@/api/statCommands';
 import { resolveVerwaltungTab, type VerwaltungTabId } from '@/pages/verwaltungTabs';
 import {
@@ -69,7 +70,6 @@ export function VerwaltungPage() {
   const t = useT();
   const { locale } = useLanguage();
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
-  const timezoneOwner = globalTimezoneOwner(window.location.search, authStatus?.twitchUserId ?? undefined);
   const onboarding = useOnboarding();
   const [connectionNotice, setConnectionNotice] = useState<'checking' | { discord: string; steam: string } | null>(null);
   const [returnMessage] = useState(() => {
@@ -166,8 +166,11 @@ export function VerwaltungPage() {
 
   const oauthConnected = oauthStatus === 'connected' && !hasScopeIssue;
   const oauthStatusText = oauthConnected ? 'Verbunden' : needsReauth ? 'Re-Auth nötig' : 'Unvollständig';
-  const oauthHintText = oauthConnected
-    ? 'Twitch-OAuth ist aktiv und vollständig.'
+  const reauthHidden = oauthConnected && home.oauth?.reauthOffered === false;
+  const oauthHintText = reauthHidden
+    ? 'Twitch ist vollständig verbunden. Du musst hier nichts tun.'
+    : oauthConnected
+    ? 'Twitch ist vollständig verbunden. Neu autorisieren musst du nur, wenn etwas nicht funktioniert.'
     : needsReauth
       ? 'Das bestehende Twitch-OAuth ist zur Re-Auth markiert. Bitte neu autorisieren.'
       : missingScopeCount > 1
@@ -182,7 +185,6 @@ export function VerwaltungPage() {
 
   const kontoTab = (
     <>
-      {timezoneOwner ? <GlobalTimezone owner={timezoneOwner} channelScoped={new URLSearchParams(window.location.search).has('twitch_user_id')} /> : <p role="alert">{t('Bitte einen gültigen Twitch-Kanal für die Zeitzone auswählen.')}</p>}
       <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(300px,1fr))]">
         <ConnectionCard
           icon={oauthConnected ? <ShieldCheck className="h-5 w-5 text-primary" /> : <ShieldAlert className="h-5 w-5 text-warning" />}
@@ -190,7 +192,7 @@ export function VerwaltungPage() {
           status={t(oauthStatusText)}
           tone={oauthConnected ? 'success' : needsReauth ? 'error' : 'warning'}
           sentence={t(oauthHintText)}
-          footer={<a href={reconnectUrl} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"><ShieldCheck className="h-4 w-4" />{t("Jetzt neu autorisieren")}</a>}
+          footer={reauthHidden ? null : <a href={reconnectUrl} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"><ShieldCheck className="h-4 w-4" />{t("Jetzt neu autorisieren")}</a>}
         >
           <ScopeDisclosure granted={grantedScopes} missing={missingScopes} />
         </ConnectionCard>
@@ -259,6 +261,10 @@ export function VerwaltungPage() {
           {t("Profiländerungen direkt auf Twitch vornehmen. Daten werden beim nächsten Login synchronisiert.")}
         </p>
       </SectionCard>
+
+      <SectionCard eyebrow={t("Sprache")}>
+        <LanguageSwitch className="w-fit" />
+      </SectionCard>
     </>
   );
 
@@ -267,6 +273,7 @@ export function VerwaltungPage() {
       <p className="text-xs text-text-secondary">{t("Namen ändern · speichert automatisch · nur Buchstaben und Zahlen")}</p>
       <SectionCard eyebrow={t("Chat-Interaktion & Clips")}>
         <GreetingSection />
+        <FollowHintSection />
         <LurkCommandSection />
         <TitleCommandSection />
         <ClipCommandSection />
@@ -286,6 +293,7 @@ export function VerwaltungPage() {
       <ModerationSection />
       <ScamGuardSection />
       <SilentNotificationsSection />
+      <CommunityHinweiseSection />
       <DisconnectBotSection login={selfLogin} />
     </CommandNamesProvider>
   );

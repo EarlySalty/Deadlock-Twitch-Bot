@@ -1,3 +1,4 @@
+use tb_social_media::credentials::PLATFORMS as CONNECTION_PLATFORMS;
 static STATUS_MASTER_KEY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct StatusMasterKeyGuard {
@@ -102,29 +103,25 @@ fn platform_status_authorization_unknown_missing_and_sufficient() {
         (None, "unknown", Value::Null),
         (Some(""), "unknown", Value::Null),
         (Some(" \t, \n"), "unknown", Value::Null),
-        (Some("[\"video.publish\""), "unknown", Value::Null),
+        (Some("[\"video.upload\""), "unknown", Value::Null),
+        (Some("{\"scope\":\"video.upload\"}"), "unknown", Value::Null),
+        (Some("video.upload\u{0000}"), "unknown", Value::Null),
+        (Some("video.upload,\"unexpected\""), "unknown", Value::Null),
+        (Some("video.publish"), "missing", json!(["video.upload"])),
         (
-            Some("{\"scope\":\"video.publish\"}"),
-            "unknown",
-            Value::Null,
-        ),
-        (Some("video.publish\u{0000}"), "unknown", Value::Null),
-        (Some("video.publish,\"unexpected\""), "unknown", Value::Null),
-        (Some("video.upload"), "missing", json!(["video.publish"])),
-        (
-            Some("video.publish.extra"),
+            Some("video.upload.extra"),
             "missing",
-            json!(["video.publish"]),
+            json!(["video.upload"]),
         ),
-        (Some("VIDEO.PUBLISH"), "missing", json!(["video.publish"])),
-        (Some("video.publish"), "sufficient", json!([])),
+        (Some("VIDEO.UPLOAD"), "missing", json!(["video.upload"])),
+        (Some("video.upload"), "sufficient", json!([])),
         (
-            Some("user.info.basic,video.upload,video.publish"),
+            Some("user.info.basic,video.publish,video.upload"),
             "sufficient",
             json!([]),
         ),
         (
-            Some(" user.info.basic\tvideo.publish\nvideo.upload "),
+            Some(" user.info.basic\tvideo.upload\nvideo.publish "),
             "sufficient",
             json!([]),
         ),
@@ -134,7 +131,7 @@ fn platform_status_authorization_unknown_missing_and_sufficient() {
         assert_eq!(value["authorization"]["missing_upload_scopes"], missing);
         assert_eq!(
             value["authorization"]["required_upload_scopes"],
-            json!(["video.publish"])
+            json!(["video.upload"])
         );
         assert_eq!(value["authorization"]["source"], "stored");
     }
@@ -211,7 +208,7 @@ fn platform_status_instagram_requires_both_business_scopes() {
 #[test]
 fn platform_status_tiktok_fallback_requires_channel_account_without_changing_scope_result() {
     for platform in PLATFORMS {
-        let mut status = platform_status_fixture(platform, Some("video.publish"));
+        let mut status = platform_status_fixture(platform, Some("video.upload"));
         status.uses_global_fallback = true;
         for has_scope in [false, true] {
             let value = platform_status_json(&status, has_scope);
@@ -266,7 +263,7 @@ fn platform_status_keeps_authorization_separate_from_connection_expiry_and_capab
 fn platform_status_authorization_exposes_only_allowlisted_metadata() {
     let status = platform_status_fixture(
         "tiktok",
-        Some("video.publish,arbitrary.stored.permission,synthetic-token-marker"),
+        Some("video.upload,arbitrary.stored.permission,synthetic-token-marker"),
     );
     let value = platform_status_json(&status, true);
     assert_eq!(
@@ -274,7 +271,7 @@ fn platform_status_authorization_exposes_only_allowlisted_metadata() {
         json!({
             "source": "stored",
             "upload_scope_status": "sufficient",
-            "required_upload_scopes": ["video.publish"],
+            "required_upload_scopes": ["video.upload"],
             "missing_upload_scopes": [],
             "channel_account_required": false,
         })
@@ -303,7 +300,7 @@ async fn platforms_status_stored_scopes_keep_disabled_connections_and_channel_fa
     sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('synthetic-channel', '42')")
         .execute(&pool).await.unwrap();
     for (platform, scopes, twitch_user_id) in [
-        ("tiktok", "video.publish,arbitrary.permission", None),
+        ("tiktok", "video.upload,arbitrary.permission", None),
         (
             "youtube",
             "https://www.googleapis.com/auth/youtube.upload",
@@ -329,6 +326,11 @@ async fn platforms_status_stored_scopes_keep_disabled_connections_and_channel_fa
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     let platforms = body["platforms"].as_array().unwrap();
+    assert_eq!(platforms.len(), CONNECTION_PLATFORMS.len());
+    let platforms: Vec<_> = platforms
+        .iter()
+        .filter(|status| status["platform"] != "youtube_vod")
+        .collect();
     assert_eq!(platforms.len(), 3);
     for status in platforms {
         assert_eq!(status["authorization"]["upload_scope_status"], "sufficient");
@@ -380,13 +382,13 @@ async fn platforms_status_read_errors_return_500_not_disconnected() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     let platforms = body["platforms"].as_array().unwrap();
-    assert_eq!(platforms.len(), PLATFORMS.len());
+    assert_eq!(platforms.len(), CONNECTION_PLATFORMS.len());
     assert!(platforms.iter().all(|status| status["connected"] == false));
     assert!(platforms
         .iter()
         .all(|status| status["authorization"]["upload_scope_status"] == "unknown"));
 
-    for platform in PLATFORMS {
+    for platform in CONNECTION_PLATFORMS {
         let encrypted = cipher
             .encrypt_field(
                 "local-access",

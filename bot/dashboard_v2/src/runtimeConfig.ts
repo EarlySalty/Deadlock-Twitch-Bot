@@ -5,6 +5,15 @@ import {
   PREVIEW_VERWALTUNG_ROUTE,
   isPreviewModeEnabled,
 } from './preview/routes';
+import { isAnalyticsDemoPath, isPublicTourPath } from './publicTour';
+
+export {
+  isAnalyticsDemoPath,
+  isPublicTourPath,
+  livePathFromTourPath,
+  tourBasePath,
+  tourHref,
+} from './publicTour';
 
 export interface DashboardRuntimeConfig {
   apiBase: string;
@@ -100,12 +109,7 @@ export function isDemoDashboardPath(pathname: string): boolean {
       normalized === PREVIEW_PRICING_ROUTE
     );
   }
-  return (
-    normalized === '/twitch/demo' ||
-    normalized.startsWith('/twitch/demo/') ||
-    normalized === '/demo/twitch/demo' ||
-    normalized.startsWith('/demo/twitch/demo/')
-  );
+  return isAnalyticsDemoPath(normalized) || isPublicTourPath(normalized);
 }
 
 export function hasDemoRuntimeConfig(

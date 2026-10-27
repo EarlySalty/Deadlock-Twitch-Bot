@@ -61,9 +61,9 @@ test('Usage-Vertrag verwirft Antworten für eine veraltete Gruppierung oder Seit
 
 test('Limits-Vertrag lässt weder erhöhte globale Caps noch aktive Planregeln zu', () => {
   assert.equal(requireLimits(limits).plan_policies_active, false);
-  assert.throws(() => requireLimits({ ...limits, global: { ...limits.global, initial_total_cap_micro_usd: 2000001 } }));
+  assert.throws(() => requireLimits({ ...limits, global: { ...limits.global, initial_total_cap_micro_usd: 20000001 } }));
   assert.throws(() => requireLimits({ ...limits, plan_policies_active: true }));
-  assert.throws(() => requireLimits({ ...limits, users: [{ ...limits.users[0], monthly_cap_micro_usd: 2000001 }] }));
+  assert.throws(() => requireLimits({ ...limits, users: [{ ...limits.users[0], monthly_cap_micro_usd: 20000001 }] }));
 });
 
 test('Client verwendet Adminpfade, CSRF und erwartete Versionen mit Monatsbudget', async () => {
@@ -105,7 +105,7 @@ test('New administration contracts reject missing or invalid stage, limit and ev
   const duplicateStage = usage();
   duplicateStage.stages.push(duplicateStage.stages[0]);
   assert.throws(() => requireUsage(duplicateStage, 'user', 0));
-  assert.throws(() => requireLimits({ ...limits, global: { ...limits.global, monthly_cap_micro_usd: 2000001 } }));
+  assert.throws(() => requireLimits({ ...limits, global: { ...limits.global, monthly_cap_micro_usd: 20000001 } }));
   assert.throws(() => requireLimits({ ...limits, users: [{ ...limits.users[0], monthly_revisions: -1 }] }));
   const badActivation = structuredClone(skills);
   badActivation.skills[0].activations[0].kind = 'execute';

@@ -14,7 +14,7 @@
 
 use sqlx::PgPool;
 
-/// Die drei Stufen des Katalogs, aufsteigend geordnet.
+/// Die Stufen des Katalogs, aufsteigend geordnet.
 ///
 /// `PartialOrd`/`Ord` folgen der Deklarationsreihenfolge, deshalb reicht
 /// `stufe >= Stufe::Plus` als Gate.
@@ -24,19 +24,29 @@ pub enum Stufe {
     Free,
     /// Netzwerk Plus: voller Verlauf, Vergleiche, KI, Coaching.
     Plus,
-    /// Creator Pro: alles aus Plus, dazu Vorrang bei Support und neuen
-    /// Funktionen. Steht im Katalog auf `buchbar = false`.
-    Pro,
+    /// Studio: Pipeline, Import, VOD, drei Plattformen.
+    Studio,
+    /// Studio KI: Transkription, Titel, Hashtags, Vollautomatik.
+    StudioKi,
+    /// Studio Schnitt: KI-Videoschnitt.
+    StudioCut,
 }
 
 impl Stufe {
-    /// Maschinenlesbarer Name fuer JSON-Antworten.
-    pub fn as_str(self) -> &'static str {
+    /// Plan-ID im Katalog. `sperre_greift` liest daran `buchbar`.
+    pub fn plan_id(self) -> &'static str {
         match self {
             Stufe::Free => "free",
             Stufe::Plus => "plus",
-            Stufe::Pro => "pro",
+            Stufe::Studio => "studio",
+            Stufe::StudioKi => "studio_ki",
+            Stufe::StudioCut => "studio_cut",
         }
+    }
+
+    /// Maschinenlesbarer Name fuer JSON-Antworten.
+    pub fn as_str(self) -> &'static str {
+        self.plan_id()
     }
 
     /// Anzeigename fuer den Nutzer.
@@ -44,18 +54,15 @@ impl Stufe {
         match self {
             Stufe::Free => "Netzwerk Free",
             Stufe::Plus => "Netzwerk Plus",
-            Stufe::Pro => "Creator Pro",
+            Stufe::Studio => "Studio",
+            Stufe::StudioKi => "Studio KI",
+            Stufe::StudioCut => "Studio Schnitt",
         }
     }
 
     /// `true` ab Netzwerk Plus.
     pub fn hat_plus(self) -> bool {
         self >= Stufe::Plus
-    }
-
-    /// `true` ab Creator Pro.
-    pub fn hat_pro(self) -> bool {
-        self >= Stufe::Pro
     }
 }
 
@@ -68,7 +75,9 @@ impl Stufe {
 /// auf Free.
 pub fn stufe_fuer_plan(plan_id: &str) -> Stufe {
     match plan_id.trim() {
-        "pro" => Stufe::Pro,
+        "studio_cut" => Stufe::StudioCut,
+        "studio_ki" => Stufe::StudioKi,
+        "studio" | "pro" => Stufe::Studio,
         "plus"
         | "chat_quiet"
         | "raid_boost"
@@ -141,29 +150,36 @@ pub async fn plan_stufe_mit_user_id(
 
 // ── Abgeleitete Grenzen ─────────────────────────────────────────────────────
 
+pub const KI_CUTS_PER_MONTH: u32 = 12;
+
 /// Wie viele Clips die Stufe im Monat erlaubt. `None` heisst unbegrenzt.
 ///
-/// Die Zahlen sind der Unterbau fuer spaeter. Ob sie jemanden **sperren**,
-/// entscheidet [`sperre_greift`] beim Bau des [`ClipKontingent`]: der Ausweg aus
-/// dem Kontingent ist Creator Pro, und solange die Stufe nicht buchbar ist,
-/// wird nur gezaehlt.
+/// Ob die Zahl sperrt, entscheidet [`clip_grenze_erzwungen`]: Studio und
+/// Studio KI nur, wenn genau diese Sprosse `buchbar` ist. Free und Plus erst,
+/// wenn der unbegrenzte Ausweg Studio Schnitt buchbar ist.
 pub fn clip_monatslimit(stufe: Stufe) -> Option<u32> {
     match stufe {
         Stufe::Free => Some(3),
         Stufe::Plus => Some(10),
-        Stufe::Pro => None,
+        Stufe::Studio => Some(40),
+        Stufe::StudioKi => Some(80),
+        Stufe::StudioCut => None,
     }
 }
 
-/// `true`, wenn die Stufe automatisches Posten auf TikTok, Instagram und
-/// YouTube nutzen darf.
+fn clip_grenze_erzwungen(stufe: Stufe) -> bool {
+    match stufe {
+        Stufe::Free | Stufe::Plus => sperre_greift(Stufe::StudioCut),
+        Stufe::Studio | Stufe::StudioKi | Stufe::StudioCut => sperre_greift(stufe),
+    }
+}
+
+/// `true`, wenn die Stufe automatisches Posten nutzen darf.
 ///
-/// Die Grenze ist Creator Pro, aber sie greift nur, wenn Pro auch kaufbar ist
-/// (siehe [`sperre_greift`]). Automatisches Posten laeuft heute fuer jeden
-/// freigeschalteten Partner, und ein Partner, der es verliert, koennte es nicht
-/// zurueckkaufen. Wird Pro buchbar, gilt die Pro-Grenze von allein.
+/// Die Grenze ist Studio (`social.auto_post` / `social.studio`) und greift nur,
+/// wenn Studio buchbar ist.
 pub fn auto_posting_erlaubt(stufe: Stufe) -> bool {
-    !sperre_greift(Stufe::Pro) || stufe.hat_pro()
+    !sperre_greift(Stufe::Studio) || stufe >= Stufe::Studio
 }
 
 /// Wie viele Tage Verlauf die Stufe sieht.
@@ -382,14 +398,13 @@ pub async fn clip_kontingent(pool: &PgPool, stufe: Stufe, streamer: &str) -> Cli
     let genutzt = if limit.is_some() {
         clip_verbrauch_diesen_monat(pool, streamer).await
     } else {
-        // Pro hat kein Limit, dann braucht es auch keine Zaehlabfrage.
         0
     };
     ClipKontingent {
         stufe,
         genutzt,
         limit,
-        erzwungen: sperre_greift(Stufe::Pro),
+        erzwungen: clip_grenze_erzwungen(stufe),
     }
 }
 
@@ -433,19 +448,31 @@ mod tests {
     #[test]
     fn stufen_sind_aufsteigend_geordnet() {
         assert!(Stufe::Free < Stufe::Plus);
-        assert!(Stufe::Plus < Stufe::Pro);
-        assert!(Stufe::Pro >= Stufe::Plus);
+        assert!(Stufe::Plus < Stufe::Studio);
+        assert!(Stufe::Studio < Stufe::StudioKi);
+        assert!(Stufe::StudioKi < Stufe::StudioCut);
         assert!(!Stufe::Free.hat_plus());
         assert!(Stufe::Plus.hat_plus());
-        assert!(!Stufe::Plus.hat_pro());
-        assert!(Stufe::Pro.hat_pro());
+        assert!(Stufe::Studio.hat_plus());
+        assert_eq!(Stufe::Studio.as_str(), "studio");
+        assert_eq!(Stufe::Studio.anzeigename(), "Studio");
+        assert_eq!(Stufe::StudioKi.as_str(), "studio_ki");
+        assert_eq!(Stufe::StudioKi.anzeigename(), "Studio KI");
+        assert_eq!(Stufe::StudioCut.as_str(), "studio_cut");
+        assert_eq!(Stufe::StudioCut.anzeigename(), "Studio Schnitt");
+        assert_eq!(Stufe::Studio.plan_id(), "studio");
+        assert_eq!(Stufe::StudioKi.plan_id(), "studio_ki");
+        assert_eq!(Stufe::StudioCut.plan_id(), "studio_cut");
     }
 
     #[test]
     fn katalog_ids_bilden_die_drei_stufen() {
         assert_eq!(stufe_fuer_plan("free"), Stufe::Free);
         assert_eq!(stufe_fuer_plan("plus"), Stufe::Plus);
-        assert_eq!(stufe_fuer_plan("pro"), Stufe::Pro);
+        assert_eq!(stufe_fuer_plan("studio"), Stufe::Studio);
+        assert_eq!(stufe_fuer_plan("studio_ki"), Stufe::StudioKi);
+        assert_eq!(stufe_fuer_plan("studio_cut"), Stufe::StudioCut);
+        assert_eq!(stufe_fuer_plan("pro"), Stufe::Studio);
         // Jede Katalog-ID muss eine Stufe haben.
         for plan in crate::billing::catalog::BILLING_PLANS {
             let stufe = stufe_fuer_plan(plan.id);
@@ -508,13 +535,22 @@ mod tests {
     fn clip_grenzen_je_stufe() {
         assert_eq!(clip_monatslimit(Stufe::Free), Some(3));
         assert_eq!(clip_monatslimit(Stufe::Plus), Some(10));
-        assert_eq!(clip_monatslimit(Stufe::Pro), None);
+        assert_eq!(clip_monatslimit(Stufe::Studio), Some(40));
+        assert_eq!(clip_monatslimit(Stufe::StudioKi), Some(80));
+        assert_eq!(clip_monatslimit(Stufe::StudioCut), None);
+        assert_eq!(KI_CUTS_PER_MONTH, 12);
     }
 
     /// Die eine Stelle, an der Sperren scharf werden: der Katalog.
     #[test]
     fn sperre_haengt_am_katalog_flag() {
-        for stufe in [Stufe::Free, Stufe::Plus, Stufe::Pro] {
+        for stufe in [
+            Stufe::Free,
+            Stufe::Plus,
+            Stufe::Studio,
+            Stufe::StudioKi,
+            Stufe::StudioCut,
+        ] {
             let buchbar = crate::billing::catalog::find_plan(stufe.as_str())
                 .expect("jede Stufe steht im Katalog")
                 .buchbar;
@@ -531,20 +567,22 @@ mod tests {
     /// automatischen Posten fallen. Die Gegenprobe steht direkt daneben: waere
     /// Pro buchbar, greift die Pro-Grenze.
     #[test]
-    fn auto_posting_sperrt_nur_bei_buchbarem_pro() {
-        let pro_buchbar = sperre_greift(Stufe::Pro);
+    fn auto_posting_sperrt_nur_bei_buchbarem_studio() {
+        let studio_buchbar = sperre_greift(Stufe::Studio);
         assert!(
-            !pro_buchbar,
-            "Erwartung dieses Umbaus: Creator Pro ist noch nicht buchbar"
+            !studio_buchbar,
+            "Erwartung dieses Umbaus: Studio ist noch nicht buchbar"
         );
         assert!(auto_posting_erlaubt(Stufe::Free));
         assert!(auto_posting_erlaubt(Stufe::Plus));
-        assert!(auto_posting_erlaubt(Stufe::Pro));
-        // Gegenprobe zur Formel selbst: mit scharfer Sperre bliebe nur Pro uebrig.
-        let mit_sperre = |stufe: Stufe| stufe.hat_pro();
+        assert!(auto_posting_erlaubt(Stufe::Studio));
+        assert!(auto_posting_erlaubt(Stufe::StudioKi));
+        assert!(auto_posting_erlaubt(Stufe::StudioCut));
+        let mit_sperre = |stufe: Stufe| stufe >= Stufe::Studio;
         assert!(!mit_sperre(Stufe::Free));
         assert!(!mit_sperre(Stufe::Plus));
-        assert!(mit_sperre(Stufe::Pro));
+        assert!(mit_sperre(Stufe::Studio));
+        assert!(mit_sperre(Stufe::StudioCut));
     }
 
     /// Das Kontingent zaehlt, sperrt aber nicht, solange Pro nicht buchbar ist.
@@ -611,7 +649,7 @@ mod tests {
         assert_eq!(verlauf_tage_klemmen(Stufe::Free, 365), (2, true));
         assert_eq!(verlauf_tage_klemmen(Stufe::Free, 1), (1, false));
         assert_eq!(verlauf_tage_klemmen(Stufe::Plus, 365), (365, false));
-        assert_eq!(verlauf_tage_klemmen(Stufe::Pro, 365), (365, false));
+        assert_eq!(verlauf_tage_klemmen(Stufe::Studio, 365), (365, false));
         assert_eq!(verlauf_monate_klemmen(Stufe::Free, 12), (1, true));
         assert_eq!(verlauf_monate_klemmen(Stufe::Plus, 12), (12, false));
     }

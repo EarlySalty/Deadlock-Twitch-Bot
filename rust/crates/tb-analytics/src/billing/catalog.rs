@@ -97,7 +97,8 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
         name: "Netzwerk Free",
         tier: "free",
         badge: "free",
-        description: "Dauerhaft kostenlos: Auto-Raid, Chat-Schutz und die Tagesform deines letzten Streams.",
+        description:
+            "Dauerhaft kostenlos: Auto-Raid, Chat-Schutz und die Tagesform deines letzten Streams.",
         monthly_gross_cents: 0,
         yearly_gross_cents: 0,
         recommended: false,
@@ -135,6 +136,76 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
         buchbar: true,
     },
     BillingPlan {
+        id: "studio",
+        name: "Studio",
+        tier: "extended",
+        badge: "studio",
+        description: "Pipeline, Import, VOD, drei Plattformen, Vorlagen und Freigabe-Autopilot.",
+        monthly_gross_cents: 1200,
+        yearly_gross_cents: 12000,
+        recommended: false,
+        entitlements: &[
+            "analytics",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+            "raid.priority",
+            "social.auto_post",
+            "social.studio",
+        ],
+        features: &[
+            "Pipeline",
+            "Import",
+            "VOD",
+            "Drei Plattformen",
+            "Vorlagen",
+            "Freigabe-Autopilot",
+        ],
+        buchbar: false,
+    },
+    BillingPlan {
+        id: "studio_ki",
+        name: "Studio KI",
+        tier: "extended",
+        badge: "studio_ki",
+        description: "Transkription, Titel, Hashtags und Vollautomatik.",
+        monthly_gross_cents: 1500,
+        yearly_gross_cents: 15000,
+        recommended: true,
+        entitlements: &[
+            "analytics",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+            "raid.priority",
+            "social.auto_post",
+            "social.captions",
+            "social.studio",
+        ],
+        features: &["Transkription", "Titel", "Hashtags", "Vollautomatik"],
+        buchbar: false,
+    },
+    BillingPlan {
+        id: "studio_cut",
+        name: "Studio Schnitt",
+        tier: "extended",
+        badge: "studio_cut",
+        description: "KI-Videoschnitt mit 12 Schnitten im Monat.",
+        monthly_gross_cents: 2000,
+        yearly_gross_cents: 20000,
+        recommended: false,
+        entitlements: &[
+            "analytics",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+            "raid.priority",
+            "social.auto_post",
+            "social.captions",
+            "social.studio",
+            "social.video_edit",
+        ],
+        features: &["KI-Videoschnitt", "12 Schnitte im Monat"],
+        buchbar: false,
+    },
+    BillingPlan {
         id: "pro",
         name: "Creator Pro",
         tier: "extended",
@@ -154,6 +225,7 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
             "chat.promos.disable",
             "raid.priority",
             "social.auto_post",
+            "social.studio",
         ],
         features: &[
             "Alles aus Netzwerk Plus",
@@ -533,7 +605,11 @@ fn parse_cycle_key(raw: &str) -> Option<u32> {
 /// eingecheckter Default gewinnt für bekannte Pläne; nur für Pläne OHNE
 /// eingecheckten Default greift die übergebene Vault-Map. `vault_price_map` kommt
 /// aus [`parse_price_id_mapping`]; in Produktion via [`price_id_map_from_env`].
-pub fn resolved_price_id(plan_id: &str, cycle_months: u32, vault_price_map: &PriceMap) -> Option<String> {
+pub fn resolved_price_id(
+    plan_id: &str,
+    cycle_months: u32,
+    vault_price_map: &PriceMap,
+) -> Option<String> {
     let cycle = normalize_billing_cycle(cycle_months);
     if let Some(default) = price_id_default(plan_id, cycle) {
         return Some(default.to_string());
@@ -577,24 +653,37 @@ pub fn product_id_map_from_env() -> ProductMap {
 mod tests {
     use super::*;
 
-    /// Erwarteter Katalog: `(id, name, monatlich, jaehrlich, tier)`.
-    const EXPECTED: &[(&str, &str, u32, u32, &str)] = &[
-        ("free", "Netzwerk Free", 0, 0, "free"),
-        ("plus", "Netzwerk Plus", 499, 4990, "extended"),
-        ("pro", "Creator Pro", 999, 9990, "extended"),
+    /// Erwarteter Katalog: `(id, name, monatlich, jaehrlich, tier, recommended)`.
+    const EXPECTED: &[(&str, &str, u32, u32, &str, bool)] = &[
+        ("free", "Netzwerk Free", 0, 0, "free", false),
+        ("plus", "Netzwerk Plus", 499, 4990, "extended", false),
+        ("studio", "Studio", 1200, 12000, "extended", false),
+        ("studio_ki", "Studio KI", 1500, 15000, "extended", true),
+        (
+            "studio_cut",
+            "Studio Schnitt",
+            2000,
+            20000,
+            "extended",
+            false,
+        ),
+        ("pro", "Creator Pro", 999, 9990, "extended", false),
     ];
 
     #[test]
-    fn katalog_hat_genau_drei_stufen() {
-        assert_eq!(BILLING_PLANS.len(), 3);
+    fn katalog_hat_sechs_stufen() {
+        assert_eq!(BILLING_PLANS.len(), 6);
         for (plan, exp) in BILLING_PLANS.iter().zip(EXPECTED.iter()) {
             assert_eq!(plan.id, exp.0, "Reihenfolge der Plan-IDs");
             assert_eq!(plan.name, exp.1, "Name fuer {}", exp.0);
-            assert_eq!(plan.monthly_gross_cents, exp.2, "Monatspreis fuer {}", exp.0);
+            assert_eq!(
+                plan.monthly_gross_cents, exp.2,
+                "Monatspreis fuer {}",
+                exp.0
+            );
             assert_eq!(plan.yearly_gross_cents, exp.3, "Jahrespreis fuer {}", exp.0);
             assert_eq!(plan.tier, exp.4, "tier fuer {}", exp.0);
-            // Kein Empfohlen-Badge (Spec M6).
-            assert!(!plan.recommended, "recommended fuer {}", exp.0);
+            assert_eq!(plan.recommended, exp.5, "recommended fuer {}", exp.0);
         }
     }
 
@@ -652,7 +741,7 @@ mod tests {
     /// Kern-Orakel: die drei Stufen ueber beide Zyklen, inklusive Lookup-Keys.
     #[test]
     fn preise_und_lookup_keys_je_stufe() {
-        for (id, _name, monthly, yearly, _tier) in EXPECTED {
+        for (id, _name, monthly, yearly, _tier, _recommended) in EXPECTED {
             let plan = find_plan(id).expect("Plan vorhanden");
 
             let monatlich = plan.price_for_cycle(1);
@@ -744,7 +833,10 @@ mod tests {
             "bundle_komplett",
             "analytics_trial",
         ] {
-            assert!(find_plan(alt).is_none(), "{alt} darf nicht im Katalog stehen");
+            assert!(
+                find_plan(alt).is_none(),
+                "{alt} darf nicht im Katalog stehen"
+            );
         }
     }
 
@@ -790,16 +882,21 @@ mod tests {
         assert_eq!(cat["cycle_label"], "30 Tage");
         assert_eq!(cat["discount_percent"], 0);
         let plans = cat["plans"].as_array().unwrap();
-        assert_eq!(plans.len(), 3);
+        assert_eq!(plans.len(), 6);
         assert_eq!(plans[0]["id"], "free");
         assert_eq!(plans[0]["price"]["total_gross_cents"], 0);
         assert_eq!(plans[0]["price"]["total_gross_label"], "0,00 EUR");
         assert_eq!(plans[1]["id"], "plus");
         assert_eq!(plans[1]["price"]["total_gross_cents"], 499);
         assert_eq!(plans[1]["price"]["total_gross_label"], "4,99 EUR");
-        assert_eq!(plans[2]["id"], "pro");
-        assert_eq!(plans[2]["price"]["total_gross_cents"], 999);
-        assert_eq!(plans[2]["price"]["total_gross_label"], "9,99 EUR");
+        assert_eq!(plans[2]["id"], "studio");
+        assert_eq!(plans[2]["price"]["total_gross_cents"], 1200);
+        assert_eq!(plans[2]["price"]["total_gross_label"], "12,00 EUR");
+        assert_eq!(plans[3]["id"], "studio_ki");
+        assert_eq!(plans[3]["price"]["total_gross_cents"], 1500);
+        assert_eq!(plans[5]["id"], "pro");
+        assert_eq!(plans[5]["price"]["total_gross_cents"], 999);
+        assert_eq!(plans[5]["price"]["total_gross_label"], "9,99 EUR");
 
         let cat12 = catalog_json(12);
         assert_eq!(cat12["cycle_months"], 12);
@@ -808,8 +905,10 @@ mod tests {
         let p12 = cat12["plans"].as_array().unwrap();
         assert_eq!(p12[1]["price"]["total_gross_cents"], 4990);
         assert_eq!(p12[1]["price"]["total_gross_label"], "49,90 EUR");
-        assert_eq!(p12[2]["price"]["total_gross_cents"], 9990);
-        assert_eq!(p12[2]["price"]["total_gross_label"], "99,90 EUR");
+        assert_eq!(p12[2]["price"]["total_gross_cents"], 12000);
+        assert_eq!(p12[4]["price"]["total_gross_cents"], 20000);
+        assert_eq!(p12[5]["price"]["total_gross_cents"], 9990);
+        assert_eq!(p12[5]["price"]["total_gross_label"], "99,90 EUR");
         assert_eq!(p12[0]["price"]["total_gross_cents"], 0);
         // Unbekannter Zyklus faellt auf 1 zurueck.
         assert_eq!(catalog_json(7)["cycle_months"], 1);
@@ -837,12 +936,18 @@ mod tests {
     /// durchweg Clip-Werkzeuge, und die gibt es noch nicht.
     #[test]
     fn nur_free_und_plus_sind_buchbar() {
+        assert_eq!(BILLING_PLANS.len(), 6);
         assert!(find_plan("free").unwrap().buchbar);
         assert!(find_plan("plus").unwrap().buchbar);
+        assert!(!find_plan("studio").unwrap().buchbar);
+        assert!(!find_plan("studio_ki").unwrap().buchbar);
+        assert!(!find_plan("studio_cut").unwrap().buchbar);
         assert!(!find_plan("pro").unwrap().buchbar);
         let plans = catalog_json(1);
         let plans = plans["plans"].as_array().unwrap();
-        assert_eq!(plans[2]["id"], "pro");
+        assert_eq!(plans[5]["id"], "pro");
+        assert_eq!(plans[5]["buchbar"], false);
+        assert_eq!(plans[2]["id"], "studio");
         assert_eq!(plans[2]["buchbar"], false);
         assert_eq!(plans[0]["buchbar"], true);
         assert_eq!(plans[1]["buchbar"], true);
@@ -853,8 +958,14 @@ mod tests {
     fn katalog_json_zeigt_keine_netto_felder_und_keine_bundles() {
         for cycle in [1u32, 12u32] {
             let raw = catalog_json(cycle).to_string();
-            assert!(!raw.contains("net_cents"), "Netto-Feld im Katalog ({cycle}m)");
-            assert!(!raw.contains("net_label"), "Netto-Label im Katalog ({cycle}m)");
+            assert!(
+                !raw.contains("net_cents"),
+                "Netto-Feld im Katalog ({cycle}m)"
+            );
+            assert!(
+                !raw.contains("net_label"),
+                "Netto-Label im Katalog ({cycle}m)"
+            );
             assert!(!raw.contains("bundle"), "Bundle im Katalog ({cycle}m)");
             assert!(!raw.contains("1,99"), "1,99 im Katalog ({cycle}m)");
         }
@@ -886,9 +997,8 @@ mod tests {
     /// Stufen; das ist der einzige Weg, bis die Stripe-Preise angelegt sind.
     #[test]
     fn resolved_price_id_kommt_aus_dem_vault() {
-        let vault = parse_price_id_mapping(
-            r#"{"plus": {"1": "price_plus_1m", "12": "price_plus_12m"}}"#,
-        );
+        let vault =
+            parse_price_id_mapping(r#"{"plus": {"1": "price_plus_1m", "12": "price_plus_12m"}}"#);
         assert_eq!(
             resolved_price_id("plus", 1, &vault).as_deref(),
             Some("price_plus_1m")
@@ -925,7 +1035,8 @@ mod tests {
             let mut sorted = plan.entitlements.to_vec();
             sorted.sort_unstable();
             assert_eq!(
-                plan.entitlements, &sorted[..],
+                plan.entitlements,
+                &sorted[..],
                 "entitlements fuer {} muessen sortiert sein",
                 plan.id
             );

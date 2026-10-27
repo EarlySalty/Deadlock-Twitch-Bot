@@ -429,7 +429,7 @@ test(
     await t.test('Wartezustände bleiben im englischen Dashboard lesbar', async () => {
       const legacy = clips.earlysalty[4].upload_errors.youtube;
       const states = [];
-      await page.evaluate(() => localStorage.setItem('dashboard.language', 'en'));
+      await page.evaluate(() => localStorage.setItem('dashboard.language.v2', 'en'));
       for (const reason of ['connection_missing', 'connection_incomplete', legacy]) {
         clips.earlysalty[4].upload_errors.youtube = reason;
         await page.reload();
@@ -452,7 +452,7 @@ test(
       }
       await fs.writeFile(path.join(evidence, 'waiting-i18n-dom.json'), JSON.stringify(states, null, 2));
       clips.earlysalty[4].upload_errors.youtube = legacy;
-      await page.evaluate(() => localStorage.setItem('dashboard.language', 'de'));
+      await page.evaluate(() => localStorage.setItem('dashboard.language.v2', 'de'));
       await page.setViewportSize({ width: 1440, height: 1080 });
       await page.reload();
       await page.locator('.studio-clip').first().waitFor();

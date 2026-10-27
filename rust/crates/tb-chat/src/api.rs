@@ -191,6 +191,14 @@ pub trait ChatApi: Send + Sync {
     /// `GET /helix/users?login=` → user_id.
     async fn resolve_user_id(&self, login: &str) -> Result<Option<String>, String>;
 
+    async fn user_follows(
+        &self,
+        _broadcaster_id: &str,
+        _user_id: &str,
+    ) -> Result<Option<bool>, String> {
+        Ok(None)
+    }
+
     /// Bot-User-ID (sender_id/moderator_id für alle Aktionen).
     async fn bot_user_id(&self) -> String;
 }

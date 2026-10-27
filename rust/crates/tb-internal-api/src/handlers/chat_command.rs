@@ -73,6 +73,7 @@ async fn get_invite_url(pool: &PgPool, channel_login: &str) -> Result<Option<Str
 }
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../../test-support/postgres.rs"]
 mod test_postgres;
 

@@ -119,6 +119,21 @@ async fn load(pool: &PgPool, key: &str) -> Result<Option<TikTokDraft>, Response>
         .transpose()
 }
 
+pub(super) async fn saved_choices(
+    pool: &PgPool,
+    clip_id: i64,
+    user: &str,
+) -> Result<(Option<TikTokDraft>, Option<TikTokDraft>), Response> {
+    let draft = load(pool, &draft_key(clip_id, user))
+        .await?
+        .map(TikTokDraft::without_music_consent);
+    let defaults = load(pool, &defaults_key(user))
+        .await?
+        .map(TikTokDraft::without_disclosure)
+        .map(TikTokDraft::without_music_consent);
+    Ok((draft, defaults))
+}
+
 async fn tiktok_account(pool: &PgPool, user: &str) -> Result<Option<String>, Response> {
     sqlx::query_scalar::<_, Option<String>>(
         "SELECT platform_user_id FROM social_media_platform_auth WHERE platform = 'tiktok' AND enabled = 1 AND twitch_user_id = $1 ORDER BY authorized_at DESC, id DESC LIMIT 1",

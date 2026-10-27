@@ -107,7 +107,7 @@ async fn skill_history_shows_learned_diff_and_rollback_restores_bundled_version(
     let base = tb_social_media::ai_editor::skill_snapshot(SkillId::Copywriting).text;
     let learned = format!(
         "{}\nPrefer the streamer's own wording for callouts.\n",
-        base.replace("# Copywriting v1", "# Copywriting v2")
+        base.replace("# Copywriting v2", "# Copywriting v3")
     );
     let evidence = SkillEvidence {
         summary: "Wiederholte Korrekturen".into(),
@@ -156,10 +156,10 @@ async fn skill_history_shows_learned_diff_and_rollback_restores_bundled_version(
     let diff = entry["versions"][0]["diff"].as_array().expect("diff");
     assert!(diff
         .iter()
-        .any(|line| line["kind"] == "added" && line["text"] == "# Copywriting v2"));
+        .any(|line| line["kind"] == "added" && line["text"] == "# Copywriting v3"));
     assert!(diff
         .iter()
-        .any(|line| line["kind"] == "removed" && line["text"] == "# Copywriting v1"));
+        .any(|line| line["kind"] == "removed" && line["text"] == "# Copywriting v2"));
     assert_eq!(learned_report["proposals"][0]["title"], "Feld vorschlagen");
 
     let cross_origin = Request::builder()

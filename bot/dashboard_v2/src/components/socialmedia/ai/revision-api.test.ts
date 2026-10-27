@@ -17,6 +17,9 @@ test('revision fields and confirmations decode without trusting incomplete versi
   assert.equal(decodeAiJob(base).versions[2].parent_version_id,2201);
   assert.throws(() => decodeAiJob({...base,root_job_id:0}));
   assert.throws(() => decodeAiJob({...base,revision_proposal:{reanalyze:true}}));
+  const failedRevision = {summary:'Der KI-Dienst ist derzeit nicht verfügbar. Die bisherige Fassung bleibt unverändert.',impact:'',reanalyze:false,requires_confirmation:false,estimated_provider_cost_usd:0};
+  assert.equal(decodeAiJob({...base,status:'failed',revision_proposal:failedRevision}).revision_proposal?.impact,'');
+  assert.throws(() => decodeAiJob({...base,revision_proposal:{...failedRevision,impact:null}}));
   assert.throws(() => decodeAiJob({...base,versions:[{...base.versions[0],approved_platforms:['youtube','youtube']}]}));
   assert.throws(() => decodeAiJob({...base,versions:[{...base.versions[0],original_url:'https://untrusted.example/video'}]}));
 });

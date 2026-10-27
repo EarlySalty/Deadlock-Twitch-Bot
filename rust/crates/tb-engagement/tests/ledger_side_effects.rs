@@ -104,7 +104,7 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
             .endpoint(tb_llm::selection::LlmEndpoint {
                 provider: "fireworks",
                 base_url: server.uri(),
-                model: tb_llm::selection::configured_fireworks_model().into(),
+                model: tb_llm::selection::configured_fireworks_model(),
                 api_key: Some("synthetic-key".into()),
             }),
     )
@@ -135,7 +135,7 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
                 .endpoint(tb_llm::selection::LlmEndpoint {
                     provider: "fireworks",
                     base_url: server.uri(),
-                    model: tb_llm::selection::configured_fireworks_model().into(),
+                    model: tb_llm::selection::configured_fireworks_model(),
                     api_key: Some("synthetic-key".into()),
                 }),
         )

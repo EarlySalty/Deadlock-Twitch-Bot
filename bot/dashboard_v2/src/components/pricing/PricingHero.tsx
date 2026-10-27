@@ -3,8 +3,9 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Zap, TrendingUp, Users, Loader2, Sparkles, CreditCard, ArrowRight } from 'lucide-react';
 import { PREVIEW_BILLING_ROUTE, isPreviewModeEnabled } from '../../preview/routes';
+import { onPublicTour } from '../../publicTour';
 
-type TrialState = 'idle' | 'loading' | 'granted' | 'already_used' | 'has_paid_plan' | 'error';
+type TrialState = 'idle' | 'loading' | 'granted' | 'already_used' | 'has_paid_plan' | 'demo' | 'error';
 
 async function startTrial(oauthLink: (url: string) => string): Promise<TrialState> {
   try {
@@ -34,6 +35,7 @@ const MSG: Record<string, string> = {
   granted: 'Deine 30-Tage-Testphase läuft! Du wirst weitergeleitet…',
   already_used: 'Du hast die kostenlose Testphase bereits genutzt.',
   has_paid_plan: 'Du hast bereits ein aktives Abo.',
+  demo: 'In der Demo kannst du nichts ändern.',
   error: 'Etwas ist schiefgelaufen. Bitte versuche es erneut.',
 };
 
@@ -43,6 +45,10 @@ export default function PricingHero() {
   const [trialState, setTrialState] = useState<TrialState>('idle');
 
   const handleTrial = async () => {
+    if (onPublicTour()) {
+      setTrialState('demo');
+      return;
+    }
     if (isPreviewModeEnabled()) {
       window.location.href = PREVIEW_BILLING_ROUTE;
       return;
@@ -55,7 +61,7 @@ export default function PricingHero() {
     }
   };
 
-  const isBlocked = trialState === 'already_used' || trialState === 'has_paid_plan';
+  const isBlocked = trialState === 'already_used' || trialState === 'has_paid_plan' || trialState === 'demo';
 
   return (
     <section className="relative text-center mb-12 overflow-hidden">

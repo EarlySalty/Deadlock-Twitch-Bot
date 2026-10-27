@@ -72,7 +72,10 @@ struct Owner<'a> {
 
 impl Owner<'_> {
     fn local(&self, value: DateTime<Utc>) -> String {
-        let format = "%d.%m.%Y um %H:%M Uhr";
+        self.formatted(value, "%d.%m.%Y um %H:%M Uhr")
+    }
+
+    fn formatted(&self, value: DateTime<Utc>, format: &str) -> String {
         match self.settings.timezone.parse::<Tz>() {
             Ok(zone) => value.with_timezone(&zone).format(format).to_string(),
             Err(_) => value.format(format).to_string(),
@@ -111,7 +114,10 @@ pub(crate) async fn collect(pool: &PgPool) -> Result<(), PublishError> {
     let owners: Vec<String> = sqlx::query_scalar(
         "SELECT twitch_user_id FROM social_media_autopilot_settings
          UNION SELECT DISTINCT twitch_user_id FROM social_produced_videos
-         WHERE created_at > clock_timestamp() - INTERVAL '14 days'",
+         WHERE created_at > clock_timestamp() - INTERVAL '14 days'
+         UNION SELECT DISTINCT c.twitch_user_id FROM twitch_clips_upload_queue q
+         JOIN twitch_clips_social_media c ON c.id = q.clip_id
+         WHERE q.status = 'uncertain' AND q.produced_video_id IS NULL AND c.twitch_user_id IS NOT NULL",
     )
     .fetch_all(pool)
     .await?;
@@ -253,6 +259,7 @@ async fn collect_owner(
             )
             .await?;
     }
+    record_legacy_uncertain(connection, owner).await?;
     let empty: Option<DateTime<Utc>> = sqlx::query_scalar(
         "SELECT planned_at FROM social_autopilot_schedule_state WHERE twitch_user_id = $1
          AND production_hold = 'empty_pool' AND planned_at > clock_timestamp() - INTERVAL '1 hour'",
@@ -270,6 +277,38 @@ async fn collect_owner(
             )
             .await?;
     }
+    Ok(())
+}
+
+async fn record_legacy_uncertain(
+    connection: &mut PgConnection,
+    owner: &Owner<'_>,
+) -> Result<(), PublishError> {
+    let open: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_clips_upload_queue q
+         JOIN twitch_clips_social_media c ON c.id = q.clip_id
+         WHERE c.twitch_user_id = $1 AND q.status = 'uncertain' AND q.produced_video_id IS NULL",
+    )
+    .bind(owner.id)
+    .fetch_one(&mut *connection)
+    .await?;
+    if open == 0 {
+        return Ok(());
+    }
+    let content = if open == 1 {
+        "Bei einem älteren Upload ist unklar, ob er veröffentlicht wurde. Er wird nicht automatisch wiederholt, damit nichts doppelt erscheint. Bitte prüfe dein Konto.".to_string()
+    } else {
+        format!("Bei {open} älteren Uploads ist unklar, ob sie veröffentlicht wurden. Sie werden nicht automatisch wiederholt, damit nichts doppelt erscheint. Bitte prüfe deine Konten.")
+    };
+    let day = owner.formatted(Utc::now(), "%Y-%m-%d");
+    owner
+        .record(
+            connection,
+            Kind::PublicationFailed,
+            &format!("legacy_uncertain:{day}"),
+            &content,
+        )
+        .await?;
     Ok(())
 }
 

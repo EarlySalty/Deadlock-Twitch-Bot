@@ -331,6 +331,7 @@ pub struct AutoRaidRequest {
     /// Auto-Raids respektieren die weiche Raid-Blacklist; manuelle Raids nur
     /// harte globale Bans.
     pub respect_soft_raid_blacklist: bool,
+    pub fixed_target: Option<ResolvedTarget>,
 }
 
 /// Ergebnis eines Pipeline-Laufs (Python Status-Dict).
@@ -521,24 +522,44 @@ impl AutoRaidPipeline {
             .as_ref()
             .map(|service| service.next_flow_id("raid"));
 
+        if let Some(target) = &req.fixed_target {
+            if hard_blacklist_ids.contains(&target.user_id)
+                || hard_blacklist_logins.contains(&target.user_login.to_lowercase())
+            {
+                tracing::info!(
+                    from = %req.broadcaster_login,
+                    to = %target.user_login,
+                    "Raid-Wunschziel ist global gesperrt"
+                );
+                return AutoRaidPipelineOutcome::Blocked {
+                    error: "target_blacklisted".to_string(),
+                };
+            }
+        }
+
         for attempt in 1..=MAX_ATTEMPTS {
             let attempt_start = Instant::now();
-            let target = match self
-                .resolve_target(
-                    req,
-                    &scores,
-                    raider_class,
-                    &boost_logins,
-                    &hard_blacklist_ids,
-                    &hard_blacklist_logins,
-                    &full_blacklist_ids,
-                    &full_blacklist_logins,
-                    &exclude_ids,
-                    &mut cached_fallback,
-                    attempt,
-                )
-                .await
-            {
+            let resolved = match &req.fixed_target {
+                Some(target) if attempt == 1 => Some(target.clone()),
+                Some(_) => None,
+                None => {
+                    self.resolve_target(
+                        req,
+                        &scores,
+                        raider_class,
+                        &boost_logins,
+                        &hard_blacklist_ids,
+                        &hard_blacklist_logins,
+                        &full_blacklist_ids,
+                        &full_blacklist_logins,
+                        &exclude_ids,
+                        &mut cached_fallback,
+                        attempt,
+                    )
+                    .await
+                }
+            };
+            let target = match resolved {
                 Some(target) => target,
                 None => {
                     if let Some(flow_id) = observability_flow_id.as_deref() {
@@ -708,11 +729,16 @@ impl AutoRaidPipeline {
                 }
                 RaidOutcome::Failed(error) => {
                     exclude_ids.insert(target.user_id.clone());
-                    if !is_retryable_raid_error(&error) {
+                    if req.fixed_target.is_some() || !is_retryable_raid_error(&error) {
+                        let decision = if req.fixed_target.is_some() {
+                            "fixed_target_failed"
+                        } else {
+                            "non_retryable"
+                        };
                         self.emit_raid_observability_event(
                             &flow_id,
                             "raid_failed",
-                            "non_retryable",
+                            decision,
                             req,
                             Some(&target),
                             raid_failed_details(
@@ -730,7 +756,8 @@ impl AutoRaidPipeline {
                             to = %target.user_login,
                             attempt,
                             %error,
-                            "Raid mit nicht-wiederholbarem Fehler fehlgeschlagen"
+                            decision,
+                            "Raid fehlgeschlagen ohne weiteren Versuch"
                         );
                         return AutoRaidPipelineOutcome::Failed { error };
                     }

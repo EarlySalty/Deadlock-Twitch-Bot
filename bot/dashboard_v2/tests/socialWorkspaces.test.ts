@@ -13,23 +13,24 @@ test('grouped workspaces keep old aliases and numeric channel context', () => {
   for (const [alias, view] of [
     ['autopilot', 'planen'],
     ['schedule', 'planen'],
-    ['library', 'planen'],
-    ['import', 'planen'],
-    ['review', 'freigabe'],
-    ['clips', 'heute'],
+    ['library', 'clips'],
+    ['import', 'clips'],
+    ['review', 'clips'],
+    ['clips', 'clips'],
     ['settings', 'einstellungen'],
-    ['vod', 'veroeffentlicht'],
+    ['vod', 'vod'],
+    ['veroeffentlicht', 'clips'],
   ] as const) {
     assert.equal(socialViewFromSearch(`?view=${alias}`), view);
   }
   const search = socialViewSearch(
-    '?twitch_user_id=123456789&streamer=alpha&fixture=ai-rendering',
-    'ai',
-    42,
+    '?twitch_user_id=123456789&streamer=alpha&fixture=ai-rendering&clip_db_id=42',
+    'review',
   );
   const params = new URLSearchParams(search);
   assert.equal(params.get('twitch_user_id'), '123456789');
-  assert.equal(params.get('clip_db_id'), '42');
+  assert.equal(params.get('clip_db_id'), null);
+  assert.equal(params.get('stage'), 'review');
   assert.equal(params.get('fixture'), 'ai-rendering');
   assert.equal(
     socialViewFromSearch(`?${search}&oauth_error=provider_error`),

@@ -87,6 +87,7 @@ async fn cleanup_once(pool: &PgPool, discord: &dyn DiscordBackend) -> Result<(),
                     DiscordError::BrokerError { status, .. } => format!("discord_status_{status}"),
                     DiscordError::Http(_) => "discord_http".to_owned(),
                     DiscordError::Deserialize(_) => "discord_decode".to_owned(),
+                    DiscordError::DmOptedOut => "discord_dm_opted_out".to_owned(),
                 };
                 sqlx::query(
                     "UPDATE twitch_crew_review_events event
@@ -117,6 +118,7 @@ async fn cleanup_once(pool: &PgPool, discord: &dyn DiscordBackend) -> Result<(),
 }
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../test-support/postgres.rs"]
 mod postgres;
 

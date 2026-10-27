@@ -1427,7 +1427,7 @@ impl DashboardAuthState {
                     COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST
                 LIMIT 1
              ) current_partner WHERE LOWER(COALESCE(technical_pause_reason, '')) <> 'blocked'
-                AND public.guild_partner_allowed(twitch_user_id)",
+                AND public.guild_partner_login_allowed(twitch_user_id)",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -1437,6 +1437,26 @@ impl DashboardAuthState {
             twitch_user_id,
             display_name: String::new(),
         }))
+    }
+
+    pub async fn record_dashboard_login(&self, user_id: &str) -> Result<(), sqlx::Error> {
+        let user_id = user_id.trim();
+        if user_id.is_empty() || !user_id.bytes().all(|c| c.is_ascii_digit()) {
+            return Ok(());
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_dashboard_logins (twitch_user_id, login_count)
+            VALUES ($1, 1)
+            ON CONFLICT (twitch_user_id) DO UPDATE
+            SET login_count = twitch_dashboard_logins.login_count + 1,
+                last_login_at = NOW()
+            "#,
+        )
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Self-Heal beim OAuth-Login (P1.56): reaktiviert einen departnered/archived/
@@ -3173,6 +3193,12 @@ print(f.encrypt(payload.encode()).decode(), end='')
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES ('888001', 'gatetest_user')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
             "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
              VALUES ($1, $2, 'active')
              ON CONFLICT DO NOTHING",
@@ -3218,6 +3244,14 @@ print(f.encrypt(payload.encode()).decode(), end='')
         ensure_partners_table(&pool).await;
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
+        sqlx::raw_sql(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES ('888002', 'blocked_user');
+             INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, source) VALUES
+                ('888002', 1289721245281292288, true, 'migration');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, technical_pause_reason)
              VALUES ($1, $2, 'active', 'blocked')
@@ -3241,6 +3275,71 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .execute(&pool)
             .await
             .ok();
+    }
+
+    #[tokio::test]
+    async fn login_gate_laesst_reauthorisierung_zu_und_sperrt_banns_und_ausschluesse() {
+        let db = crate::guild_onboarding::tests::fixture().await;
+        let pool = db.pool.clone();
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        sqlx::raw_sql(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES
+                ('902001', 'former'), ('902002', 'token_err'), ('902003', 'banned'),
+                ('902004', 'former_banned'), ('902005', 'former_excluded'), ('902006', 'former_kicked');
+             INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, source) VALUES
+                ('902003', 1289721245281292288, true, 'migration');
+             INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, source, deactivated_by, deactivated_at) VALUES
+                ('902001', 1289721245281292288, false, 'migration', 'migration', now()),
+                ('902002', 1289721245281292288, false, 'migration', 'migration', now()),
+                ('902004', 1289721245281292288, false, 'migration', 'migration', now()),
+                ('902005', 1289721245281292288, false, 'migration', 'migration', now()),
+                ('902006', 1289721245281292288, false, 'migration', 'admin', now());
+             INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, technical_pause_reason) VALUES
+                ('former', '902001', 'departnered', NULL),
+                ('token_err', '902002', 'active', 'token_error'),
+                ('banned', '902003', 'active', 'bot_banned'),
+                ('former_banned', '902004', 'departnered', 'bot_banned'),
+                ('former_excluded', '902005', 'departnered', NULL),
+                ('former_kicked', '902006', 'departnered', NULL);
+             INSERT INTO twitch_exclusions (twitch_user_id) VALUES ('902005');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for (login, id) in [("former", "902001"), ("token_err", "902002")] {
+            assert!(
+                state
+                    .find_partner_for_login(login, id)
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "{login} muss sich neu autorisieren können"
+            );
+            assert!(
+                !sqlx::query_scalar::<_, bool>("SELECT guild_partner_allowed($1)")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                "{login} bleibt für den Guild-Zugang gesperrt"
+            );
+        }
+        for (login, id) in [
+            ("banned", "902003"),
+            ("former_banned", "902004"),
+            ("former_excluded", "902005"),
+            ("former_kicked", "902006"),
+        ] {
+            assert!(
+                state
+                    .find_partner_for_login(login, id)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "{login} darf sich nicht anmelden"
+            );
+        }
     }
 
     #[tokio::test]
@@ -3277,6 +3376,14 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .await
         .ok();
 
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES
+                ('901001', 'active_raid_off'), ('901002', 'admin_archived_gate'),
+                ('901003', 'tech_pause_gate'), ('901004', 'inactive_info_gate')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO twitch_partners
                 (twitch_login, twitch_user_id, status, manual_partner_opt_out,
@@ -3864,6 +3971,8 @@ mod identity_regression_tests {
     async fn recycled_login_never_changes_authenticated_id_in_either_session_type() {
         let db = crate::guild_onboarding::tests::fixture().await;
         sqlx::raw_sql("CREATE TABLE dashboard_sessions(session_id TEXT PRIMARY KEY,session_type TEXT NOT NULL,payload_enc BYTEA NOT NULL,created_at DOUBLE PRECISION NOT NULL,expires_at DOUBLE PRECISION NOT NULL);
+            INSERT INTO twitch_streamer_identities(twitch_user_id,twitch_login) VALUES ('111','recycled'),('222','old_name'),('403','blocked_current');
+            INSERT INTO streamer_guilds(twitch_user_id,guild_id,active,source,deactivated_by,deactivated_at) VALUES ('222',1289721245281292288,false,'migration','migration',now());
             INSERT INTO twitch_partners(twitch_login,twitch_user_id,status,manual_partner_opt_out) VALUES ('recycled','111','active',0),('old_name','222','archived',0),('older_name','222','departnered',0),('former','111','archived',0);
             CREATE UNIQUE INDEX one_active_partner_per_id ON twitch_partners(twitch_user_id) WHERE status='active';
             INSERT INTO twitch_partners(twitch_login,twitch_user_id,status,technical_pause_reason) VALUES('blocked_current','403','active','blocked'),('allowed_old','403','archived',NULL);")
@@ -4016,6 +4125,7 @@ mod identity_regression_tests {
     async fn discord_profile_uses_verified_id_and_rolls_back_deduplication_on_failure() {
         let db = crate::test_database::Database::new().await;
         sqlx::raw_sql("CREATE TABLE twitch_streamers(twitch_login TEXT NOT NULL,twitch_user_id TEXT);
+            CREATE TABLE twitch_partners(twitch_login TEXT,twitch_user_id TEXT,status TEXT,departnered_at TIMESTAMPTZ,admin_archived_at TIMESTAMPTZ,partnered_at TIMESTAMPTZ);
             CREATE TABLE twitch_streamer_identities(twitch_user_id TEXT PRIMARY KEY,twitch_login TEXT,discord_user_id TEXT,discord_display_name TEXT CHECK(discord_display_name <> 'reject-test'),is_on_discord INTEGER,created_at TIMESTAMPTZ,updated_at TIMESTAMPTZ);
             INSERT INTO twitch_streamers VALUES('recycled','111'),('previous_name','222');
             INSERT INTO twitch_streamer_identities(twitch_user_id,twitch_login,discord_user_id) VALUES('111','recycled','888');")
@@ -4082,6 +4192,48 @@ mod identity_regression_tests {
         .await
         .unwrap();
         assert_eq!(count, 1);
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn discord_profile_links_trial_identity_without_streamer_row() {
+        let db = crate::test_database::Database::new().await;
+        sqlx::raw_sql("CREATE TABLE twitch_streamers(twitch_login TEXT NOT NULL,twitch_user_id TEXT);
+            CREATE TABLE twitch_partners(twitch_login TEXT,twitch_user_id TEXT,status TEXT,departnered_at TIMESTAMPTZ,admin_archived_at TIMESTAMPTZ,partnered_at TIMESTAMPTZ);
+            CREATE TABLE twitch_streamer_identities(twitch_user_id TEXT PRIMARY KEY,twitch_login TEXT,discord_user_id TEXT,discord_display_name TEXT,is_on_discord INTEGER,created_at TIMESTAMPTZ,updated_at TIMESTAMPTZ);
+            INSERT INTO twitch_partners VALUES('oldname','1442366829','departnered','2026-01-01',NULL,'2025-01-01'),('devouttothemoon','1442366829','active',NULL,NULL,'2026-10-17');
+            INSERT INTO twitch_streamer_identities(twitch_user_id,twitch_login) VALUES('1442366829','devouttothemoon');")
+            .execute(&db.pool).await.unwrap();
+        assert!(tb_analytics::streamers_crud::set_discord_profile(
+            &db.pool,
+            "devouttothemoon",
+            Some("555"),
+            Some("Trial"),
+            true,
+            Some("1442366829")
+        )
+        .await
+        .unwrap());
+        assert!(!tb_analytics::streamers_crud::set_discord_profile(
+            &db.pool,
+            "fresh",
+            Some("666"),
+            None,
+            true,
+            Some("444")
+        )
+        .await
+        .unwrap());
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT twitch_user_id, twitch_login, discord_user_id FROM twitch_streamer_identities ORDER BY twitch_user_id",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![("1442366829".into(), "devouttothemoon".into(), "555".into())]
+        );
         db.close().await;
     }
 }
