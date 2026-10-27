@@ -14,6 +14,8 @@ pub mod process_info;
 /// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
 pub mod proxy;
 pub mod query_int;
+#[path = "handlers/social_media_ai_admin_observers.rs"]
+mod social_media_ai_admin_observers;
 #[path = "handlers/social_media_ai_admin_skills.rs"]
 mod social_media_ai_admin_skills;
 #[path = "handlers/social_media_ai_admin_usage.rs"]
@@ -1335,6 +1337,7 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
     Router::new()
         .merge(social_media_ai_admin_usage::routes())
         .merge(social_media_ai_admin_skills::routes())
+        .merge(social_media_ai_admin_observers::routes())
         .merge(handlers::social_media_recording::admin_routes())
         .route(
             "/twitch/api/admin/config/overview",

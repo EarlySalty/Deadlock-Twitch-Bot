@@ -43,7 +43,7 @@ pub(super) async fn watch(
     }
 }
 
-async fn observe(
+pub(super) async fn observe(
     pool: &PgPool,
     config: &VideoObserverConfig,
     source: &SourceIdentity,

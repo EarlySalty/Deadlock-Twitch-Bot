@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tb_config::{stt::SttConfig, BotConfigSnapshot};
 use tb_llm::{
     social_editor::{EditorConfig, SocialAiSection},
-    video_observer::VideoObserverConfig,
+    video_observer::{ObserverVariant, VideoObserverConfig},
 };
 
 use super::{brain::BrainRetrieveConfig, stt::SttJobConfig, PlanLimits, ResourceLimits};
@@ -35,8 +35,18 @@ pub struct RuntimeConfig {
     pub revisions: RevisionLimits,
     #[serde(default)]
     pub video_observer: Option<VideoObserverConfig>,
+    #[serde(default)]
+    pub observer_variants: Vec<ObserverVariant>,
     #[serde(default = "default_analysis_fps")]
     pub analysis_fps: u32,
+}
+
+fn valid_variants(variants: &[ObserverVariant]) -> bool {
+    let mut labels = std::collections::HashSet::new();
+    variants.len() <= 12
+        && variants
+            .iter()
+            .all(|variant| variant.valid() && labels.insert(variant.active_label.as_str()))
 }
 
 fn default_analysis_fps() -> u32 {
@@ -423,6 +433,7 @@ impl RuntimeConfig {
             || self.video_observer.as_ref().is_some_and(|observer| {
                 !observer.valid() || observer.total_deadline_ms >= self.job_deadline_ms
             })
+            || !valid_variants(&self.observer_variants)
         {
             return Err(super::AiEditorError::Configuration);
         }

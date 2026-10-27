@@ -1,5 +1,6 @@
 pub mod autopilot_revision;
 mod browser_passkey;
+mod comparison;
 pub mod learning;
 mod media;
 pub mod metadata;
@@ -33,6 +34,7 @@ pub mod store;
 pub mod stt;
 
 pub use browser_passkey::keep_gemini_session;
+pub use comparison::run_observer_comparisons;
 pub use pipeline::{produce, FrozenSkill, ProducedOutcome, ProductionContext};
 pub use runtime_config::{EditorRuntime, MediaRuntime, RuntimeConfig};
 pub use service::{

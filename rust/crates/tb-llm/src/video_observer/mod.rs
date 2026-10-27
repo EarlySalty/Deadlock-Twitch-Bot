@@ -61,6 +61,22 @@ pub struct VideoObserverConfig {
     pub total_deadline_ms: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObserverVariant {
+    pub model_item: String,
+    pub thinking_item: String,
+    pub active_label: String,
+}
+
+impl ObserverVariant {
+    pub fn valid(&self) -> bool {
+        [&self.model_item, &self.thinking_item, &self.active_label]
+            .iter()
+            .all(|label| !label.trim().is_empty() && label.len() <= 80)
+    }
+}
+
 fn default_devtools_endpoint() -> String {
     "http://127.0.0.1:9223".to_owned()
 }
@@ -103,6 +119,15 @@ impl VideoObserverConfig {
 
     pub fn label(&self) -> String {
         format!("gemini-web:{}", self.active_label)
+    }
+
+    pub fn with_variant(&self, variant: &ObserverVariant) -> Self {
+        Self {
+            model_item: variant.model_item.clone(),
+            thinking_item: variant.thinking_item.clone(),
+            active_label: variant.active_label.clone(),
+            ..self.clone()
+        }
     }
 
     fn step(&self) -> Duration {

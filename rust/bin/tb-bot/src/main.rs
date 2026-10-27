@@ -1884,6 +1884,13 @@ async fn main() {
                         "gemini_session_keeper",
                         tb_social_media::ai_editor::keep_gemini_session(pool.clone(), observer),
                     );
+                    supervisor.spawn(
+                        "social_observer_comparisons",
+                        tb_social_media::ai_editor::run_observer_comparisons(
+                            pool.clone(),
+                            runtime.clone(),
+                        ),
+                    );
                 }
                 let worker = tb_social_media::ai_editor::ManualWorker::new(
                     pool.clone(),

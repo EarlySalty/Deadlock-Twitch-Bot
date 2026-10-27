@@ -34,6 +34,7 @@ import { SocialAiLayout } from '@/pages/socialAi/SocialAiLayout';
 import { SocialAiUsagePage } from '@/pages/socialAi/SocialAiUsage';
 import { SocialAiLimitsPage } from '@/pages/socialAi/SocialAiLimits';
 import { SocialAiSkillsPage } from '@/pages/socialAi/SocialAiSkills';
+import { SocialAiObserversPage } from '@/pages/socialAi/SocialAiObservers';
 import { StreamerList } from '@/pages/streamers/StreamerList';
 
 interface LegacyRedirectProps {
@@ -87,6 +88,7 @@ const router = createBrowserRouter(
           { path: 'usage', element: <SocialAiUsagePage /> },
           { path: 'limits', element: <SocialAiLimitsPage /> },
           { path: 'skills', element: <SocialAiSkillsPage /> },
+          { path: 'observers', element: <SocialAiObserversPage /> },
         ] },
         { path: 'content/roadmap', element: <RoadmapPage /> },
         { path: 'content/changelog', element: <ChangelogPage /> },

@@ -164,3 +164,69 @@
 .social-ai-diff-removed {
   background: color-mix(in srgb, var(--color-danger) 9%, var(--color-bg));
 }
+
+.social-ai-trials {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: 1rem;
+}
+
+.social-ai-trial {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 1rem;
+  background: var(--color-bg);
+}
+
+.social-ai-answer {
+  max-height: 24rem;
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.social-ai-status {
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+}
+
+.social-ai-status-running {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+
+.social-ai-status-answered {
+  border-color: color-mix(in srgb, #22c55e 60%, var(--color-border));
+  color: var(--color-text);
+}
+
+.social-ai-status-failed {
+  border-color: color-mix(in srgb, #ef4444 60%, var(--color-border));
+  color: var(--color-text);
+}
+
+.social-ai .social-ai-star {
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.6rem;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+
+.social-ai .social-ai-star-on {
+  border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 22%, var(--color-bg));
+  color: var(--color-text);
+}
