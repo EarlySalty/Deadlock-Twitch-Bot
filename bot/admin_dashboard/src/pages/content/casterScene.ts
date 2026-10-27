@@ -57,7 +57,7 @@ export const DEFAULT_CHAT_CHANNEL = 'dach_lock';
 export function normalizedChat(chat: CasterChat | undefined): CasterChat {
   return {
     enabled: chat?.enabled ?? false,
-    channel: chat?.channel || DEFAULT_CHAT_CHANNEL,
+    channel: chat?.channel ?? DEFAULT_CHAT_CHANNEL,
     position: chat?.position === 'left' ? 'left' : 'right',
   };
 }
