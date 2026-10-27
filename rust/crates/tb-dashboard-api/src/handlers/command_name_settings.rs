@@ -13,7 +13,7 @@ use sqlx::{types::Json as DbJson, PgPool};
 use std::collections::BTreeMap;
 use tb_chat::catalog::catalog;
 use tb_chat::command_names::{
-    conflicting_command, effective_aliases, effective_name, entry_by_key, extra_names, key,
+    conflicting_command, effective_aliases, effective_name, entry_by_key, key,
     normalize_custom_name, normalize_saved_name, primary_names, CommandNameValidationError,
     ExtraNames, MAX_EXTRA_NAMES,
 };
@@ -107,7 +107,7 @@ fn views(overrides: &BTreeMap<String, String>, extras: &ExtraNames) -> Vec<Comma
                 custom_name,
                 effective_name: effective_name(entry, overrides),
                 effective_aliases: effective_aliases(entry, overrides),
-                custom_aliases: extra_names(entry, overrides, extras),
+                custom_aliases: stored_aliases(entry, extras),
                 group: entry.group.as_str(),
                 group_label: entry.group.label(),
                 summary: entry.summary,
@@ -245,7 +245,6 @@ pub async fn post_handler(
                 "custom_name": requested_name,
                 "effective_name": effective_name(entry, &overrides),
                 "effective_aliases": effective_aliases(entry, &overrides),
-                "custom_aliases": extra_names(entry, &overrides, &extras),
             }))
             .into_response()
         }
@@ -288,6 +287,10 @@ async fn lock_names(
         Some((overrides, extras)) => Ok((overrides.0, extras.0)),
         None => Err((StatusCode::NOT_FOUND, Json(json!({"error":"no plan row"}))).into_response()),
     }
+}
+
+fn stored_aliases(entry: &tb_chat::catalog::CommandInfo, extras: &ExtraNames) -> Vec<String> {
+    extras.get(key(entry)).cloned().unwrap_or_default()
 }
 
 fn own_extra_overlap(
@@ -400,7 +403,7 @@ pub async fn aliases_handler(
             Json(json!({
                 "ok": true,
                 "command": command_key,
-                "custom_aliases": extra_names(entry, &overrides, &extras),
+                "custom_aliases": stored_aliases(entry, &extras),
             }))
             .into_response()
         }
