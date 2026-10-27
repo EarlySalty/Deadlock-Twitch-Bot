@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnection, PgPool, PgPoolOptions};
+use sqlx::Connection;
+
+const DAEMON_LOCK_KEY: i64 = 0x6471_7565_7565;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Ticket {
@@ -72,6 +75,18 @@ pub async fn connect(url: &str) -> Result<PgPool> {
         .await
         .context("deploy queue migration failed")?;
     Ok(pool)
+}
+
+pub async fn daemon_lock(url: &str) -> Result<PgConnection> {
+    let mut connection = PgConnection::connect(url)
+        .await
+        .context("cannot open the daemon lock connection")?;
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(DAEMON_LOCK_KEY)
+        .fetch_one(&mut connection)
+        .await?;
+    anyhow::ensure!(acquired, "another deploy-queue daemon holds the queue lock");
+    Ok(connection)
 }
 
 pub async fn insert_ticket(
@@ -166,47 +181,64 @@ pub async fn start_run(pool: &PgPool, ticket_ids: &[i64], log_dir: &str) -> Resu
         .bind(&log_path)
         .execute(&mut *transaction)
         .await?;
-    sqlx::query("UPDATE tickets SET state = 'running', run_id = $1 WHERE id = ANY($2) AND state = 'pending'")
-        .bind(id)
-        .bind(ticket_ids)
-        .execute(&mut *transaction)
-        .await?;
+    let claimed = sqlx::query(
+        "UPDATE tickets SET state = 'running', run_id = $1 WHERE id = ANY($2) AND state = 'pending'",
+    )
+    .bind(id)
+    .bind(ticket_ids)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    if usize::try_from(claimed).ok() != Some(ticket_ids.len()) {
+        transaction.rollback().await?;
+        anyhow::bail!(
+            "only {claimed} of {} tickets were still pending",
+            ticket_ids.len()
+        );
+    }
     transaction.commit().await?;
     Ok((id, log_path))
 }
 
-pub async fn finish_run(pool: &PgPool, id: i64, record: &RunRecord) -> Result<()> {
-    sqlx::query(
-        "UPDATE runs SET finished_at = now(), parent_sha = $2, target_sha = $3, outcome = $4, \
-         failed_step = $5, built = $6, carried = $7, build_seconds = $8, restarted = $9, \
-         pruefen_exit = $10, exe_report = $11, live_at = $12 WHERE id = $1",
-    )
-    .bind(id)
-    .bind(&record.parent_sha)
-    .bind(&record.target_sha)
-    .bind(&record.outcome)
-    .bind(&record.failed_step)
-    .bind(&record.built)
-    .bind(&record.carried)
-    .bind(record.build_seconds)
-    .bind(&record.restarted)
-    .bind(record.pruefen_exit)
-    .bind(&record.exe_report)
-    .bind(record.live_at)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-pub async fn finish_ticket(pool: &PgPool, id: i64, outcome: &str, message: &str) -> Result<()> {
-    sqlx::query(
-        "UPDATE tickets SET state = 'done', outcome = $2, final_message = $3 WHERE id = $1",
-    )
-    .bind(id)
-    .bind(outcome)
-    .bind(message)
-    .execute(pool)
-    .await?;
+pub async fn complete_run(
+    pool: &PgPool,
+    id: i64,
+    record: Option<&RunRecord>,
+    results: &[(i64, String, String)],
+) -> Result<()> {
+    let mut transaction = pool.begin().await?;
+    if let Some(record) = record {
+        sqlx::query(
+            "UPDATE runs SET finished_at = now(), parent_sha = $2, target_sha = $3, outcome = $4, \
+             failed_step = $5, built = $6, carried = $7, build_seconds = $8, restarted = $9, \
+             pruefen_exit = $10, exe_report = $11, live_at = $12 WHERE id = $1",
+        )
+        .bind(id)
+        .bind(&record.parent_sha)
+        .bind(&record.target_sha)
+        .bind(&record.outcome)
+        .bind(&record.failed_step)
+        .bind(&record.built)
+        .bind(&record.carried)
+        .bind(record.build_seconds)
+        .bind(&record.restarted)
+        .bind(record.pruefen_exit)
+        .bind(&record.exe_report)
+        .bind(record.live_at)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    for (ticket, outcome, message) in results {
+        sqlx::query(
+            "UPDATE tickets SET state = 'done', outcome = $2, final_message = $3 WHERE id = $1",
+        )
+        .bind(ticket)
+        .bind(outcome)
+        .bind(message)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -225,7 +257,9 @@ pub async fn interrupted_runs(pool: &PgPool) -> Result<Vec<Run>> {
     Ok(sqlx::query_as::<_, Run>(
         "SELECT id, started_at, finished_at, parent_sha, target_sha, outcome, failed_step, \
          log_path, built, carried, build_seconds, restarted, pruefen_exit, exe_report, live_at \
-         FROM runs WHERE finished_at IS NULL ORDER BY id",
+         FROM runs WHERE finished_at IS NULL \
+         OR id IN (SELECT run_id FROM tickets WHERE state = 'running' AND run_id IS NOT NULL) \
+         ORDER BY id",
     )
     .fetch_all(pool)
     .await?)
@@ -253,7 +287,7 @@ pub async fn mark_notified(pool: &PgPool, id: i64) -> Result<()> {
 pub async fn notify_failed(pool: &PgPool, id: i64, error: &str) -> Result<()> {
     sqlx::query(
         "UPDATE tickets SET notify_attempts = notify_attempts + 1, notify_error = $2, \
-         notify_next_at = now() + least(interval '30 minutes', interval '30 seconds' * power(2, notify_attempts)) \
+         notify_next_at = now() + least(interval '30 minutes', interval '30 seconds' * power(2, least(notify_attempts, 6))) \
          WHERE id = $1",
     )
     .bind(id)

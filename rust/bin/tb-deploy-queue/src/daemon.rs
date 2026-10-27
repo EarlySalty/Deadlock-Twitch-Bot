@@ -13,6 +13,7 @@ const PREFIX: &str = "[deploy-queue]";
 
 pub async fn serve(config: Config) -> Result<()> {
     let config = Arc::new(config);
+    let _lock = db::daemon_lock(&config.database_url).await?;
     let pool = db::connect(&config.database_url).await?;
     let client = Client::new(&config.t3)?;
     recover(&pool).await?;
@@ -43,6 +44,7 @@ pub async fn serve(config: Config) -> Result<()> {
 
 async fn recover(pool: &PgPool) -> Result<()> {
     for interrupted in db::interrupted_runs(pool).await? {
+        let finished = interrupted.finished_at.is_some();
         let record = RunRecord {
             parent_sha: interrupted.parent_sha.clone(),
             target_sha: interrupted.target_sha.clone(),
@@ -50,21 +52,26 @@ async fn recover(pool: &PgPool) -> Result<()> {
             failed_step: Some("daemon-restart".into()),
             ..RunRecord::default()
         };
-        db::finish_run(pool, interrupted.id, &record).await?;
-        for ticket in db::run_tickets(pool, interrupted.id).await? {
-            if ticket.state == "done" {
-                continue;
-            }
-            let message = failure_message(
-                &ticket,
-                "daemon-restart",
-                &interrupted.log_path,
-                "the deploy queue daemon stopped while this run was in progress; check the log and `deploy-twitch-release --pruefen` before resubmitting",
-                &[],
-            );
-            db::finish_ticket(pool, ticket.id, "failed", &message).await?;
-        }
-        eprintln!("run {} marked failed after daemon restart", interrupted.id);
+        let note = match interrupted.outcome.as_deref() {
+            Some(outcome) if finished => format!(
+                "run {} finished with outcome {outcome}, but the ticket result was not recorded; check `deploy-queue status` and `deploy-twitch-release --pruefen` before resubmitting",
+                interrupted.id
+            ),
+            _ => "the deploy queue daemon stopped while this run was in progress; check the log and `deploy-twitch-release --pruefen` before resubmitting".to_string(),
+        };
+        let results: Vec<(i64, String, String)> = db::run_tickets(pool, interrupted.id)
+            .await?
+            .iter()
+            .filter(|ticket| ticket.state != "done")
+            .map(|ticket| {
+                let message =
+                    failure_message(ticket, "daemon-restart", &interrupted.log_path, &note, &[]);
+                (ticket.id, "failed".to_string(), message)
+            })
+            .collect();
+        let record = (!finished).then_some(&record);
+        db::complete_run(pool, interrupted.id, record, &results).await?;
+        eprintln!("run {} recovered after daemon restart", interrupted.id);
     }
     Ok(())
 }
@@ -189,13 +196,29 @@ async fn run_batch(pool: &PgPool, config: Arc<Config>, tickets: Vec<Ticket>) -> 
     let report = tokio::task::spawn_blocking(move || run::execute(&worker_config, &batch))
         .await
         .unwrap_or_else(|error| panicked(&error.to_string()));
-    db::finish_run(pool, run_id, &report.record).await?;
-    for ticket in db::run_tickets(pool, run_id).await? {
-        let (outcome, message) = ticket_result(&ticket, &report, &log_path);
-        db::finish_ticket(pool, ticket.id, &outcome, &message).await?;
+    loop {
+        match record_result(pool, run_id, &report, &log_path).await {
+            Ok(()) => break,
+            Err(error) => {
+                eprintln!("run {run_id} result not recorded, retrying: {error:#}");
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            }
+        }
     }
     eprintln!("run {run_id} finished: {}", report.record.outcome);
     Ok(())
+}
+
+async fn record_result(pool: &PgPool, run_id: i64, report: &Report, log_path: &str) -> Result<()> {
+    let results: Vec<(i64, String, String)> = db::run_tickets(pool, run_id)
+        .await?
+        .iter()
+        .map(|ticket| {
+            let (outcome, message) = ticket_result(ticket, report, log_path);
+            (ticket.id, outcome, message)
+        })
+        .collect();
+    db::complete_run(pool, run_id, Some(&report.record), &results).await
 }
 
 fn panicked(error: &str) -> Report {
@@ -207,6 +230,7 @@ fn panicked(error: &str) -> Report {
         },
         rejected: Vec::new(),
         commits: Vec::new(),
+        unapplied: Vec::new(),
         note: format!("the run executor stopped unexpectedly: {error}"),
     }
 }
@@ -263,6 +287,7 @@ fn success_message(ticket: &Ticket, report: &Report) -> String {
          Built: {built} (build {build}). Carried: {carried}.\n\
          deploy-twitch-release --pruefen: exit {pruefen}.\n\
          Running binaries: {exe}.\n\
+         {unapplied}\
          Read {task}/TODO.md and do the function proof.",
         id = ticket.id,
         sha = plan::short(&ticket.sha),
@@ -275,18 +300,37 @@ fn success_message(ticket: &Ticket, report: &Report) -> String {
             .map(|code| code.to_string())
             .unwrap_or_else(|| "unknown".into()),
         exe = or_none(&record.exe_report),
+        unapplied = unapplied_note(report),
         task = ticket.task_dir.trim_end_matches('/'),
+    )
+}
+
+fn unapplied_note(report: &Report) -> String {
+    if report.unapplied.is_empty() {
+        return String::new();
+    }
+    format!(
+        "NOT applied: the deploy does not install these changed files, so they are not live until installed by hand: {}.\n",
+        report.unapplied.join(", ")
     )
 }
 
 fn no_deploy_message(ticket: &Ticket, report: &Report) -> String {
     format!(
         "{PREFIX} Ticket #{id}: no deploy needed. Your commit {sha} is contained in {target}, and {note}. \
-         Nothing was built or restarted. Read {task}/TODO.md and do the function proof against the live release.",
+         Nothing was built or restarted; deploy-twitch-release --pruefen: exit {pruefen}.\n\
+         {unapplied}\
+         Read {task}/TODO.md and do the function proof against the live release.",
         id = ticket.id,
         sha = plan::short(&ticket.sha),
         target = target(report),
         note = report.note,
+        pruefen = report
+            .record
+            .pruefen_exit
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "unknown".into()),
+        unapplied = unapplied_note(report),
         task = ticket.task_dir.trim_end_matches('/'),
     )
 }

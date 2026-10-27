@@ -99,7 +99,7 @@ pub const FRONTENDS: [FrontendSpec; 3] = [
     },
 ];
 
-const SERVICE_PATHS: [(&str, &[&str]); 14] = [
+const SERVICE_PATHS: [(&str, &[&str]); 6] = [
     ("rust/scripts/run_tb_bot_service.sh", &[BOT]),
     ("rust/scripts/run_tb_dashboard_service.sh", &[DASHBOARD]),
     ("rust/scripts/run_stream_audit_service.sh", &[AUDIT]),
@@ -108,21 +108,20 @@ const SERVICE_PATHS: [(&str, &[&str]); 14] = [
         "ops/systemd/deadlock-twitch-discord-hub-rust.service",
         &[HUB],
     ),
-    ("ops/systemd/discord-hub.conf", &[HUB]),
-    ("ops/systemd/deadlock-twitch-bot-rust.service", &[BOT]),
-    ("ops/systemd/bot.conf", &[BOT]),
-    (
-        "ops/systemd/deadlock-twitch-dashboard-rust.service",
-        &[DASHBOARD],
-    ),
-    ("ops/systemd/dashboard.conf", &[DASHBOARD]),
-    (
-        "ops/systemd/deadlock-twitch-stream-coaching-watch.service",
-        &[AUDIT],
-    ),
-    ("ops/systemd/audit.conf", &[AUDIT]),
-    ("ops/systemd/20-audit-release.conf", &[AUDIT]),
     ("ops/social-ai/", &[BOT, DASHBOARD]),
+];
+
+const UNAPPLIED_PATHS: [&str; 10] = [
+    "ops/systemd/discord-hub.conf",
+    "ops/systemd/deadlock-twitch-bot-rust.service",
+    "ops/systemd/bot.conf",
+    "ops/systemd/deadlock-twitch-dashboard-rust.service",
+    "ops/systemd/dashboard.conf",
+    "ops/systemd/deadlock-twitch-stream-coaching-watch.service",
+    "ops/systemd/audit.conf",
+    "ops/systemd/20-audit-release.conf",
+    "ops/stt-server/",
+    "ops/systemd/deadlock-twitch-bot-watchdog.conf",
 ];
 
 const IGNORED_PREFIXES: [&str; 10] = [
@@ -157,6 +156,7 @@ pub struct Plan {
     pub carried_frontends: Vec<(String, String)>,
     pub restarts: BTreeSet<&'static str>,
     pub deploy_paths: Vec<String>,
+    pub unapplied_paths: Vec<String>,
     pub reasons: Vec<String>,
     lines: Vec<String>,
 }
@@ -210,6 +210,10 @@ impl Plan {
         out.push(format!(
             "deploy-only paths: {}",
             join_or_none(self.deploy_paths.iter())
+        ));
+        out.push(format!(
+            "not installed by the deploy: {}",
+            join_or_none(self.unapplied_paths.iter())
         ));
         out.extend(
             self.reasons
@@ -339,8 +343,13 @@ pub fn compute(inputs: &Inputs) -> Result<Plan> {
     }
     let all_inputs: Vec<String> = package_inputs.values().flatten().cloned().collect();
     let mut deploy_paths = Vec::new();
+    let mut unapplied_paths = Vec::new();
     let changed = context.diff(inputs.parent)?;
     for path in &changed {
+        if unapplied(path) {
+            unapplied_paths.push(path.clone());
+            continue;
+        }
         if under_any(path, &covered) {
             continue;
         }
@@ -364,6 +373,7 @@ pub fn compute(inputs: &Inputs) -> Result<Plan> {
         carried_frontends,
         restarts,
         deploy_paths,
+        unapplied_paths,
         reasons: context.reasons,
         lines,
     })
@@ -560,6 +570,16 @@ pub fn workspace_wide(path: &str, members: &[String]) -> bool {
             .iter()
             .any(|prefix| path.starts_with(prefix))
         && !path.ends_with(".md")
+}
+
+fn unapplied(path: &str) -> bool {
+    UNAPPLIED_PATHS.iter().any(|entry| {
+        if entry.ends_with('/') {
+            path.starts_with(entry)
+        } else {
+            path == *entry
+        }
+    })
 }
 
 fn service_path(path: &str) -> Option<&'static [&'static str]> {

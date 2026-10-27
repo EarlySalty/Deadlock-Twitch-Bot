@@ -180,6 +180,192 @@ workspace_members() {
     | awk -F/ 'NF == 4 && $4 == "Cargo.toml" {print $1 "/" $2 "/" $3 "/"}'
 }
 
+declare -A binary_package_dir=(
+  [tb-bot]=rust/bin/tb-bot [tb-dashboard]=rust/bin/tb-dashboard [clip_context_learn]=rust/bin/tb-dashboard
+  [tb-stream-audit]=rust/bin/tb-stream-audit [tb-config-check]=rust/crates/tb-config
+  [tb-llm-usage-recover]=rust/crates/tb-llm [tb-discord-hub]=rust/bin/tb-discord-hub
+  [tb-stt-server]=rust/bin/tb-stt-server [tb-category-collector]=rust/bin/tb-category-collector
+  [tb-twitch-watchdog]=rust/bin/tb-category-collector [tb-category-storage]=rust/bin/tb-category-collector
+)
+declare -A frontend_required_inputs=(
+  [bot/dashboard_v2]="bot/dashboard_v2/ bot/shared-theme/"
+  [bot/admin_dashboard]="bot/admin_dashboard/ bot/shared-theme/"
+  [website]="website/"
+)
+
+normalize_reference() {
+  local base="$1" reference="$2" joined part normalized prefix
+  local -a pieces=() parts=()
+  if [[ "$reference" == /* ]]; then joined="$base$reference"; else joined="$base/$reference"; fi
+  IFS=/ read -r -a pieces <<< "$joined"
+  for part in "${pieces[@]}"; do
+    case "$part" in
+      ''|.) ;;
+      ..)
+        (( ${#parts[@]} > 0 )) || return 1
+        unset 'parts[-1]'
+        ;;
+      *) parts+=("$part") ;;
+    esac
+  done
+  normalized=$(IFS=/; printf '%s' "${parts[*]}")
+  [[ "$normalized" =~ ^[A-Za-z0-9_./-]* ]]
+  prefix="${BASH_REMATCH[0]}"
+  if [[ "$prefix" != "$normalized" ]]; then
+    if [[ "$prefix" == */* ]]; then prefix="${prefix%/*}/"; else prefix=""; fi
+  fi
+  if [[ -z "$prefix" || "$prefix" == -* ]]; then
+    printf 'UNBOUNDED\n'
+  else
+    printf '%s\n' "$prefix"
+  fi
+}
+
+declare -A workspace_crate_dir=()
+load_workspace_map() {
+  local entries name path
+  entries="$(sed -nE 's/^[[:space:]]*([A-Za-z0-9_-]+)[[:space:]]*=[[:space:]]*\{.*path[[:space:]]*=[[:space:]]*"([^"]+)".*/\1 \2/p' "$checkout/rust/Cargo.toml")" || carry_reject "Arbeitsbereich nicht lesbar"
+  while read -r name path; do
+    [[ -n "$name" ]] || continue
+    workspace_crate_dir[$name]="rust/${path%/}/"
+  done <<< "$entries"
+}
+
+manifest_dependencies() {
+  awk '
+    /^[[:space:]]*\[/ {
+      header = $0
+      gsub(/[[:space:]]|\[|\]/, "", header)
+      section = ""
+      if (header ~ /(^|\.)dev-dependencies(\.|$)/) { next }
+      if (header ~ /(^|\.)(build-)?dependencies$/) { section = "table"; next }
+      if (header ~ /(^|\.)(build-)?dependencies\.[A-Za-z0-9_-]+$/) {
+        section = "entry"
+        name = header
+        sub(/.*dependencies\./, "", name)
+        print "name " name
+      }
+      next
+    }
+    section == "table" && match($0, /^[[:space:]]*[A-Za-z0-9_-]+/) {
+      name = substr($0, RSTART, RLENGTH)
+      gsub(/[[:space:]]/, "", name)
+      print "name " name
+    }
+    section != "" && match($0, /path[[:space:]]*=[[:space:]]*"[^"]+"/) {
+      value = substr($0, RSTART, RLENGTH)
+      sub(/^path[[:space:]]*=[[:space:]]*"/, "", value)
+      sub(/"$/, "", value)
+      print "path " value
+    }
+  ' "$1"
+}
+
+crate_dependency_dirs() {
+  local crate="$1" entries kind value resolved
+  entries="$(manifest_dependencies "$checkout/${crate%/}/Cargo.toml")" || return 1
+  while read -r kind value; do
+    case "$kind" in
+      name)
+        if [[ -n "${workspace_crate_dir[$value]:-}" ]]; then
+          printf '%s\n' "${workspace_crate_dir[$value]}"
+        fi
+        ;;
+      path)
+        resolved=$(normalize_reference "${crate%/}" "$value") || continue
+        if [[ "$resolved" != UNBOUNDED && -f "$checkout/${resolved%/}/Cargo.toml" ]]; then
+          printf '%s/\n' "${resolved%/}"
+        fi
+        ;;
+    esac
+  done <<< "$entries"
+}
+
+crate_file_references() {
+  local crate="$1" matches status=0 line file reference file_dir base resolved
+  matches="$(grep -rIoE --include='*.rs' --exclude-dir=target --exclude-dir=node_modules '"[^"\\]*\.\./[^"\\]*"' "$checkout/${crate%/}")" || status=$?
+  (( status <= 1 )) || return 1
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    file="${line%%:*}"
+    reference="${line#*:}"
+    reference="${reference#\"}"
+    reference="${reference%\"}"
+    file_dir="$(dirname -- "${file#"$checkout"/}")"
+    for base in "$file_dir" "${crate%/}"; do
+      resolved=$(normalize_reference "$base" "$reference") || continue
+      printf '%s\n' "$resolved"
+    done
+  done <<< "$matches"
+}
+
+binary_required_inputs() {
+  local name="$1" root crate dependencies references dependency reference
+  local -A seen=()
+  local -a pending=()
+  root="${binary_package_dir[$name]:-}"
+  [[ -n "$root" ]] || carry_reject "$name hat kein bekanntes Paket"
+  load_workspace_map
+  pending=("$root/")
+  while (( ${#pending[@]} > 0 )); do
+    crate="${pending[-1]}"
+    unset 'pending[-1]'
+    [[ -z "${seen[$crate]:-}" ]] || continue
+    seen[$crate]=1
+    [[ -f "$checkout/${crate%/}/Cargo.toml" ]] || carry_reject "$name: Paket $crate fehlt"
+    printf '%s\n' "$crate"
+    dependencies="$(crate_dependency_dirs "$crate")" || carry_reject "$name: Abhängigkeiten von $crate nicht lesbar"
+    references="$(crate_file_references "$crate")" || carry_reject "$name: Dateiverweise von $crate nicht lesbar"
+    while read -r dependency; do
+      [[ -n "$dependency" && -z "${seen[$dependency]:-}" ]] || continue
+      pending+=("$dependency")
+    done <<< "$dependencies"
+    while read -r reference; do
+      [[ -n "$reference" ]] || continue
+      [[ "$reference" != UNBOUNDED ]] || carry_reject "$name: $crate liest Dateien über einen offenen Pfad"
+      printf '%s\n' "$reference"
+    done <<< "$references"
+  done
+}
+
+required_inputs() {
+  local name="$1" root crate dependency reference name_key path
+  local -A workspace_paths=() seen=()
+  local -a pending=()
+  root="${binary_package_dir[$name]:-}"
+  [[ -n "$root" ]] || carry_reject "$name hat kein bekanntes Paket"
+  while read -r name_key path; do
+    workspace_paths[$name_key]="rust/${path%/}/"
+  done < <(workspace_dependency_map)
+  pending=("$root/")
+  while (( ${#pending[@]} > 0 )); do
+    crate="${pending[-1]}"
+    unset 'pending[-1]'
+    [[ -z "${seen[$crate]:-}" ]] || continue
+    seen[$crate]=1
+    [[ -f "$checkout/${crate%/}/Cargo.toml" ]] || carry_reject "$name: Paket $crate fehlt"
+    printf '%s\n' "$crate"
+    while read -r dependency; do
+      [[ -n "${seen[$dependency]:-}" ]] || pending+=("$dependency")
+    done < <(crate_dependency_dirs "$crate" workspace_paths)
+    while read -r reference; do
+      [[ "$reference" != UNBOUNDED ]] || carry_reject "$name: $crate liest Dateien über einen offenen Pfad"
+      printf '%s\n' "$reference"
+    done < <(crate_file_references "$crate")
+  done
+}
+
+required_inputs() {
+  local kind="$1" name="$2"
+  case "$kind" in
+    binary) binary_required_inputs "$name" ;;
+    dist)
+      [[ -n "${frontend_required_inputs[$name]:-}" ]] || carry_reject "$name hat keine bekannten Eingaben"
+      tr ' ' '\n' <<< "${frontend_required_inputs[$name]}"
+      ;;
+  esac
+}
+
 verify_unchanged_sources() {
   local kind="$1" name="$2" origin="$3" inputs="$4" changed member input inside
   local -a members=() input_list=()
@@ -223,7 +409,7 @@ parent_origin() {
 }
 
 verify_carried_entry() {
-  local kind="$1" name="$2" origin="$3" parent="$4" inputs="$5" artifact parent_path
+  local kind="$1" name="$2" origin="$3" parent="$4" inputs="$5" artifact parent_path required
   [[ "$origin" =~ ^[0-9a-f]{40}$ && "$parent" =~ ^[0-9a-f]{40}$ ]] || carry_reject "$name mit ungültiger Herkunft"
   "${git_safe[@]}" -C "$checkout" merge-base --is-ancestor "$origin" "$git_sha" || carry_reject "$name: $origin ist kein Vorfahr von $git_sha"
   "${git_safe[@]}" -C "$checkout" merge-base --is-ancestor "$parent" "$git_sha" || carry_reject "$name: Parent $parent ist kein Vorfahr von $git_sha"
@@ -247,7 +433,8 @@ verify_carried_entry() {
     *) carry_reject "unbekannte Art $kind" ;;
   esac
   [[ "$(parent_origin "$parent" "$parent_path")" == "$origin" ]] || carry_reject "$name: Herkunft $origin passt nicht zum Parent-Release"
-  verify_unchanged_sources "$kind" "$name" "$origin" "$inputs"
+  required="$(required_inputs "$kind" "$name" | LC_ALL=C sort -u | tr '\n' ' ')" || carry_reject "$name: Eingaben nicht bestimmbar"
+  verify_unchanged_sources "$kind" "$name" "$origin" "$inputs $required"
   artifact_origin[$parent_path]="$origin"
 }
 

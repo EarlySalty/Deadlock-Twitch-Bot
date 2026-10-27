@@ -16,6 +16,7 @@ pub struct Config {
     pub remote: String,
     pub log_dir: PathBuf,
     pub release_root: PathBuf,
+    pub frozen_root: PathBuf,
     pub current_link: PathBuf,
     pub deploy_wrapper: PathBuf,
     pub cargo: PathBuf,

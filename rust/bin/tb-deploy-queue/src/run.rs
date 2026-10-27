@@ -20,6 +20,7 @@ pub struct Report {
     pub record: RunRecord,
     pub rejected: Vec<(i64, String)>,
     pub commits: Vec<String>,
+    pub unapplied: Vec<String>,
     pub note: String,
 }
 
@@ -97,6 +98,7 @@ pub fn execute(config: &Config, batch: &Batch) -> Report {
         record: RunRecord::default(),
         rejected: Vec::new(),
         commits: Vec::new(),
+        unapplied: Vec::new(),
         note: String::new(),
     };
     let mut log = match Log::open(&batch.log_path) {
@@ -159,9 +161,8 @@ fn steps(
         Vec::new()
     };
     if parent == target {
-        report.record.outcome = "no_deploy_needed".into();
         report.note = format!("{} is already the live release", plan::short(&target));
-        return Ok(());
+        return verify_unchanged(config, log, report);
     }
     log.step("checkout");
     checkout(repo, &target, log).at("checkout")?;
@@ -176,32 +177,56 @@ fn steps(
     })
     .at("plan")?;
     log.line(&plan.summary());
-    report.record.built = artifacts(&plan.built_binaries, &plan.built_frontends);
-    report.record.carried = carried(&plan);
+    report.unapplied = plan.unapplied_paths.clone();
     if !plan.needs_deploy() {
-        report.record.outcome = "no_deploy_needed".into();
         report.note = format!(
-            "nothing runtime-relevant changed between the live release {} and {}",
+            "nothing the deploy installs changed between the live release {} and {}",
             plan::short(&parent),
             plan::short(&target)
         );
-        return Ok(());
+        return verify_unchanged(config, log, report);
     }
+    report.record.built = artifacts(&plan.built_binaries, &plan.built_frontends);
+    report.record.carried = carried(&plan);
     let plan_path = PathBuf::from(format!("{}.plan", batch.log_path.trim_end_matches(".log")));
     std::fs::write(&plan_path, plan.file_text())
         .with_context(|| format!("cannot write {}", plan_path.display()))
         .at("plan")?;
-    log.step("build");
-    let started = Instant::now();
-    build(config, &target, &plan_path, log, report).at("build")?;
-    report.record.build_seconds = i32::try_from(started.elapsed().as_secs()).ok();
+    let frozen = config.frozen_root.join(&target);
+    let source = if frozen.is_dir() {
+        log.step("resume");
+        log.line(&format!(
+            "resuming the frozen build {} left by an earlier attempt",
+            frozen.display()
+        ));
+        report.record.built.clear();
+        report.record.carried = format!("resumed frozen build {}", frozen.display());
+        Some(frozen)
+    } else {
+        log.step("build");
+        let started = Instant::now();
+        build(config, &target, &plan_path, log, report).at("build")?;
+        report.record.build_seconds = i32::try_from(started.elapsed().as_secs()).ok();
+        None
+    };
     log.step("deploy");
-    deploy(config, &target, &plan, log).at("deploy")?;
+    deploy(config, &target, source.as_deref(), &plan, log).at("deploy")?;
     report.record.live_at = Some(Utc::now());
     report.record.restarted = restart_label(&plan);
     log.step("pruefen");
     pruefen(config, log, report).at("pruefen")?;
     report.record.outcome = "deployed".into();
+    Ok(())
+}
+
+fn verify_unchanged(
+    config: &Config,
+    log: &mut Log,
+    report: &mut Report,
+) -> std::result::Result<(), Failure> {
+    log.step("pruefen");
+    pruefen(config, log, report).at("pruefen")?;
+    report.record.outcome = "no_deploy_needed".into();
     Ok(())
 }
 
@@ -411,10 +436,17 @@ fn restart_label(plan: &Plan) -> String {
     plan.restarts.iter().copied().collect::<Vec<_>>().join(" ")
 }
 
-fn deploy(config: &Config, target: &str, plan: &Plan, log: &mut Log) -> Result<()> {
+fn deploy(
+    config: &Config,
+    target: &str,
+    source: Option<&Path>,
+    plan: &Plan,
+    log: &mut Log,
+) -> Result<()> {
     let (ok, _) = log.exec(
         Command::new(&config.deploy_wrapper)
             .arg(target)
+            .args(source)
             .args(restart_args(plan))
             .env("PATH", &config.child_path),
     )?;
