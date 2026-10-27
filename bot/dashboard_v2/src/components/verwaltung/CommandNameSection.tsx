@@ -8,6 +8,8 @@ import {
   fetchCommandNames,
   saveCommandName,
   saveCommandAliases,
+  applyNameSave,
+  applyAliasSave,
   MAX_EXTRA_COMMAND_NAMES,
   type CommandNameSetting,
   validCommandNameInput,
@@ -41,18 +43,12 @@ export function CommandNamesProvider({ children }: { children: ReactNode }) {
 
   const update = useCallback(async (command: string, name: string | null) => {
     const saved = await saveCommandName(command, name);
-    setCommands(previous => previous.map(row => row.command === command ? {
-      ...row,
-      custom_name: saved.custom_name,
-      effective_name: saved.effective_name,
-      effective_aliases: saved.effective_aliases,
-      custom_aliases: saved.custom_aliases,
-    } : row));
+    setCommands(previous => previous.map(row => row.command === command ? applyNameSave(row, saved) : row));
   }, []);
 
   const updateAliases = useCallback(async (command: string, aliases: string[]) => {
     const saved = await saveCommandAliases(command, aliases);
-    setCommands(previous => previous.map(row => row.command === command ? { ...row, custom_aliases: saved.custom_aliases } : row));
+    setCommands(previous => previous.map(row => row.command === command ? applyAliasSave(row, saved) : row));
   }, []);
 
   return <CommandNamesContext.Provider value={{ commands, loading, error, update, updateAliases }}>{children}</CommandNamesContext.Provider>;

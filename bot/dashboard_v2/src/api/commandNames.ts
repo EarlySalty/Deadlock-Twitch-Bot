@@ -17,7 +17,6 @@ export interface CommandNameSaveResult {
   custom_name: string | null;
   effective_name: string;
   effective_aliases: string[];
-  custom_aliases: string[];
 }
 
 export interface CommandAliasSaveResult {
@@ -27,6 +26,14 @@ export interface CommandAliasSaveResult {
 }
 
 export const MAX_EXTRA_COMMAND_NAMES = 5;
+
+export function applyNameSave(row: CommandNameSetting, saved: CommandNameSaveResult): CommandNameSetting {
+  return { ...row, custom_name: saved.custom_name, effective_name: saved.effective_name, effective_aliases: saved.effective_aliases };
+}
+
+export function applyAliasSave(row: CommandNameSetting, saved: CommandAliasSaveResult): CommandNameSetting {
+  return { ...row, custom_aliases: saved.custom_aliases };
+}
 
 export class CommandNameApiError extends Error {
   status: number;
