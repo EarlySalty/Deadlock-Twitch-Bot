@@ -391,3 +391,34 @@ pub async fn pipeline_policy_put_handler(
         Err(error) => error_response(error.into()),
     }
 }
+
+pub async fn tiktok_publishing_get_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<OwnerQuery>,
+) -> Response {
+    let (_, owner) = match target(&auth, &pool, query.twitch_user_id.as_deref()).await {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    match tb_social_media::tiktok_publishing::load(&pool, &owner).await {
+        Ok(settings) => Json(settings).into_response(),
+        Err(error) => error_response(error.into()),
+    }
+}
+
+pub async fn tiktok_publishing_put_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<OwnerQuery>,
+    Json(input): Json<tb_social_media::tiktok_publishing::TikTokPublishing>,
+) -> Response {
+    let (_, owner) = match target(&auth, &pool, query.twitch_user_id.as_deref()).await {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    match tb_social_media::tiktok_publishing::save(&pool, &owner, &input).await {
+        Ok(settings) => Json(settings).into_response(),
+        Err(error) => error_response(error.into()),
+    }
+}

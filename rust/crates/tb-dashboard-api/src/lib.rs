@@ -470,6 +470,11 @@ fn build_authed_router_with_analysis_store(
                 .put(social_media::autopilot::pipeline_policy_put_handler),
         )
         .route(
+            "/social-media/api/autopilot/tiktok-publishing",
+            get(social_media::autopilot::tiktok_publishing_get_handler)
+                .put(social_media::autopilot::tiktok_publishing_put_handler),
+        )
+        .route(
             "/social-media/api/autopilot/imports",
             get(social_media::autopilot::import_latest_handler)
                 .post(social_media::autopilot::import_start_handler),

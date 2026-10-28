@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { PipelinePlanControls } from '../../PipelinePlanControls';
+import { TikTokPublishingCard } from '../../TikTokPublishingCard';
 import { scheduleQueueApi } from './api';
 import type { ScheduleQueueApi } from './api';
 import './schedule-queue.css';
@@ -18,5 +19,6 @@ export function ScheduleQueuePanel({ twitchUserId, api = scheduleQueueApi, onCha
   return <div className="pp-stack">
     <PipelinePlanControls key={twitchUserId ?? 'self'} twitchUserId={twitchUserId} api={api} onChanged={onChanged} reloadKey={reloadKey}
       layoutSlot={layoutSlot} aiOptionsSlot={aiOptionsSlot} onOpenHeute={onOpenHeute} />
+    <TikTokPublishingCard key={`tiktok-${twitchUserId ?? 'self'}`} twitchUserId={twitchUserId} />
   </div>;
 }

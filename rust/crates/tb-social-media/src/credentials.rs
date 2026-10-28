@@ -78,6 +78,10 @@ impl CredentialManager {
         Self { pool, cipher }
     }
 
+    pub(crate) fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     /// Holt + entschlüsselt Credentials für eine Plattform. Bevorzugt einen
     /// exakten Streamer-Treffer, sonst den globalen Eintrag (Python
     /// `get_credentials`). `None` bei fehlendem Eintrag oder Decrypt-Fehler.

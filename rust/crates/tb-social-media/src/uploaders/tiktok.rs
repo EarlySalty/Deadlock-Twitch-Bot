@@ -155,24 +155,94 @@ pub fn build_caption(title: &str, description: &str, hashtags: &[String]) -> Str
     truncate_utf16(&parts.join("\n\n"), CAPTION_MAX)
 }
 
-pub(crate) fn draft_uploader(
-    credentials: &crate::credentials::SocialMediaCredentials,
-) -> Result<TikTokUploader, UploadError> {
-    let upload_scope = credentials
+fn has_scope(credentials: &crate::credentials::SocialMediaCredentials, scope: &str) -> bool {
+    credentials
         .scopes
         .as_deref()
         .unwrap_or("")
         .split([',', ' '])
-        .any(|scope| scope == "video.upload");
-    if !upload_scope || credentials.access_token.is_empty() {
+        .any(|granted| granted == scope)
+}
+
+fn scoped_uploader(
+    credentials: &crate::credentials::SocialMediaCredentials,
+    scopes: &[&str],
+) -> Result<TikTokUploader, UploadError> {
+    if credentials.access_token.is_empty()
+        || !scopes.iter().any(|scope| has_scope(credentials, scope))
+    {
         return Err(UploadError::not_started(UploadError::NotAuthenticated));
     }
     Ok(TikTokUploader::new(credentials.access_token.clone()))
 }
 
+pub(crate) fn draft_uploader(
+    credentials: &crate::credentials::SocialMediaCredentials,
+) -> Result<TikTokUploader, UploadError> {
+    scoped_uploader(credentials, &["video.upload"])
+}
+
+pub(crate) fn direct_uploader(
+    credentials: &crate::credentials::SocialMediaCredentials,
+    post: DirectPost,
+) -> Result<TikTokUploader, UploadError> {
+    Ok(scoped_uploader(credentials, &["video.publish"])?.with_direct_post(post))
+}
+
+pub(crate) fn status_reader(
+    credentials: &crate::credentials::SocialMediaCredentials,
+) -> Result<TikTokUploader, UploadError> {
+    scoped_uploader(credentials, &["video.upload", "video.publish"])
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectPost {
+    pub caption: String,
+    pub privacy_level: String,
+    pub allow_comment: bool,
+    pub allow_duet: bool,
+    pub allow_stitch: bool,
+}
+
+impl DirectPost {
+    fn check(&self, info: &CreatorInfo, duration: f64) -> Result<(), UploadError> {
+        let reason = if !info.privacy_level_options.contains(&self.privacy_level) {
+            Some("Die eingestellte TikTok-Sichtbarkeit ist für dieses Konto nicht verfügbar. Bitte wähle sie in den Einstellungen neu.")
+        } else if !duration.is_finite() || duration <= 0.0 || info.max_video_post_duration_sec <= 0
+        {
+            Some("Die Videodauer konnte nicht geprüft werden.")
+        } else if duration > info.max_video_post_duration_sec as f64 {
+            Some("Der Clip ist für dieses TikTok-Konto zu lang.")
+        } else {
+            None
+        };
+        match reason {
+            Some(reason) => Err(UploadError::Validation(reason.into())),
+            None => Ok(()),
+        }
+    }
+
+    fn post_info(&self, info: &CreatorInfo) -> Value {
+        json!({
+            "title": self.caption,
+            "privacy_level": self.privacy_level,
+            "disable_comment": !self.allow_comment || info.comment_disabled,
+            "disable_duet": !self.allow_duet || info.duet_disabled,
+            "disable_stitch": !self.allow_stitch || info.stitch_disabled,
+            "brand_organic_toggle": false,
+            "brand_content_toggle": false,
+            "video_cover_timestamp_ms": 1000,
+        })
+    }
+}
+
 pub struct TikTokUploader {
     access_token: String,
     api_base: String,
+    direct: Option<DirectPost>,
+    video_processor: crate::video_processor::VideoProcessor,
+    #[cfg(test)]
+    known_duration: Option<f64>,
     http: reqwest::Client,
 }
 
@@ -181,6 +251,10 @@ impl TikTokUploader {
         Self {
             access_token: access_token.into(),
             api_base: DEFAULT_API_BASE.to_string(),
+            direct: None,
+            video_processor: crate::video_processor::VideoProcessor::default(),
+            #[cfg(test)]
+            known_duration: None,
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .build()
@@ -191,6 +265,53 @@ impl TikTokUploader {
     pub fn with_api_base(mut self, base: impl Into<String>) -> Self {
         self.api_base = base.into();
         self
+    }
+
+    pub fn with_direct_post(mut self, post: DirectPost) -> Self {
+        self.direct = Some(post);
+        self
+    }
+
+    pub fn posts_directly(&self) -> bool {
+        self.direct.is_some()
+    }
+
+    #[cfg(test)]
+    fn with_known_duration(mut self, seconds: f64) -> Self {
+        self.known_duration = Some(seconds);
+        self
+    }
+
+    async fn video_duration(&self, video_path: &str) -> Result<f64, UploadError> {
+        #[cfg(test)]
+        if let Some(seconds) = self.known_duration {
+            return Ok(seconds);
+        }
+        self.video_processor
+            .get_video_info(video_path)
+            .await
+            .map(|info| info.duration)
+            .map_err(|_| {
+                UploadError::not_started(UploadError::Validation(
+                    "Die Videodauer konnte nicht geprüft werden.".into(),
+                ))
+            })
+    }
+
+    async fn direct_body(
+        &self,
+        post: &DirectPost,
+        video_path: &str,
+        source: Value,
+    ) -> Result<Value, UploadError> {
+        let info = self
+            .query_creator_info()
+            .await
+            .map_err(UploadError::not_started)?;
+        let duration = self.video_duration(video_path).await?;
+        post.check(&info, duration)
+            .map_err(UploadError::not_started)?;
+        Ok(json!({ "post_info": post.post_info(&info), "source_info": source }))
     }
 
     pub async fn query_creator_info(&self) -> Result<CreatorInfo, UploadError> {
@@ -238,10 +359,19 @@ impl TikTokUploader {
             chunk_size,
             total_chunk_count,
         };
-        let body = json!({ "source_info": source_info(video_size, plan) });
-        let (publish_id, upload_url) = self
-            .init_transfer("/post/publish/inbox/video/init/", "TikTok draft init", body)
-            .await?;
+        let source = source_info(video_size, plan);
+        let (publish_id, upload_url) = match &self.direct {
+            Some(post) => {
+                let body = self.direct_body(post, video_path, source).await?;
+                self.init_transfer("/post/publish/video/init/", "TikTok direct init", body)
+                    .await?
+            }
+            None => {
+                let body = json!({ "source_info": source });
+                self.init_transfer("/post/publish/inbox/video/init/", "TikTok draft init", body)
+                    .await?
+            }
+        };
         if let Some(checkpoint) = checkpoint {
             checkpoint.record_publish_id(&publish_id).await?;
         }
@@ -934,6 +1064,88 @@ mod tests {
         assert_eq!(body["source_info"]["source"], json!("FILE_UPLOAD"));
         assert_eq!(body["source_info"]["video_size"], json!(16));
         assert_eq!(body["source_info"]["total_chunk_count"], json!(1));
+        tokio::fs::remove_file(video).await.unwrap();
+    }
+
+    fn direct_post(privacy: &str) -> DirectPost {
+        DirectPost {
+            caption: "Titel\n\n#deadlock".into(),
+            privacy_level: privacy.into(),
+            allow_comment: true,
+            allow_duet: false,
+            allow_stitch: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn direktpost_sendet_caption_und_respektiert_kontosperren() {
+        let server = MockServer::start().await;
+        mount_creator_info(&server, json!(["PUBLIC_TO_EVERYONE", "SELF_ONLY"])).await;
+        Mock::given(method("POST"))
+            .and(path("/post/publish/video/init/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "publish_id": "direct-1", "upload_url": format!("{}/upload/", server.uri()) },
+                "error": { "code": "ok" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        let checkpoint = RecordingCheckpoint {
+            ids: Default::default(),
+            fail: false,
+        };
+        let video = temp_video("tb_tiktok_direct.mp4", 16).await;
+        let id = TikTokUploader::new("tok")
+            .with_api_base(server.uri())
+            .with_direct_post(direct_post("PUBLIC_TO_EVERYONE"))
+            .with_known_duration(15.0)
+            .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
+            .await
+            .unwrap();
+        assert_eq!(id, "direct-1");
+        let requests = server.received_requests().await.unwrap();
+        let init = requests
+            .iter()
+            .find(|r| r.url.path() == "/post/publish/video/init/")
+            .unwrap();
+        let body: Value = serde_json::from_slice(&init.body).unwrap();
+        assert_eq!(body["post_info"]["title"], json!("Titel\n\n#deadlock"));
+        assert_eq!(
+            body["post_info"]["privacy_level"],
+            json!("PUBLIC_TO_EVERYONE")
+        );
+        assert_eq!(body["post_info"]["disable_comment"], json!(true));
+        assert_eq!(body["post_info"]["disable_duet"], json!(true));
+        assert_eq!(body["post_info"]["disable_stitch"], json!(true));
+        assert_eq!(body["source_info"]["video_size"], json!(16));
+        tokio::fs::remove_file(video).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn direktpost_mit_gesperrter_sichtbarkeit_startet_nicht() {
+        let server = MockServer::start().await;
+        mount_creator_info(&server, json!(["SELF_ONLY"])).await;
+        let checkpoint = RecordingCheckpoint {
+            ids: Default::default(),
+            fail: false,
+        };
+        let video = temp_video("tb_tiktok_direct_private.mp4", 16).await;
+        let error = TikTokUploader::new("tok")
+            .with_api_base(server.uri())
+            .with_direct_post(direct_post("PUBLIC_TO_EVERYONE"))
+            .with_known_duration(15.0)
+            .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, UploadError::NotStarted(ref inner) if matches!(**inner, UploadError::Validation(_)))
+        );
+        assert!(checkpoint.ids.lock().unwrap().is_empty());
         tokio::fs::remove_file(video).await.unwrap();
     }
 

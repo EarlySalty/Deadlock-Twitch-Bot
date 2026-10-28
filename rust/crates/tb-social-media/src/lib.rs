@@ -93,6 +93,7 @@ pub mod settings;
 pub mod subtitles;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod tiktok_publishing;
 mod tiktok_recovery;
 pub mod transcription;
 pub mod upload_worker;

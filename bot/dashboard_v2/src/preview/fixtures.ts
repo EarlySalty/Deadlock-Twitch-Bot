@@ -1040,7 +1040,17 @@ const AUTOPILOT_POLICY_FIXTURE = {
   policy_revision: 1,
 };
 
+const TIKTOK_PUBLISHING_FIXTURE = {
+  privacy_level: 'PUBLIC_TO_EVERYONE',
+  allow_comment: true,
+  allow_duet: true,
+  allow_stitch: true,
+  fixed_hashtags: ['deadlock', 'deadlockdeutsch', 'ddc'],
+  caption_footer: 'Discord: discord.gg/z5TfVHuQq2',
+};
+
 export function getPreviewPathFixture(pathname: string): unknown | undefined {
+  if (pathname === '/twitch/social-media/api/autopilot/tiktok-publishing') return TIKTOK_PUBLISHING_FIXTURE;
   if (pathname === '/twitch/social-media/api/autopilot/schedule') return AUTOPILOT_SCHEDULE_FIXTURE;
   if (pathname === '/twitch/social-media/api/autopilot/policy') return AUTOPILOT_POLICY_FIXTURE;
   if (pathname === '/twitch/api/v2/streamer/community-hints') {

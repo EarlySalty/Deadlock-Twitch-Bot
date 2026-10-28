@@ -63,6 +63,23 @@ export function planPreview(snapshot: ScheduleQueueSnapshot, policy: Distributio
 }
 
 export const PLAN_EN: Record<string, string> = {
+  'TikTok-Veröffentlichung': 'TikTok publishing',
+  'Mit „Freigabe nötig“ landet der Clip als Entwurf in deiner TikTok-App. Bei „Vollautomatisch“ und „Veto bis Frist“ wird direkt gepostet.': 'With “Approval required” the clip lands as a draft in your TikTok app. With “Fully automatic” and “Veto until deadline” it is posted directly.',
+  'Wer darf das Video sehen?': 'Who can watch the video?',
+  'Öffentlich': 'Public',
+  'Nur Follower': 'Followers only',
+  'Nur Freunde': 'Friends only',
+  'Nur ich': 'Only me',
+  'Interaktionen': 'Interactions',
+  'Kommentare erlauben': 'Allow comments',
+  'Duett erlauben': 'Allow duet',
+  'Stitch erlauben': 'Allow stitch',
+  'Ist etwas in deinem TikTok-Konto gesperrt, bleibt es auch hier aus.': 'Anything turned off in your TikTok account stays off here too.',
+  'Feste Hashtags': 'Fixed hashtags',
+  'Kommen bei jedem TikTok-Post nach den Hashtags der KI dazu. Höchstens 10, mit Leerzeichen trennen.': 'Added to every TikTok post after the AI hashtags. Up to 10, separated by spaces.',
+  'Fester Zusatztext': 'Fixed footer text',
+  'Steht unter jeder Beschreibung, zum Beispiel der Link zu deinem Discord.': 'Appears below every description, for example your Discord link.',
+  'Wird geladen.': 'Loading.',
   'Speichere zuerst deine Änderungen, damit der Testlauf sie verwendet.': 'Save your changes first so the test run uses them.',
   'Planen': 'Plan',
   'Schritt {number}': 'Step {number}',
