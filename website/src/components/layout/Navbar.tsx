@@ -74,11 +74,13 @@ export function Navbar() {
           <img
             src={`${import.meta.env.BASE_URL}brand/deadlock-d-logo.png`}
             alt=""
-            className="h-11 w-11 shrink-0 rounded-full ring-2 ring-primary/80 shadow-[0_0_18px_rgba(201,168,106,0.45)]"
+            className="h-10 w-10 sm:h-[54px] sm:w-[54px] shrink-0"
           />
-          <span className="font-display font-bold text-base sm:text-xl leading-tight bg-gradient-to-r from-primary-hover to-primary bg-clip-text text-transparent drop-shadow-[0_0_10px_rgba(201,168,106,0.25)]">
-            Deutsche Deadlock Community
-          </span>
+          <img
+            src={`${import.meta.env.BASE_URL}brand/wordmark.svg`}
+            alt="Deutsche Deadlock Community"
+            className="h-9 w-[138px] sm:h-12 sm:w-[220px] object-contain"
+          />
         </span>
 
         {/* Center nav – desktop only */}
