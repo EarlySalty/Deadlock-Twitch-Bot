@@ -23,7 +23,7 @@ function Kopf({ streamers, status }: { streamers: NetworkStreamer[]; status: Net
   const live = streamers.filter((s) => s.isLive).length;
   return (
     <p className="v5-unterzeile">
-      {streamers.length} Partner streamen Deadlock in diesem Netzwerk, {live} davon sind gerade live.
+      {streamers.length} Partner streamen Deadlock in diesem Netzwerk, {live} davon gerade live.
     </p>
   );
 }
