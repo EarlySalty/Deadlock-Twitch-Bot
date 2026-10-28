@@ -11,7 +11,6 @@ import {
 } from "@/data/externalLinks";
 
 export function Hero() {
-  const badge = useEinblendung<HTMLDivElement>();
   const titel = useEinblendung<HTMLHeadingElement>();
   const text = useEinblendung<HTMLParagraphElement>();
   const cta = useEinblendung<HTMLDivElement>();
@@ -22,19 +21,6 @@ export function Hero() {
     >
       <div className="max-w-[96rem] mx-auto px-6 pt-32 pb-20 w-full">
         <div className="text-center">
-          <motion.div
-            ref={badge.ref}
-            initial={false}
-            animate={{
-              opacity: badge.versteckt ? 0 : 1,
-              y: badge.versteckt ? -12 : 0,
-            }}
-            transition={badge.versteckt ? { duration: 0 } : { duration: 0.5 }}
-            className="inline-flex items-center rounded-full px-4 py-1.5 bg-[var(--color-card)] border border-[var(--color-border)] text-sm text-[var(--color-accent)]"
-          >
-            {landingText("Größtes Deadlock-Raid-Netzwerk auf Twitch")}
-          </motion.div>
-
           <motion.h1
             ref={titel.ref}
             initial={false}
@@ -45,7 +31,7 @@ export function Hero() {
             transition={
               titel.versteckt ? { duration: 0 } : { duration: 0.6, delay: 0.1 }
             }
-            className="mt-6 text-5xl md:text-6xl lg:text-7xl font-bold leading-tight text-[var(--color-text-primary)]"
+            className="text-5xl md:text-6xl lg:text-7xl font-bold leading-tight text-[var(--color-text-primary)]"
           >
             {landingText("Kein Stream endet")}
             <br />
