@@ -36,7 +36,7 @@ export function StreamerNetworkPage() {
         <PublicProfiles />
       </main>
       <Footer />
-      <SiteChatbot showTrustpilot />
+      <SiteChatbot />
     </>
   );
 }
