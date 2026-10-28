@@ -16,6 +16,7 @@ try {
   for (const [page, file] of [
     ["StreamerNetworkV3Page", "dist/v3/index.html"],
     ["StreamerNetworkV4Page", "dist/v4/index.html"],
+    ["StreamerNetworkV5Page", "dist/v5/index.html"],
   ]) {
     const mod = await server.ssrLoadModule(`/src/pages/${page}.tsx`);
     const html = renderToString(

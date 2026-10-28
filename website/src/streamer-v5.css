@@ -1,0 +1,97 @@
+html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+.deadlock-world { font-size: 17px; }
+.deadlock-world h3 { font-family: "Barlow Condensed", sans-serif; text-transform: uppercase; letter-spacing: .01em; }
+
+.deadlock-world .v5-header, .deadlock-world .v5-footer { padding-inline: max(48px, calc((100% - 1240px) / 2)); }
+.deadlock-world .v5-nav { gap: 28px; font-size: .9rem; }
+.deadlock-world .v5-menu-button { display: none; min-height: 44px; padding: 0 16px; background: transparent; color: var(--world-paper); border: 1px solid #f7e9d580; border-radius: 2px; font: inherit; font-weight: 700; cursor: pointer; }
+.deadlock-world .v5-drawer-backdrop { position: fixed; inset: 0; z-index: 80; background: #0b0f10cc; opacity: 0; pointer-events: none; transition: opacity .25s ease; }
+.deadlock-world .v5-drawer-backdrop.is-open { opacity: 1; pointer-events: auto; }
+.deadlock-world .v5-drawer { position: fixed; top: 0; bottom: 0; left: 0; z-index: 90; width: min(340px, 86vw); padding: 28px 28px 40px; background: #101415; border-right: 1px solid #e5bc7340; display: flex; flex-direction: column; gap: 4px; transform: translateX(-100%); visibility: hidden; transition: transform .3s cubic-bezier(.2, .8, .2, 1), visibility 0s linear .3s; }
+.deadlock-world .v5-drawer.is-open { transform: none; visibility: visible; transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
+.deadlock-world .v5-drawer a:not(.world-button) { display: block; padding: 14px 0; font-family: "Barlow Condensed", sans-serif; font-size: 1.6rem; text-transform: uppercase; text-decoration: none; border-bottom: 1px solid #f7e9d526; }
+.deadlock-world .v5-drawer .world-button { margin-top: 24px; }
+.deadlock-world .v5-drawer-close { align-self: flex-start; margin-bottom: 16px; min-height: 44px; padding: 0 14px; background: transparent; color: var(--world-paper); border: 1px solid #f7e9d580; border-radius: 2px; font: inherit; cursor: pointer; }
+
+.deadlock-world .v5-hero .world-copy > p:not(.world-invitation):not(.v5-hero-note) { font-size: 1.1rem; }
+.deadlock-world .v5-hero .v5-hero-note { margin-top: 18px; font-size: .85rem; color: #e8dcc8; }
+
+.deadlock-world .v5-portraits a { position: relative; text-decoration: none; }
+.deadlock-world .v5-portraits img { height: 180px; }
+.deadlock-world .v5-portraits span { display: block; padding: 8px 10px; font-family: "Barlow Condensed", sans-serif; font-size: 1.1rem; text-transform: uppercase; color: var(--world-paper); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deadlock-world .v5-portraits-platz { height: 48px; }
+
+.deadlock-world .v5-kopf { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; margin-bottom: 56px; }
+.deadlock-world .v5-kopf h2 { margin: 0; }
+.deadlock-world .v5-beispiel { font-weight: 700; font-size: .9rem; }
+.deadlock-world .v5-schritte { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px; counter-reset: none; }
+.deadlock-world .v5-schritt { position: relative; }
+.deadlock-world .v5-schritt + .v5-schritt::before { content: "→"; position: absolute; left: -38px; top: 22px; font-size: 1.8rem; font-weight: 700; color: #6a441a; }
+.deadlock-world .v5-schritt-nummer { display: block; font-family: "Skranji", sans-serif; font-size: 4.4rem; line-height: 1; color: #d95d2f; }
+.deadlock-world .v5-schritt h3 { margin: 12px 0 8px; font-size: 1.6rem; }
+.deadlock-world .v5-schritt p { margin: 0; }
+.deadlock-world .v5-kachel { margin-top: 24px; padding: 18px 20px; background: #101415; color: var(--world-paper); border: 1px solid #101415; min-height: 150px; }
+.deadlock-world .v5-kachel p { margin: 0; line-height: 1.5; }
+.deadlock-world .v5-kachel-kanal { font-weight: 700; display: flex; align-items: center; gap: 10px; }
+.deadlock-world .v5-kachel-titel { color: #d4c5ae; font-size: .9rem; }
+.deadlock-world .v5-kachel-zeile { margin-top: 18px !important; padding-top: 12px; border-top: 1px solid #f7e9d526; color: var(--world-gold); font-weight: 700; }
+.deadlock-world .v5-kachel-liste { list-style: none; margin: 0; padding: 0; }
+.deadlock-world .v5-kachel-liste li { display: flex; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid #f7e9d51f; font-size: .9rem; }
+.deadlock-world .v5-kachel-liste li span:last-child { color: #d4c5ae; }
+.deadlock-world .v5-kachel-liste li.is-gewaehlt { background: var(--world-gold); color: #101415; font-weight: 700; }
+.deadlock-world .v5-kachel-liste li.is-gewaehlt span:last-child { color: #101415; }
+.deadlock-world .v5-live { padding: 2px 8px; background: #d95d2f; color: #101415; font-size: .75rem; text-transform: uppercase; }
+.deadlock-world .v5-hinweis { margin: 48px 0 0; padding-top: 20px; border-top: 1px solid #10141533; max-width: 70ch; }
+
+.deadlock-world .v5-vorteile .world-chapter-title { text-align: left; transform: none; }
+.deadlock-world .v5-vorteile .world-framed, .deadlock-world .v5-schutz .world-framed { margin: 0; }
+.deadlock-world .v5-vorteile .world-collage-copy { margin-left: -40px; }
+.deadlock-world .v5-vorteil-liste { list-style: none; margin: 90px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 80px; }
+.deadlock-world .v5-vorteil-liste li { display: grid; grid-template-columns: 64px 1fr; column-gap: 16px; padding: 26px 0; border-top: 1px solid #f7e9d540; }
+.deadlock-world .v5-vorteil-nummer { grid-row: span 2; font-family: "Skranji", sans-serif; font-size: 2rem; line-height: 1; color: var(--world-gold); }
+.deadlock-world .v5-vorteil-liste h3 { margin: 0 0 6px; font-size: 1.55rem; }
+.deadlock-world .v5-vorteil-liste p { margin: 0; color: #e8dcc8; }
+
+.deadlock-world .v5-schutz .world-chapter-title { text-align: left; transform: none; }
+.deadlock-world .v5-schutz .world-chapter-title .world-stamp { background: #101415; color: var(--world-paper); }
+.deadlock-world .v5-schutz .world-collage-copy { margin-right: -40px; }
+.deadlock-world .v5-zahlen { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 8px 0 0; padding-top: 20px; border-top: 1px solid #f7e9d533; }
+.deadlock-world .v5-zahlen dt { font-size: .78rem; color: #d4c5ae; }
+.deadlock-world .v5-zahlen dd { margin: 4px 0 0; font-family: "Skranji", sans-serif; font-size: 2.1rem; color: var(--world-gold); }
+
+.deadlock-world .v5-partner h2 { margin-bottom: 12px; }
+.deadlock-world .v5-unterzeile { margin: 0 0 40px; color: #d4c5ae; }
+.deadlock-world .v5-partner-liste { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 48px; }
+.deadlock-world .v5-partner-liste a { display: grid; grid-template-columns: 48px 1fr auto; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid #f7e9d533; text-decoration: none; }
+.deadlock-world .v5-partner-liste img, .deadlock-world .v5-avatar-leer { width: 48px; height: 48px; border-radius: 50%; background: #293e49; object-fit: cover; }
+.deadlock-world .v5-partner-liste strong { font-family: "Barlow Condensed", sans-serif; font-size: 1.35rem; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deadlock-world .v5-partner-liste a:hover strong { color: var(--world-gold); }
+.deadlock-world .v5-status { font-size: .8rem; color: #b3ac9f; }
+.deadlock-world .v5-status.is-live { color: #101415; background: #d95d2f; padding: 2px 8px; font-weight: 700; }
+.deadlock-world .v5-alle { margin-top: 40px; cursor: pointer; font-family: inherit; }
+
+.deadlock-world .v5-sicherheit h2 { margin-bottom: 24px; }
+.deadlock-world .v5-sicherheit strong { font-weight: 700; }
+
+@media (max-width: 1100px) {
+  .deadlock-world .v5-partner-liste { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 900px) {
+  .deadlock-world .v5-header, .deadlock-world .v5-footer { padding-inline: 24px; }
+  .deadlock-world .v5-menu-button { display: inline-flex; align-items: center; }
+  .deadlock-world .v5-schritte { grid-template-columns: 1fr; gap: 56px; }
+  .deadlock-world .v5-schritt + .v5-schritt::before { content: "↓"; left: 0; top: -46px; }
+  .deadlock-world .v5-vorteil-liste { grid-template-columns: 1fr; margin-top: 60px; }
+  .deadlock-world .v5-vorteile .world-collage-copy, .deadlock-world .v5-schutz .world-collage-copy { margin-inline: 0; }
+}
+@media (max-width: 600px) {
+  .deadlock-world { font-size: 16px; }
+  .deadlock-world .v5-nav { display: none; }
+  .deadlock-world .v5-portraits img { height: 90px; }
+  .deadlock-world .v5-portraits span { font-size: .8rem; padding: 4px 6px; }
+  .deadlock-world .v5-schritt-nummer { font-size: 3.4rem; }
+  .deadlock-world .v5-partner-liste { grid-template-columns: 1fr; }
+  .deadlock-world .v5-zahlen dd { font-size: 1.6rem; }
+  .deadlock-world .v5-vorteile .world-framed, .deadlock-world .v5-schutz .world-framed { width: 100%; }
+  .deadlock-world .v5-vorteile .world-collage-copy, .deadlock-world .v5-schutz .world-collage-copy { width: 100%; }
+}

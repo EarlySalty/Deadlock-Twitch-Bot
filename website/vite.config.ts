@@ -26,6 +26,8 @@ export default defineConfig({
           if (id.includes('vite/preload-helper') || id.includes('vite/modulepreload-polyfill')) {
             return 'gemeinsam';
           }
+          if (id.includes('/src/streamer-v5.css')) return undefined;
+          if (/\.css($|\?)/.test(id)) return 'gemeinsam-stil';
           const plugin = (vorher as (id: string, ...r: unknown[]) => string)(
             id,
             ...rest,
@@ -57,6 +59,7 @@ export default defineConfig({
         streamerV1: path.resolve(__dirname, 'v1/index.html'),
         streamerV3: path.resolve(__dirname, 'v3/index.html'),
         streamerV4: path.resolve(__dirname, 'v4/index.html'),
+        streamerV5: path.resolve(__dirname, 'v5/index.html'),
         affiliateProgram: path.resolve(__dirname, 'vertriebler/index.html'),
         affiliatePortal: path.resolve(__dirname, 'affiliate-portal/index.html'),
         onboarding: path.resolve(__dirname, 'onboarding/index.html'),
