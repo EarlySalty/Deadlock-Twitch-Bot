@@ -116,11 +116,7 @@ export function PartnerPitch({
       <div className="max-w-[1600px] mx-auto px-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-14 items-center">
           <ScrollReveal>
-            <div className="inline-flex items-center rounded-full px-4 py-1.5 bg-[var(--color-card)] border border-[var(--color-border)] text-sm text-[var(--color-accent)]">
-              {landingText("Partner werden")}
-            </div>
-
-            <h2 className="mt-6 text-3xl md:text-4xl lg:text-5xl font-bold text-[var(--color-text-primary)] font-display leading-tight">
+            <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold text-[var(--color-text-primary)] font-display leading-tight">
               {landingText("Werde Partner der")}
               <br />
               <GradientText>
