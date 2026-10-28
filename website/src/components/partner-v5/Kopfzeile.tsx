@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { buildTwitchBotAuthUrl } from "@/data/externalLinks";
 
 const WEGE = [
@@ -11,6 +11,15 @@ const WEGE = [
 
 export function Kopfzeile() {
   const [offen, setOffen] = useState(false);
+  const knopf = useRef<HTMLButtonElement>(null);
+  const schliessenKnopf = useRef<HTMLButtonElement>(null);
+  const warOffen = useRef(false);
+
+  useEffect(() => {
+    if (offen) schliessenKnopf.current?.focus();
+    else if (warOffen.current) knopf.current?.focus();
+    warOffen.current = offen;
+  }, [offen]);
 
   useEffect(() => {
     if (!offen) return;
@@ -43,6 +52,7 @@ export function Kopfzeile() {
       </nav>
       <button
         type="button"
+        ref={knopf}
         className="v5-menu-button"
         aria-expanded={offen}
         aria-controls="v5-drawer"
@@ -52,7 +62,7 @@ export function Kopfzeile() {
       </button>
       <div className={offen ? "v5-drawer-backdrop is-open" : "v5-drawer-backdrop"} onClick={() => setOffen(false)} aria-hidden="true" />
       <nav id="v5-drawer" className={offen ? "v5-drawer is-open" : "v5-drawer"} aria-label="Menü" aria-hidden={!offen}>
-        <button type="button" className="v5-drawer-close" onClick={() => setOffen(false)} tabIndex={offen ? 0 : -1}>
+        <button ref={schliessenKnopf} type="button" className="v5-drawer-close" onClick={() => setOffen(false)} tabIndex={offen ? 0 : -1}>
           Schließen
         </button>
         {WEGE.map((w) => (
