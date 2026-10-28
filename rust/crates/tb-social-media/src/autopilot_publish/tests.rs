@@ -74,6 +74,7 @@ async fn pool() -> PgPool {
         include_str!("../../../../migrations/20261018140000_social_test_run_revision_release.sql"),
         include_str!("../../../../migrations/20261019120000_social_failure_backlog_hold.sql"),
         include_str!("../../../../migrations/20261019130000_social_cleared_job_releases_clip.sql"),
+        include_str!("../../../../migrations/20261028120000_social_tiktok_publishing.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(&pool)
@@ -2582,5 +2583,57 @@ async fn unconfirmed_publish_becomes_uncertain_without_replay() {
         )]
     );
     assert_eq!(publisher.calls().len(), 1);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn withdrawn_music_consent_clears_every_consent_source() {
+    let pool = pool().await;
+    configure(&pool, &["tiktok"], &[("tiktok", "acct")]).await;
+    music_consent(&pool, "acct").await;
+    sqlx::query("INSERT INTO social_media_settings (key, value) VALUES ('tiktok_defaults:owner', $1::text::jsonb)")
+        .bind(json!({"music_consent": true, "music_consent_at": "2026-10-01T00:00:00Z", "music_consent_platform_user_id": "acct", "privacy_level": "SELF_ONLY"}).to_string())
+        .execute(&pool)
+        .await
+        .expect("legacy consent");
+    let input = crate::tiktok_publishing::TikTokPublishingInput {
+        settings: crate::tiktok_publishing::TikTokPublishing {
+            privacy_level: "SELF_ONLY".into(),
+            ..Default::default()
+        },
+        music_consent: false,
+    };
+    let view = crate::tiktok_publishing::save_view(&pool, "owner", &input)
+        .await
+        .expect("save");
+    assert!(view.account_connected);
+    assert!(!view.music_consent);
+    let mut connection = pool.acquire().await.expect("connection");
+    assert!(
+        !tiktok_account_on(&mut connection, "owner")
+            .await
+            .expect("account")
+            .music_consent
+    );
+    let legacy: String = sqlx::query_scalar(
+        "SELECT value::text FROM social_media_settings WHERE key = 'tiktok_defaults:owner'",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .expect("legacy row");
+    let legacy: Value = serde_json::from_str(&legacy).expect("legacy json");
+    assert_eq!(
+        legacy,
+        json!({"music_consent": false, "privacy_level": "SELF_ONLY"})
+    );
+    drop(connection);
+    let input = crate::tiktok_publishing::TikTokPublishingInput {
+        music_consent: true,
+        ..input
+    };
+    let view = crate::tiktok_publishing::save_view(&pool, "owner", &input)
+        .await
+        .expect("save again");
+    assert!(view.music_consent);
     cleanup(pool).await;
 }

@@ -170,6 +170,27 @@ fn consent_key(owner: &str, account: &str) -> String {
     format!("tiktok_music_consent:{owner}:{account}")
 }
 
+async fn withdraw_consent(pool: &PgPool, owner: &str, key: &str) -> Result<(), SettingsError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM social_media_settings WHERE key = $1")
+        .bind(key)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE social_media_settings
+         SET value = (value - 'music_consent_at' - 'music_consent_platform_user_id')
+                     || '{\"music_consent\": false}'::jsonb,
+             updated_at = CURRENT_TIMESTAMP, updated_by = $2
+         WHERE key = $1 AND jsonb_typeof(value) = 'object'",
+    )
+    .bind(format!("tiktok_defaults:{owner}"))
+    .bind(owner)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn view(pool: &PgPool, owner: &str) -> Result<TikTokPublishingView, SettingsError> {
     let settings = load(pool, owner).await?;
     let mut connection = pool.acquire().await?;
@@ -195,10 +216,7 @@ pub async fn save_view(
             let value = json!({"platform_user_id": account, "consented_at": chrono::Utc::now()});
             crate::settings::set_setting(pool, &key, &value, Some(owner)).await?;
         } else {
-            sqlx::query("DELETE FROM social_media_settings WHERE key = $1")
-                .bind(&key)
-                .execute(pool)
-                .await?;
+            withdraw_consent(pool, owner, &key).await?;
         }
     }
     view(pool, owner).await
