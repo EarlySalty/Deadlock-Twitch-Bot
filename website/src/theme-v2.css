@@ -9,29 +9,29 @@
    Zusammenlegung offen, sobald die parallele Brand-Arbeit (dl-brand) durch ist. */
 :root[data-theme="v2"] {
   /* Flaechen: warm-braun -> neutral-schwarz (Patch #0b0b0b / #101010 / #161616) */
-  --color-bg:             #0b0b0b;
-  --color-background:     #101010;
-  --color-card:           rgba(20, 20, 20, 0.82);
-  --color-card-hover:     rgba(32, 32, 32, 0.88);
+  --color-bg:             #1b1a17;
+  --color-background:     #201e1b;
+  --color-card:           rgba(38, 36, 32, 0.84);
+  --color-card-hover:     rgba(50, 47, 42, 0.9);
   /* Rahmen generell einen Tick goldiger/praesenter, damit neutrale Elemente
      nicht in reines Grau kippen ("alles leicht goldig"). */
   --color-border:         rgba(239, 212, 157, 0.16);
   --color-border-strong:  rgba(239, 212, 157, 0.34);
   --color-border-hover:   rgba(239, 212, 157, 0.28);
   --color-text-primary:   #f2eee6;
-  --color-text-secondary: #9d968a;
-  --color-secondary:      #9d968a;
+  --color-text-secondary: #b3ac9f;
+  --color-secondary:      #b3ac9f;
 
   /* Verlaeufe entwaermen: neutrales Schwarz statt Braun-Ink */
-  --gradient-bg:      linear-gradient(180deg, #0f0f0e 0%, #0b0b0b 55%, #101010 100%);
-  --gradient-hero:    linear-gradient(160deg, #0b0b0b 0%, #101010 55%, #161616 100%);
+  --gradient-bg:      linear-gradient(180deg, #23211d 0%, #1b1a17 55%, #1f1d1a 100%);
+  --gradient-hero:    linear-gradient(160deg, #1b1a17 0%, #201e1b 55%, #27241f 100%);
   --shadow-card:      0 26px 70px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   --shadow-card-soft: 0 16px 45px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.035);
 
   /* --theme-* Fallbacks der Landing-Komponenten (Titlebar/Chatbot/Demo) auf Schwarz */
   --theme-titlebar-bg:   rgba(34, 34, 34, 0.9);
   --theme-chatbot-bg:    rgba(15, 15, 14, 0.96);
-  --theme-token-demo-bg: #101010;
+  --theme-token-demo-bg: #201e1b;
 }
 
 /* "Globale Beleuchtung" raus: die drei animierten GlowOrb-Lichtkugeln
@@ -43,7 +43,9 @@
 
 /* Body: kein Gold-Glow-Radial mehr -> Patch-typischer flach-schwarzer Grund */
 :root[data-theme="v2"] body {
-  background: var(--gradient-bg);
+  background:
+    radial-gradient(90% 60% at 50% 0%, rgba(201, 168, 106, 0.1), transparent 75%),
+    var(--gradient-bg);
 }
 
 /* Gitternetz wie Patch, aber ein paar % praesenter (0.025 -> 0.045, 0.55 -> 0.72) */
@@ -64,7 +66,7 @@
 :root[data-theme="v2"] .rd-twitch-embed {
   background:
     linear-gradient(0deg, rgba(201, 168, 106, 0.05), rgba(201, 168, 106, 0.05)),
-    rgba(18, 18, 18, 0.86);
+    rgba(36, 34, 30, 0.88);
   border-color: rgba(239, 212, 157, 0.18);
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
 }
@@ -72,7 +74,7 @@
 /* Clip-Rahmen: hardcoded brauner Inline-Gradient -> neutrales Schwarz, dazu
    ein goldener Halo dahinter, damit die Clips vor dem Schwarz "leuchten". */
 :root[data-theme="v2"] [data-clip-frame] {
-  background: linear-gradient(160deg, rgba(28, 28, 28, 0.92), rgba(17, 17, 17, 0.92));
+  background: linear-gradient(160deg, rgba(44, 41, 36, 0.92), rgba(32, 30, 27, 0.92));
   box-shadow:
     0 0 64px -14px rgba(201, 168, 106, 0.3),
     0 22px 52px rgba(0, 0, 0, 0.55);

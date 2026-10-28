@@ -74,9 +74,9 @@ export function Navbar() {
           <img
             src={`${import.meta.env.BASE_URL}brand/deadlock-d-logo.png`}
             alt=""
-            className="h-8 w-8 shrink-0"
+            className="h-11 w-11 shrink-0 rounded-full ring-2 ring-primary/80 shadow-[0_0_18px_rgba(201,168,106,0.45)]"
           />
-          <span className="font-display font-bold text-sm sm:text-lg leading-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+          <span className="font-display font-bold text-base sm:text-xl leading-tight bg-gradient-to-r from-primary-hover to-primary bg-clip-text text-transparent drop-shadow-[0_0_10px_rgba(201,168,106,0.25)]">
             Deutsche Deadlock Community
           </span>
         </span>
@@ -112,25 +112,19 @@ export function Navbar() {
         </nav>
 
         {/* Right actions – desktop only */}
-        <div className="hidden sm:flex items-center gap-2.5 shrink-0">
-          <a
-            href={landingLink(TWITCH_DASHBOARD_URL)}
-            className="inline-flex items-center whitespace-nowrap rounded-lg border border-primary/60 bg-primary/10 px-4 py-2 text-sm font-semibold text-text-primary transition-colors duration-200 hover:border-primary hover:bg-primary/20"
-          >
-            {landingText('Partner-Dashboard')}
-          </a>
+        <div className="hidden min-[1720px]:flex items-center gap-2.5 shrink-0">
           <a
             href={DISCORD_INVITE_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="hidden min-[1720px]:inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#5865F2]/50 bg-[#5865F2]/10 px-4 py-2 text-sm text-text-primary transition-colors duration-200 hover:border-[#5865F2] hover:bg-[#5865F2]/20"
+            className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#5865F2]/50 bg-[#5865F2]/10 px-4 py-2 text-sm text-text-primary transition-colors duration-200 hover:border-[#5865F2] hover:bg-[#5865F2]/20"
           >
             <DiscordLogo size={17} className="text-[#5865f2]" />
             {landingText('Community-Discord')}
           </a>
           <button
             onClick={openSiteChatbot}
-            className="hidden min-[1720px]:inline-flex gradient-accent whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer border-none transition-opacity duration-200 hover:opacity-90"
+            className="inline-flex gradient-accent whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer border-none transition-opacity duration-200 hover:opacity-90"
           >
             <span className="inline-flex items-center gap-2">
               <MessageCircle size={16} />
