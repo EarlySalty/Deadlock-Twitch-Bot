@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::autopilot_settings::FrameFormat;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -86,7 +87,11 @@ pub(super) struct Planning {
     pub overlay_title: OverlayTitle,
     #[serde(default = "default_subtitles_enabled")]
     pub subtitles_enabled: bool,
+    #[serde(default)]
+    pub frame: FrameFormat,
 }
+
+const FRAME_DESCRIPTION: &str = "Picture of the vertical 9:16 video. layout: the streamer's saved layout. fill: the game picture zoomed to fill the whole frame, without facecam. full: the complete 16:9 picture centered on a blurred background. For a revision keep previous.frame unless the feedback asks for another format: 9:16, Hochformat, zoom in or no blurred bars mean fill; 16:9, ganzes Bild or zoom out mean full; mit Facecam or mein Layout mean layout.";
 
 pub(super) const OVERLAY_TITLE_MAX_CHARS: usize = 54;
 
@@ -148,6 +153,8 @@ pub(super) struct VariantPlan {
     pub overlay_title: OverlayTitle,
     #[serde(default = "default_subtitles_enabled")]
     pub subtitles_enabled: bool,
+    #[serde(default)]
+    pub frame: FrameFormat,
 }
 
 impl VariantPlan {
@@ -160,6 +167,7 @@ impl VariantPlan {
             variants: Vec::new(),
             overlay_title: self.overlay_title.clone(),
             subtitles_enabled: self.subtitles_enabled,
+            frame: self.frame,
         }
     }
 }
@@ -228,11 +236,12 @@ pub(super) fn planning_schema(
         "mode": { "type": "string", "enum": ["clip_title", "custom", "none"] },
         "text": { "type": ["string", "null"], "maxLength": OVERLAY_TITLE_MAX_CHARS },
     }));
+    let frame = json!({ "type": "string", "enum": ["layout", "fill", "full"], "description": FRAME_DESCRIPTION });
     let variant = object(
-        json!({"plan":plan.clone(),"platforms":object(json!({"youtube":copy.clone(),"tiktok":copy.clone(),"instagram":copy.clone()})),"subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140},"subtitles_enabled":{"type":"boolean"},"overlay_title":overlay.clone()}),
+        json!({"plan":plan.clone(),"platforms":object(json!({"youtube":copy.clone(),"tiktok":copy.clone(),"instagram":copy.clone()})),"subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140},"subtitles_enabled":{"type":"boolean"},"frame":frame.clone(),"overlay_title":overlay.clone()}),
     );
     object(
-        json!({ "plan": plan, "platforms": object(json!({ "youtube": copy.clone(), "tiktok": copy.clone(), "instagram": copy })), "subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140}, "subtitles_enabled":{"type":"boolean"}, "overlay_title": overlay, "variants":array(variant,2) }),
+        json!({ "plan": plan, "platforms": object(json!({ "youtube": copy.clone(), "tiktok": copy.clone(), "instagram": copy })), "subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140}, "subtitles_enabled":{"type":"boolean"}, "frame": frame, "overlay_title": overlay, "variants":array(variant,2) }),
     )
 }
 

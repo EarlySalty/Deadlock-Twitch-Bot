@@ -372,6 +372,15 @@ pub fn default_streamer_layout() -> StreamerLayout {
     }
 }
 
+pub const FILL_MODE: &str = "fill";
+
+pub fn fill_layout() -> StreamerLayout {
+    let mut layout = default_streamer_layout();
+    layout.cam_enabled = false;
+    layout.mode = FILL_MODE.to_string();
+    layout
+}
+
 fn no_layout_fallback() -> StreamerLayout {
     let mut layout = default_streamer_layout();
     layout.cam_enabled = false;

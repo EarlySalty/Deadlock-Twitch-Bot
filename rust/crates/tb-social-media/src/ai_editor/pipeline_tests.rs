@@ -76,6 +76,12 @@ async fn database() -> postgres::TestPostgres {
     .execute(&db.pool)
     .await
     .expect("destination slot migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261028230000_social_ai_frame_format.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("frame format migration");
     sqlx::query("INSERT INTO social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value")
         .execute(&db.pool).await.expect("synthetic global consent");
     super::super::store::upsert_user_consent(&db.pool, "101", true, "fixture-owner")
@@ -193,6 +199,7 @@ async fn prepared(
         variants: Vec::new(),
         overlay_title: Default::default(),
         subtitles_enabled: true,
+        frame: Default::default(),
         plan: super::super::EditPlan {
             schema_version: 1,
             source_duration_ms: frozen.media.duration_ms,
@@ -2168,6 +2175,7 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
             subtitle_scale_percent: 100,
             overlay_title: Default::default(),
             subtitles_enabled: true,
+            frame: Default::default(),
         });
     assert!(validate_variants(&plan, &json!({"multi_output_enabled":false}), &runtime).is_err());
     validate_variants(&plan, &frozen.publication, &runtime).expect("opt-in");
@@ -2326,6 +2334,7 @@ async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or
             subtitle_scale_percent: 100,
             overlay_title: Default::default(),
             subtitles_enabled: true,
+            frame: Default::default(),
         });
     if let Some(StageCheckpoint::Planning { edit_plan, .. }) =
         checkpoints.get_mut(&AiStage::Planning)
@@ -2796,6 +2805,7 @@ async fn editor_options_default_off_and_save_without_touching_other_settings() {
             multi_output_enabled: true,
             experimental_ai_layout: true,
             publish_language: autopilot_settings::PublishLanguage::En,
+            frame_format: autopilot_settings::FrameFormat::Fill,
         },
     )
     .await
@@ -2814,6 +2824,17 @@ async fn editor_options_default_off_and_save_without_touching_other_settings() {
         autopilot_settings::PublishLanguage::En
     );
     assert_eq!(after.target_platforms, vec!["youtube".to_string()]);
+    assert_eq!(after.ai_frame_format, autopilot_settings::FrameFormat::Fill);
+    autopilot_settings::save(&db.pool, "101", &after)
+        .await
+        .expect("autopilot save keeps frame format");
+    assert_eq!(
+        super::super::options::load(&db.pool, "101")
+            .await
+            .expect("reload")
+            .frame_format,
+        autopilot_settings::FrameFormat::Fill
+    );
     let other = super::super::options::load(&db.pool, "202")
         .await
         .expect("other user");

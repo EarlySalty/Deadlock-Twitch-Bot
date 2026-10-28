@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::autopilot_settings::PublishLanguage;
+use crate::autopilot_settings::{FrameFormat, PublishLanguage};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +54,7 @@ pub struct EditorOptions {
     pub multi_output_enabled: bool,
     pub experimental_ai_layout: bool,
     pub publish_language: PublishLanguage,
+    pub frame_format: FrameFormat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

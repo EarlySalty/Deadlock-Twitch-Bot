@@ -1,6 +1,6 @@
 import { useT } from '@/context/LanguageContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AiEditorOptions, AiPublishLanguage } from './api';
+import type { AiEditorOptions, AiFrameFormat, AiPublishLanguage } from './api';
 import { fetchAiConsent, fetchAiOptions, saveAiOptions } from './api';
 import { providerAccessText } from './failure';
 
@@ -10,9 +10,21 @@ const languages: { value: AiPublishLanguage; label: string }[] = [
   { value: 'auto', label: 'Automatisch nach Clip-Sprache' },
 ];
 
+const frames: { value: AiFrameFormat; label: string }[] = [
+  { value: 'layout', label: 'Dein Layout' },
+  { value: 'fill', label: 'Hochformat füllen' },
+  { value: 'full', label: 'Ganzes Bild' },
+];
+
+const frameHelp: Record<AiFrameFormat, string> = {
+  layout: 'Nutzt dein gespeichertes Layout aus dem Layout-Editor. Ohne gespeichertes Layout siehst du das ganze Bild mit unscharfem Hintergrund.',
+  fill: 'Das Spielbild füllt das ganze 9:16-Video aus. Die Ränder links und rechts werden abgeschnitten, die Facecam ist nicht zu sehen.',
+  full: 'Das ganze 16:9-Bild steht mittig im Video, oben und unten mit unscharfem Hintergrund.',
+};
+
 const choices: { key: 'multi_output_enabled' | 'experimental_ai_layout'; label: string; help: string }[] = [
   { key: 'multi_output_enabled', label: 'Mehrere Videos aus einem Clip erlauben', help: 'Die KI erstellt zusätzlich zur Hauptfassung nur dann weitere Varianten, wenn der Clip genug eigenständiges Material hergibt. Ohne diese Einstellung entsteht genau ein Video.' },
-  { key: 'experimental_ai_layout', label: 'Experimentelles KI-Layout', help: 'Vorbereitet für eigene Bildaufteilungen durch die KI. Vorerst bleibt dein gespeichertes Layout aktiv und es werden keine Item-Grafiken eingeblendet.' },
+  { key: 'experimental_ai_layout', label: 'Experimentelles KI-Layout', help: 'Vorbereitet für eigene Bildaufteilungen durch die KI. Vorerst gilt das gewählte Bildformat und es werden keine Item-Grafiken eingeblendet.' },
 ];
 
 export function EditorOptionsPanel({ channel, disabled = false }: { channel: string; disabled?: boolean }) {
@@ -29,6 +41,7 @@ export function EditorOptionsPanel({ channel, disabled = false }: { channel: str
     {options.isPending ? <p role="status">{t("Optionen werden geladen…")}</p> : options.isError ? <p className="social-ai-caution" role="alert">{t("Die Optionen konnten nicht geladen werden.")}</p> : <div className="social-ai-option-list">
       {choices.map((choice) => <label className="studio-switch" key={choice.key}><input type="checkbox" checked={options.data[choice.key]} disabled={disabled || save.isPending || options.isFetching} onChange={(event) => save.mutate({ ...options.data, [choice.key]: event.target.checked })} /><span>{t(choice.label)}</span><small>{t(choice.help)}</small></label>)}
       <label className="social-ai-language"><span>{t("Sprache für Titel, Beschreibung und Hashtags")}</span><select className="studio-select" value={options.data.publish_language} disabled={disabled || save.isPending || options.isFetching} onChange={(event) => save.mutate({ ...options.data, publish_language: event.target.value as AiPublishLanguage })}>{languages.map((language) => <option key={language.value} value={language.value}>{t(language.label)}</option>)}</select><small>{t("Die Untertitel bleiben in der gesprochenen Sprache des Clips.")}</small></label>
+      <label className="social-ai-language"><span>{t("Bildformat im Hochkant-Video")}</span><select className="studio-select" value={options.data.frame_format} disabled={disabled || save.isPending || options.isFetching} onChange={(event) => save.mutate({ ...options.data, frame_format: event.target.value as AiFrameFormat })}>{frames.map((frame) => <option key={frame.value} value={frame.value}>{t(frame.label)}</option>)}</select><small>{t(frameHelp[options.data.frame_format])} {t("Du kannst das Format auch per Änderungswunsch an die KI umstellen.")}</small></label>
     </div>}
     <div role="status" aria-live="polite">{save.isSuccess && <p>{t("Optionen gespeichert.")}</p>}{save.isError && <p className="social-ai-caution">{t("Speichern fehlgeschlagen. Bitte versuche es erneut.")}</p>}</div>
   </section>;

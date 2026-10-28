@@ -17,10 +17,13 @@ export interface AiConsent {
 
 export type AiPublishLanguage = 'de' | 'en' | 'auto';
 
+export type AiFrameFormat = 'layout' | 'fill' | 'full';
+
 export interface AiEditorOptions {
   multi_output_enabled: boolean;
   experimental_ai_layout: boolean;
   publish_language: AiPublishLanguage;
+  frame_format: AiFrameFormat;
 }
 
 export interface AiVideoVersion {
@@ -271,7 +274,8 @@ export async function saveAiConsent(twitchUserId: string, externalAiConsent: boo
 export function decodeAiOptions(value: unknown): AiEditorOptions {
   const item = record(value);
   const language = item.publish_language === 'en' || item.publish_language === 'auto' ? item.publish_language : 'de';
-  return { multi_output_enabled: flag(item.multi_output_enabled), experimental_ai_layout: flag(item.experimental_ai_layout), publish_language: language };
+  const frame = item.frame_format === 'fill' || item.frame_format === 'full' ? item.frame_format : 'layout';
+  return { multi_output_enabled: flag(item.multi_output_enabled), experimental_ai_layout: flag(item.experimental_ai_layout), publish_language: language, frame_format: frame };
 }
 
 export async function fetchAiOptions(twitchUserId: string, signal?: AbortSignal): Promise<AiEditorOptions> {

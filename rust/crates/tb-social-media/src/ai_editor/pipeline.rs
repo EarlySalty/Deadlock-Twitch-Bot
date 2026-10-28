@@ -18,7 +18,7 @@ use tb_llm::social_editor::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
-    autopilot_settings,
+    autopilot_settings::{self, FrameFormat},
     layout::StreamerLayout,
     produced_video::{self, NewProducedVideo, ProducedVideo, RenderedVideo},
     production_jobs::{self, ProductionJob, ProductionMode},
@@ -490,7 +490,7 @@ async fn prepare(ctx: &StageContext<'_>) -> Result<StageCheckpoint, AiEditorErro
         configuration: ctx.current.configuration.clone(),
         skills,
         layout: source.layout,
-        publication: json!({ "language": settings.publish_language, "template": source.template, "multi_output_enabled": settings.multi_output_enabled, "experimental_ai_layout": settings.experimental_ai_layout }),
+        publication: json!({ "language": settings.publish_language, "template": source.template, "multi_output_enabled": settings.multi_output_enabled, "experimental_ai_layout": settings.experimental_ai_layout, "frame_format": settings.ai_frame_format }),
     };
     let _ = frozen.runtime(ctx.current)?;
     let snapshot = serde_json::to_value(frozen)
@@ -954,6 +954,13 @@ async fn plan_edit(
     } else {
         PlanOrigin::FirstPlan
     };
+    if base.is_none() {
+        let frame = publication_frame(&frozen.publication);
+        result.frame = frame;
+        for variant in &mut result.variants {
+            variant.frame = frame;
+        }
+    }
     if let Some(base) = &base {
         base.validate(
             frozen.media.duration_ms,
@@ -1024,6 +1031,28 @@ async fn plan_edit(
         review_reasons,
         edit_plan,
     })
+}
+
+fn publication_frame(publication: &Value) -> FrameFormat {
+    publication
+        .get("frame_format")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
+fn render_layout(
+    stored: Option<&Value>,
+    frame: FrameFormat,
+) -> Result<Option<StreamerLayout>, AiEditorError> {
+    match frame {
+        FrameFormat::Layout => stored
+            .map(|value| StreamerLayout::from_stored_value(value, None, None))
+            .transpose()
+            .map_err(|_| AiEditorError::Source),
+        FrameFormat::Fill => Ok(Some(crate::layout::fill_layout())),
+        FrameFormat::Full => Ok(None),
+    }
 }
 
 const PLANNING_TASK: &str = "Produce one tight short-form main edit with the existing stable layout and original audio. Keep only the parts that carry the moment: buildup that is needed to understand it, the payoff and the real reaction. Remove dead time such as walking, shopping, waiting, menu or map checks, repeated or unrelated talk, and long tails after the reaction, even if that removes most of the clip. Cut at speech pauses from the segments, never inside a sentence, so the joined parts read as one coherent story. When the payoff is clear and the clip benefits from it, set hook to a 1 to 5 second excerpt of the strongest moment from inside a kept interval; it plays once at the very start as a teaser. Otherwise set hook to null. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output. Flag real uncertainty for review instead of keeping filler. analysis.uncertainty is already shown to the user next to review_reasons: put only concerns about this edit that the analysis does not already state into review_reasons, and never restate an analysis uncertainty in other words. Publication copy follows the requested language and template, not subtitle language. overlay_title controls the large title burned in during the first seconds: clip_title shows clip_title, custom shows your own short text, none shows no title. Use custom or none when clip_title is misleading, shouty or not supported by the analysis. subtitles_enabled switches the burned-in speech captions on or off; keep it true for a new edit, and for a revision follow revision.instruction and keep the value from revision.previous unless the feedback asks to change the captions.";
@@ -1672,12 +1701,7 @@ async fn render_one(
         )
         .await
         .map_err(|error| render_failure(ctx.identity, "prepare_intervals", &error))?;
-        let layout = frozen
-            .layout
-            .as_ref()
-            .map(|value| StreamerLayout::from_stored_value(value, None, None))
-            .transpose()
-            .map_err(|_| AiEditorError::Source)?;
+        let layout = render_layout(frozen.layout.as_ref(), result.frame)?;
         let mapped = subtitles(ctx.checkpoints, &validated, runtime)?;
         let cam_height = layout
             .as_ref()
@@ -1849,12 +1873,7 @@ async fn validate_one(
                 .into(),
         );
     }
-    let layout = frozen
-        .layout
-        .as_ref()
-        .map(|value| StreamerLayout::from_stored_value(value, None, None))
-        .transpose()
-        .map_err(|_| AiEditorError::Source)?;
+    let layout = render_layout(frozen.layout.as_ref(), planning.frame)?;
     let cam_height = layout
         .as_ref()
         .filter(|layout| layout.cam_enabled)

@@ -86,7 +86,7 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
   if (autopilot && job) job = {...job,selected_version_id:2203,versions:job.versions.map((version) => version.id === 2201 ? {...version,status:'rejected'} : version)};
   let polls = 0;
   let secondConsent = false;
-  let options = { multi_output_enabled: false, experimental_ai_layout: false, publish_language: 'de' };
+  let options = { multi_output_enabled: false, experimental_ai_layout: false, publish_language: 'de', frame_format: 'layout' };
   const metadata = new Map<number, AiVersionMetadata['platforms']>();
   const secondJob: AiJobView = { ...BASE_JOB, id: 1201, clip_db_id: 601, status: 'review', original_url: null, versions: [] };
   let secondFailure: AiJobView = { ...BASE_JOB, id: 1202, clip_db_id: 601, status: 'failed', stage: 'rendering', original_url: null, versions: [], failure_code: 'render_failed', failure_message: 'Die Prüfung ist fehlgeschlagen. Der Anbieter meldet SIMULIERTER_WERT aus /var/test/mock.', can_retry: true };
@@ -99,7 +99,7 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
     const channel = method === 'GET' ? url.searchParams.get('twitch_user_id') : body.twitch_user_id;
     if (url.pathname === `${PREFIX}/options` && method === 'GET') return response(options);
     if (url.pathname === `${PREFIX}/options` && method === 'PUT' && typeof body.multi_output_enabled === 'boolean' && typeof body.experimental_ai_layout === 'boolean') {
-      options = { multi_output_enabled: body.multi_output_enabled, experimental_ai_layout: body.experimental_ai_layout, publish_language: typeof body.publish_language === 'string' ? body.publish_language : options.publish_language };
+      options = { multi_output_enabled: body.multi_output_enabled, experimental_ai_layout: body.experimental_ai_layout, publish_language: typeof body.publish_language === 'string' ? body.publish_language : options.publish_language, frame_format: typeof body.frame_format === 'string' ? body.frame_format : options.frame_format };
       return response(options);
     }
     if (scenario === 'race' && channel === '987654321') {

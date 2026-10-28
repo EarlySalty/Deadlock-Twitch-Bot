@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::layout::{LayoutBox, StreamerLayout, TARGET_HEIGHT, TARGET_WIDTH};
+use crate::layout::{LayoutBox, StreamerLayout, FILL_MODE, TARGET_HEIGHT, TARGET_WIDTH};
 
 pub(crate) const VIDEO_PRESET: &str = "veryfast";
 pub(crate) const VIDEO_CRF: &str = "18";
@@ -169,6 +169,9 @@ pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bo
     let top_height = p.h.clamp(2, TARGET_HEIGHT - 2);
     let game_height = TARGET_HEIGHT - top_height;
 
+    if mode == FILL_MODE {
+        return build_fill_filter();
+    }
     if mode == "blur_pad" || !cam_enabled {
         return build_fallback_filter();
     }
@@ -271,6 +274,14 @@ pub fn build_crop_filter(
         };
     }
     format!("crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale={target_width}:{target_height}")
+}
+
+pub fn build_fill_filter() -> String {
+    format!(
+        "[0:v]scale={tw}:{th}:force_original_aspect_ratio=increase,crop={tw}:{th},setsar=1[vout]",
+        tw = TARGET_WIDTH,
+        th = TARGET_HEIGHT,
+    )
 }
 
 pub fn build_fallback_filter() -> String {
@@ -1079,6 +1090,15 @@ mod tests {
     fn compose_filter_cam_off() {
         let f = build_compose_filter(&pip_layout(), "pip", false);
         assert_eq!(f, build_fallback_filter());
+    }
+
+    #[test]
+    fn fill_layout_fills_the_vertical_frame_without_blur() {
+        let layout = crate::layout::fill_layout();
+        let f = build_compose_filter(&layout, &layout.mode, layout.cam_enabled);
+        assert_eq!(f, build_fill_filter());
+        assert!(f.contains("force_original_aspect_ratio=increase,crop=1080:1920"));
+        assert!(!f.contains("boxblur"));
     }
 
     #[test]

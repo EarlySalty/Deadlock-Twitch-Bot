@@ -40,6 +40,25 @@ pub enum PublishLanguage {
     Auto,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FrameFormat {
+    #[default]
+    Layout,
+    Fill,
+    Full,
+}
+
+impl FrameFormat {
+    pub fn code(self) -> &'static str {
+        match self {
+            FrameFormat::Layout => "layout",
+            FrameFormat::Fill => "fill",
+            FrameFormat::Full => "full",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ClipDateFilter {
@@ -118,6 +137,7 @@ pub struct AutopilotSettings {
     pub multi_output_enabled: bool,
     pub experimental_ai_layout: bool,
     pub publish_language: PublishLanguage,
+    pub ai_frame_format: FrameFormat,
     pub notifications: NotificationPreferences,
 }
 
@@ -137,6 +157,7 @@ impl Default for AutopilotSettings {
             multi_output_enabled: false,
             experimental_ai_layout: false,
             publish_language: PublishLanguage::De,
+            ai_frame_format: FrameFormat::Layout,
             notifications: NotificationPreferences::default(),
         }
     }

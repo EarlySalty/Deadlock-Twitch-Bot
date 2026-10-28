@@ -184,6 +184,8 @@ pub struct OptionsInput {
     experimental_ai_layout: bool,
     #[serde(default)]
     publish_language: Option<tb_social_media::autopilot_settings::PublishLanguage>,
+    #[serde(default)]
+    frame_format: Option<tb_social_media::autopilot_settings::FrameFormat>,
 }
 
 #[derive(Deserialize)]
@@ -330,18 +332,12 @@ pub async fn options_put(
     Json(input): Json<OptionsInput>,
 ) -> Result<Json<Value>, ApiError> {
     let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
-    let publish_language = match input.publish_language {
-        Some(language) => language,
-        None => {
-            ai_editor::options::load(&pool, &owner)
-                .await?
-                .publish_language
-        }
-    };
+    let current = ai_editor::options::load(&pool, &owner).await?;
     let options = ai_editor::EditorOptions {
         multi_output_enabled: input.multi_output_enabled,
         experimental_ai_layout: input.experimental_ai_layout,
-        publish_language,
+        publish_language: input.publish_language.unwrap_or(current.publish_language),
+        frame_format: input.frame_format.unwrap_or(current.frame_format),
     };
     Ok(Json(json!(
         ai_editor::options::save(&pool, &owner, options).await?

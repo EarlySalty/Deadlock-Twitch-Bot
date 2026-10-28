@@ -12,6 +12,7 @@ pub async fn load(pool: &PgPool, owner: &str) -> Result<EditorOptions, AiEditorE
         multi_output_enabled: settings.multi_output_enabled,
         experimental_ai_layout: settings.experimental_ai_layout,
         publish_language: settings.publish_language,
+        frame_format: settings.ai_frame_format,
     })
 }
 
@@ -24,11 +25,12 @@ pub async fn save(
     autopilot_settings::lock_owner(&mut tx, owner)
         .await
         .map_err(|_| AiEditorError::Storage)?;
-    sqlx::query("INSERT INTO social_media_autopilot_settings (twitch_user_id, multi_output_enabled, experimental_ai_layout, publish_language) VALUES ($1, $2, $3, $4) ON CONFLICT (twitch_user_id) DO UPDATE SET multi_output_enabled = EXCLUDED.multi_output_enabled, experimental_ai_layout = EXCLUDED.experimental_ai_layout, publish_language = EXCLUDED.publish_language, updated_at = NOW()")
+    sqlx::query("INSERT INTO social_media_autopilot_settings (twitch_user_id, multi_output_enabled, experimental_ai_layout, publish_language, ai_frame_format) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (twitch_user_id) DO UPDATE SET multi_output_enabled = EXCLUDED.multi_output_enabled, experimental_ai_layout = EXCLUDED.experimental_ai_layout, publish_language = EXCLUDED.publish_language, ai_frame_format = EXCLUDED.ai_frame_format, updated_at = NOW()")
         .bind(owner)
         .bind(options.multi_output_enabled)
         .bind(options.experimental_ai_layout)
         .bind(language_code(options.publish_language))
+        .bind(options.frame_format.code())
         .execute(&mut *tx)
         .await
         .map_err(|_| AiEditorError::Storage)?;
