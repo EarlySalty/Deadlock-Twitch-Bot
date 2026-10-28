@@ -4,19 +4,27 @@ Twitch bot, dashboard service, analytics, raid automation, and streamer tooling 
 
 ## Project Layout
 
-- `bot/`: Python bot runtime, dashboard backend, internal API, raids, analytics, and storage
-- `bot/dashboard_v2/`: React dashboard frontend with analytics views and fuzz tests
+- `rust/`: production runtime (Cargo workspace). Binaries in `rust/bin/`, shared crates in `rust/crates/`
+- `bot/`: legacy Python implementation, kept as a reference only; it is no longer extended
+- `bot/dashboard_v2/`: React dashboard frontend (German default, English on `dead-lock.de`)
 - `bot/admin_dashboard/`: admin-focused React frontend
-- `website/`: public-facing landing pages and onboarding content
-- `tests/`: Python regression suite
+- `website/`: public landing pages and onboarding content
+- `ops/`: systemd units, deploy scripts, deploy queue and Caddy snippets
+- `tests/`: Python regression suite for the legacy code
 - `docs/`: architecture, API, database, and product surface documentation
 
 ## Key Entry Points
 
-- `twitch_cog.py`: Discord cog shim
-- `bot/cog.py`: main cog implementation
-- `bot/dashboard_service/app.py`: standalone dashboard service
-- `bot/internal_api/app.py`: internal API application
+Production services run as system units (`sudo systemctl ...`, not `systemctl --user`). Verify live state before relying on a port or unit name.
+
+| Binary | Unit | Listens | Notes |
+| --- | --- | --- | --- |
+| `rust/bin/tb-bot` | `deadlock-twitch-bot-rust.service` | `127.0.0.1:8776` internal API, `127.0.0.1:8786` EventSub receiver | Twitch bot, chat, raids, monitoring |
+| `rust/bin/tb-dashboard` | `deadlock-twitch-dashboard-rust.service` | `127.0.0.1:8769` | Dashboard and public web routes behind Caddy |
+| `rust/bin/tb-discord-hub` | `deadlock-twitch-discord-hub-rust.service` | see `ops/systemd/` | Discord hub |
+| `rust/bin/tb-deploy-queue` | `deploy-queue.service` (user unit) | see `ops/deploy-queue/` | Serialised Twitch release deploys |
+
+Languages, domains and multi-server scope: [`docs/architecture/LANGUAGES-AND-DOMAINS.md`](docs/architecture/LANGUAGES-AND-DOMAINS.md).
 
 ## Documentation
 
@@ -34,17 +42,7 @@ Twitch bot, dashboard service, analytics, raid automation, and streamer tooling 
 
 Produktiver Public-Flow, Secrets, Caddy-Routing und Troubleshooting sind in [`docs/LEGAL_ACCESS_GATE.md`](docs/LEGAL_ACCESS_GATE.md) beschrieben.
 
-- Quick preview server for `/twitch/impressum`, `/twitch/datenschutz`, and `/twitch/agb`:
-  `python scripts/preview_legal_pages.py`
-- Windows shortcut with optional browser launch:
-  `powershell -ExecutionPolicy Bypass -File .\scripts\preview_legal_pages.ps1 -OpenBrowser`
-- No-server export as plain HTML files:
-  `python scripts/export_legal_preview.py`
-- Windows shortcut for static export and opening `index.html`:
-  `powershell -ExecutionPolicy Bypass -File .\scripts\export_legal_preview.ps1 -OpenIndex`
-- IIS-ready: the export also writes a `web.config`, so you can point an IIS site or virtual directory directly at the exported folder.
-- Full IIS setup with a dedicated local site:
-  `powershell -ExecutionPolicy Bypass -File .\scripts\setup_legal_preview_iis.ps1 -OpenBrowser`
+The preview scripts that used to live in `scripts/` are no longer in the repository. Use the live pages under `https://deutsche-deadlock-community.de/twitch/impressum`, `/twitch/datenschutz` and `/twitch/agb` for checks.
 
 <!-- DDC-LINK-START -->
 

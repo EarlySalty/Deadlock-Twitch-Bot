@@ -1,5 +1,7 @@
 # 04 — Strangler-Fig Cutover-Plan
 
+> Historical plan (2026). The unit names and `systemctl --user` commands below are from the cutover period. Live services are system units (`sudo -n systemctl ...`): `deadlock-twitch-bot-rust.service` (tb-bot, internal API 8776) and `deadlock-twitch-dashboard-rust.service` (tb-dashboard, 8769). Python 8765 is retired.
+
 **Prinzip:** Fundament zuerst (kein Verhaltenswechsel), dann risikoarme Blätter (read-only),
 zuletzt vertragskritisch/mutierend (OAuth, Billing, EventSub-Schreibpfad). Die Reihenfolge ist
 nach **Schadenspotenzial bei Fehler** sortiert, nicht nach Code-Nähe. Während der ganzen

@@ -1,5 +1,7 @@
 # Discord hub: dormant H1 cut
 
+> Status 2026-10-28: the discord hub is live as the system unit `deadlock-twitch-discord-hub-rust.service` (binary `tb-discord-hub`, see `ops/systemd/`). The "dormant H1 cut" text below is the historical state of the first cut and no longer describes production.
+
 `tb-discord-hub` is a standalone workspace binary with an embedded build revision, graceful shutdown and an authenticated internal HTTP interface. This cut adds no service, launcher, deploy integration, OAuth handler, gateway connection or database access. Do not redirect running bot traffic to it yet.
 
 Requests under `/internal/master/v1/` use `X-Internal-Token`. Without `X-Discord-Guild-Id`, or with the German community guild ID, method, path, raw query, body, content type and idempotency key pass through to the existing broker. Status, content type and response body pass back unchanged. Foreign guilds use Discord REST with channel and guild isolation, restricted mentions, bounded rate-limit retries and process-local idempotency. Unsupported foreign-guild endpoints return 501; without a bot token they return 503, never a broker fallback.

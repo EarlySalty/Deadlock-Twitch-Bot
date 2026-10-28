@@ -142,7 +142,7 @@ Alle wichtigen Konstanten in `bot/core/constants.py`:
 
 | Konstante | Wert | Beschreibung |
 |-----------|------|--------------|
-| `TWITCH_DASHBOARD_PORT` | 8765 | Dashboard-Service Port |
+| `dashboard.port` (config, default) | 8769 | Dashboard-Service Port (`tb-dashboard`, `rust/crates/tb-config/src/global.rs`) |
 | `TWITCH_INTERNAL_API_PORT` | 8776 | Interner API-Port |
 | `POLL_INTERVAL_SECONDS` | 15 | Monitoring-Tick |
 | `TWITCH_NOTIFY_CHANNEL_ID` | 1304169815505637458 | Live-Posting-Channel |

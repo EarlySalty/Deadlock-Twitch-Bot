@@ -112,6 +112,6 @@ dedizierte Forward-Auth-Pfad `/twitch/auth/validate` zählt ebenfalls als Admin-
 - Caddy-Topologie & Deploy: Memory `reference_caddy_reverse_proxy_setup`,
   `reference_twitch_dashboard_deploy_runbook`.
 - OAuth-Redirect-Migration nach Cutover: Memory `dashboard_oauth_redirect_migration`.
-- Caddyfile: `/home/naniadm/Documents/Caddy/conf/Caddyfile`, Block
+- Caddyfile: `~/repos/Caddy/hosts/v50671/Caddyfile` (the live file is the system Caddy config for this host), Block
   `admin.deutsche-deadlock-community.de` — am `@admin_block_nonadmin`-Matcher steht ein
   Verweis zurück auf dieses Dokument.

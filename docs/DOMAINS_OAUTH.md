@@ -1,5 +1,13 @@
 # English website/dashboard host and OAuth
 
+## Live state (checked 2026-10-28)
+
+- The live Caddy configuration is `~/repos/Caddy/hosts/v50671/Caddyfile`. `ops/caddy/dead-lock-de.caddy` in this repository is a copy of the dead-lock.de snippets for reference and for the splice steps below; the live file is authoritative.
+- The HTTPS site `dead-lock.de, www.dead-lock.de` imports only `dead_lock_english_dashboard` and proxies to `127.0.0.1:8769`. OAuth entry paths on that HTTPS host are served by the dashboard itself. Example: `https://dead-lock.de/twitch/dashboard` answers 303 to `/twitch/auth/login?next=%2Ftwitch%2Fdashboard`.
+- The plain-HTTP site `http://dead-lock.de, http://www.dead-lock.de` imports `dead_lock_oauth_redirects` and sends OAuth entry paths to the main domain with `lang`.
+- Links rendered on the English host are rewritten to the main domain by `mainDomainOAuthUrl()` in `bot/dashboard_v2/src/i18n/oauthLinks.ts`, which adds `lang` and the `next` path. Provider redirect URIs are unchanged.
+- The `dead_lock_oauth_redirects` snippet in the live file and in `ops/caddy/dead-lock-de.caddy` have the same redirect rules.
+
 `dead-lock.de` and `www.dead-lock.de` change the dashboard UI host only. The backend, OAuth applications, credentials, provider redirect URIs and callbacks remain exactly as configured for `https://deutsche-deadlock-community.de`. The two existing dead-lock.de Discord redirect entries remain unused. Do not add provider redirects or derive OAuth redirect URIs from the request host.
 
 ## Routing
@@ -22,7 +30,7 @@ A bare `lang` on an OAuth start URL does not ensure language persistence through
 
 ## Exact splice and validation steps
 
-1. Make a full temporary copy of `/etc/caddy/Caddyfile`, leaving the live file untouched.
+1. Make a full temporary copy of `~/repos/Caddy/hosts/v50671/Caddyfile`, leaving the live file untouched.
 2. In that copy, replace the section starting at `(dead_lock_oauth_redirects) {` through the closing brace of `dead-lock.de, www.dead-lock.de { ... }` with the complete contents of `ops/caddy/dead-lock-de.caddy`. Leave every unrelated snippet and site block unchanged. Read the live file without printing authentication or credential directives.
 3. Run `caddy adapt --config /tmp/ttb-opus-o2-Caddyfile --adapter caddyfile` and `caddy validate --config /tmp/ttb-opus-o2-Caddyfile --adapter caddyfile`. If the unprivileged validator cannot open existing production log writers, replace only their `output file` destinations in the temporary copy with unique `/tmp` log paths before validation. This does not alter the routing splice.
-4. Deployment, copying into `/etc/caddy`, and reload are integrator actions, not part of this package. No live Caddy change or reload was performed by the worker.
+4. Deployment, copying into the Caddy repository checkout (`~/repos/Caddy`), and reload are integrator actions, not part of this package. No live Caddy change or reload was performed by the worker.

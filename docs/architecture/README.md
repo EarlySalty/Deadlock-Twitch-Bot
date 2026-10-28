@@ -1,5 +1,7 @@
 # Architektur-Funktionsreferenz
 
+> Status 2026-10-28: the per-subsystem pages below describe the legacy Python runtime (`bot/`). Ports and units: the Python dashboard on 8765 and the Python bot services are retired; the internal API on 127.0.0.1:8776 and the EventSub receiver on 127.0.0.1:8786 are served by the Rust `tb-bot`, and the dashboard on 127.0.0.1:8769 by `tb-dashboard`. Domains and language selection: [LANGUAGES-AND-DOMAINS.md](LANGUAGES-AND-DOMAINS.md).
+
 Diese Sammlung dokumentiert den **Deadlock-Twitch-Bot pro Subsystem auf Funktions-Ebene** — was jedes Modul tut, wie es aufgebaut ist, welche Funktionen/Klassen es hat und wie die Daten fließen. Sie ist die **Tiefen-Schicht** und ergänzt die bestehenden Überblicks-Dokumente:
 
 | Bestehende Doku | Ebene |
@@ -104,3 +106,21 @@ Status: ✅ fertig · 🔜 geplant.
 | `bot/dashboard_v2/` (+ `dashboard_preview/`) | [frontend-streamer-dashboard.md](frontend-streamer-dashboard.md) | ✅ | Streamer-Dashboard-SPA (Tab-basiert, react-query, recharts, Live/Demo) |
 | `bot/admin_dashboard/` | [frontend-admin-dashboard.md](frontend-admin-dashboard.md) | ✅ | Admin-Frontend (React-Router, Streamer/Billing/Config/Monitoring) |
 | `website/` | [frontend-website.md](frontend-website.md) | ✅ | Öffentliche Landing-/Onboarding-/Affiliate-Site (Multi-Entry, Prerender) |
+
+## Features without a dedicated page (status 2026-10-28)
+
+Each entry names where the feature lives. Routes are dashboard routes served by `tb-dashboard`.
+
+| Feature | Where it lives | Notes |
+| --- | --- | --- |
+| Guild onboarding and multi-server membership | `rust/migrations/20261015100000_guild_membership_onboarding.sql`, `rust/crates/tb-db/src/guild_membership.rs` | Tables `streamer_guilds`, `discord_guilds`, `guild_onboarding_sessions`. See [LANGUAGES-AND-DOMAINS.md](LANGUAGES-AND-DOMAINS.md). |
+| Guild streamer role policy | `rust/migrations/20261017120000_guild_streamer_role_policy.sql`, `rust/migrations/20261017180000_guild_streamer_role_keep_min_days.sql` | Role rules per guild. |
+| Discord hub | `rust/bin/tb-discord-hub`, unit `deadlock-twitch-discord-hub-rust.service`, `ops/systemd/` | Live. The older dormant-cut text is in `rust/docs/discord-hub.md`. |
+| Dono goal overlay | `rust/migrations/20261016210000_dono_goal.sql`, `rust/crates/tb-dashboard-api/src/handlers/dono_goal.html`, route `/twitch/dono-goal` (Caddy overlay headers) | Embeddable overlay, same-origin framing. |
+| Caster overlay | `rust/crates/tb-dashboard-api/src/handlers/caster_overlay.rs`, `caster_overlay_assets.rs` | Dashboard overlay. |
+| Follow hint settings | `rust/crates/tb-dashboard-api/src/handlers/follow_hint_settings.rs` | Dashboard settings handler. |
+| Twitch re-authorisation of all streamers | `rust/crates/tb-internal-api/src/handlers/reauth_all.rs` | Internal API handler. |
+| Walkthrough for the streamer dashboard (`/twitch/rundgang`) | `rust/crates/tb-dashboard-api/src/lib.rs` | Route in the dashboard router. |
+| Deploy queue for Twitch releases | `rust/bin/tb-deploy-queue`, `ops/deploy-queue/` (`deploy-queue.service`, user unit, enabled) | Serialises release deploys. |
+
+Not verified in this pass and therefore not listed as documented: command aliases, additional command names and the `!raid <name>` form. Check them in `rust/crates/tb-domain` and the chat handlers before documenting them.

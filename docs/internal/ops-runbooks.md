@@ -45,7 +45,7 @@ Die Datei ist JSON, in Abschnitte gegliedert. Unbekannte Abschnitte werden ignor
 
 | Abschnitt | Feld | Typ | Vorgabe | Wirkung |
 |---|---|---|---|---|
-| `obs_docks` | `enabled` | bool | `false` | Schaltet den Schreibpfad des OBS-Dock-Event-Busses ein. Bei `true` schreibt der Bot jedes dock-taugliche Twitch-Ereignis (Chat, Raid, Abo/Geschenk, Go-Live/Offline) in die Tabelle `obs_dock_events`, meldet die Zeile per `pg_notify('obs_dock', ...)` und laesst einen Aufraeum-Loop mitlaufen. Bei `false` passiert nichts davon; der Bot verhaelt sich wie ohne das Modul. Gelesen wird der Wert einmal beim Start, eine Aenderung wirkt erst nach `systemctl --user restart`. |
+| `obs_docks` | `enabled` | bool | `false` | Schaltet den Schreibpfad des OBS-Dock-Event-Busses ein. Bei `true` schreibt der Bot jedes dock-taugliche Twitch-Ereignis (Chat, Raid, Abo/Geschenk, Go-Live/Offline) in die Tabelle `obs_dock_events`, meldet die Zeile per `pg_notify('obs_dock', ...)` und laesst einen Aufraeum-Loop mitlaufen. Bei `false` passiert nichts davon; der Bot verhaelt sich wie ohne das Modul. Gelesen wird der Wert einmal beim Start, eine Aenderung wirkt erst nach `sudo -n systemctl restart deadlock-twitch-bot-rust.service`. |
 
 Beispiel:
 

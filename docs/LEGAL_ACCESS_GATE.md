@@ -22,7 +22,7 @@ Es gibt zwei getrennte Ebenen:
 1. Anwendungsebene in `bot/dashboard/admin/legal_mixin.py`
 2. Public Routing in `C:/caddy/Caddyfile`
 
-Der Dashboard-Service selbst läuft lokal auf `127.0.0.1:8765` und liefert die Legal-Gate-Seite aus. Caddy ist für die öffentliche Erreichbarkeit unter `https://deutsche-deadlock-community.de/twitch` zuständig.
+Der Dashboard-Service selbst läuft lokal auf `127.0.0.1:8769` und liefert die Legal-Gate-Seite aus. Caddy ist für die öffentliche Erreichbarkeit unter `https://deutsche-deadlock-community.de/twitch` zuständig.
 
 ## Request-Flow
 
@@ -88,7 +88,7 @@ Es gibt zwei verschiedene Wege für lokale Arbeit:
 
 ### 1. Echte Gate-Logik testen
 
-Nutze den echten Dashboard-Service auf `127.0.0.1:8765`.
+Nutze den echten Dashboard-Service auf `127.0.0.1:8769`.
 
 Wichtig:
 
@@ -134,7 +134,7 @@ Prüfen:
 curl.exe -i "https://deutsche-deadlock-community.de/twitch/legal/access?next=/twitch/impressum"
 ```
 
-Wenn derselbe Pfad lokal direkt gegen `127.0.0.1:8765` funktioniert, liegt das Problem im Reverse Proxy.
+Wenn derselbe Pfad lokal direkt gegen `127.0.0.1:8769` funktioniert, liegt das Problem im Reverse Proxy.
 
 ### `Turnstile verification failed.`
 
@@ -156,9 +156,9 @@ Prüfen:
 ### Dashboard-Service direkt
 
 ```powershell
-curl.exe -i "http://127.0.0.1:8765/twitch/legal/access?next=/twitch/impressum"
-curl.exe -i "http://127.0.0.1:8765/twitch/impressum"
-curl.exe -i "http://127.0.0.1:8765/twitch/agb"
+curl.exe -i "http://127.0.0.1:8769/twitch/legal/access?next=/twitch/impressum"
+curl.exe -i "http://127.0.0.1:8769/twitch/impressum"
+curl.exe -i "http://127.0.0.1:8769/twitch/agb"
 ```
 
 Erwartung:

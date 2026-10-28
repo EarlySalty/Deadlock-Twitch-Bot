@@ -1,5 +1,7 @@
 # Architektur-Uebersicht
 
+> Status 2026-10-28: The Python split runtime described below is legacy and no longer runs in production. The live services are Rust binaries under system units: `tb-bot` (`deadlock-twitch-bot-rust.service`, internal API 127.0.0.1:8776, EventSub receiver 127.0.0.1:8786), `tb-dashboard` (`deadlock-twitch-dashboard-rust.service`, 127.0.0.1:8769) and `tb-discord-hub` (`deadlock-twitch-discord-hub-rust.service`). See [LANGUAGES-AND-DOMAINS.md](architecture/LANGUAGES-AND-DOMAINS.md) and the [README](../README.md).
+
 ## Zielbild
 
 Das System laeuft als Split-Runtime aus zwei logisch getrennten Diensten:

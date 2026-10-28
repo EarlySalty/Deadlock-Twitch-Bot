@@ -1,5 +1,7 @@
 # bot_service/ + dashboard_service/ — Architektur & Funktionsreferenz
 
+> Legacy (status 2026-10-28): these Python entrypoints are no longer started in production. The live equivalents are `rust/bin/tb-bot` (`deadlock-twitch-bot-rust.service`) and `rust/bin/tb-dashboard` (`deadlock-twitch-dashboard-rust.service`, 127.0.0.1:8769), both system units. Kept as a reference for the old split. See [LANGUAGES-AND-DOMAINS.md](LANGUAGES-AND-DOMAINS.md).
+
 > Pfad: `bot/bot_service/` (3 Dateien, ~117 Z.) + `bot/dashboard_service/` (5 Dateien, ~1.480 Z.) · Stand: 2026-06-08
 >
 > Teil der [Architektur-Doku](README.md). Verwandt: [ARCHITECTURE.md](../ARCHITECTURE.md) (Startpfade), [bot-core.md](bot-core.md) (Runtime), [internal-api.md](internal-api.md), [dashboard.md](dashboard.md), [monitoring.md](monitoring.md) (EventSub).
@@ -67,4 +69,4 @@ Abgrenzung: Sie enthalten kaum Fachlogik — sie **wiren** den jeweiligen Runtim
 - **Dashboard besitzt keinen Bot:** Alle Bot-Daten kommen über die interne API. Ein `None` aus `DashboardBotService` ist normal (siehe [bot-core.md](bot-core.md)).
 - **No-Auth nur mit Opt-in:** `_require_noauth_opt_in_if_enabled` blockt ein versehentlich offenes Dashboard.
 - **EventSub-Brücke toleriert Startup-Races:** `_is_startup_pending_error` verhindert, dass Events verloren gehen, wenn der Bot noch hochfährt — sie werden re-enqueued.
-- **Startpfade:** `python -m bot.bot_service` / `python -m bot.dashboard_service` (systemd-User-Services, Restart via `systemctl --user restart …`).
+- **Startpfade:** `python -m bot.bot_service` / `python -m bot.dashboard_service` (legacy; the old user-unit setup is gone, see the status note above).

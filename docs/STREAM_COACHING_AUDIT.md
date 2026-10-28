@@ -236,8 +236,8 @@ mv ~/repos/Deadlock-Twitch-Bot/rust/target/release/tb-stream-audit{.neu,}
 # Unit einmalig installieren, danach nur noch neu starten
 cp ~/repos/Deadlock-Twitch-Bot/ops/systemd/deadlock-twitch-stream-coaching-watch.service \
    ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user restart deadlock-twitch-stream-coaching-watch
+sudo -n systemctl daemon-reload
+sudo -n systemctl restart deadlock-twitch-stream-coaching-watch
 ```
 
 Der Umweg ueber `.neu` und `mv` ist noetig, weil `cp` auf die laufende Datei mit
@@ -246,7 +246,7 @@ Der Umweg ueber `.neu` und `mv` ist noetig, weil `cp` auf die laufende Datei mit
 ## Betrieb
 
 ```bash
-systemctl --user status deadlock-twitch-stream-coaching-watch
+sudo -n systemctl status deadlock-twitch-stream-coaching-watch
 journalctl --user -u deadlock-twitch-stream-coaching-watch -f
 ```
 
