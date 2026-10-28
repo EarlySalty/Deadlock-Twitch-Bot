@@ -10,16 +10,14 @@ use sqlx::{PgConnection, PgPool, Row};
 
 use super::{
     bind_on, binding, connections_on, notify, now_on, queue_status, release_slot, review_mode_on,
-    tiktok_delivery, valid_approvals_on, AutopilotNotifier, PublishError, ReviewMode,
-    AUTOPILOT_APPROVER, EFFECTIVE_REVIEW,
+    tiktok_account_on, tiktok_delivery, valid_approvals_on, AutopilotNotifier, PublishError,
+    ReviewMode, AUTOPILOT_APPROVER, EFFECTIVE_REVIEW,
 };
 use crate::autopilot_settings::{self, AutopilotSettings};
 use crate::credentials::CredentialManager;
 use crate::produced_video;
 use crate::production_jobs::autopilot_schedule;
-use crate::uploaders::tiktok::{
-    direct_uploader, draft_uploader, status_reader, DirectPost, TikTokUploader,
-};
+use crate::uploaders::tiktok::{direct_uploader, draft_uploader, status_reader, TikTokUploader};
 use crate::uploaders::{PlatformUploader, UploadCheckpoint, UploadError};
 
 const TICK: Duration = Duration::from_secs(30);
@@ -192,26 +190,28 @@ async fn tiktok_uploader(
     request: &PublishRequest,
 ) -> Result<TikTokUploader, UploadError> {
     let mut connection = pool.acquire().await.map_err(not_started_storage)?;
-    if review_mode_on(&mut connection, owner)
+    let review = review_mode_on(&mut connection, owner)
         .await
         .map_err(not_started_storage)?
-        == ReviewMode::Review
-    {
-        return draft_uploader(credentials);
-    }
+        == ReviewMode::Review;
+    let music_consent = tiktok_account_on(&mut connection, owner)
+        .await
+        .map_err(not_started_storage)?
+        .music_consent;
+    drop(connection);
     let settings = crate::tiktok_publishing::load(pool, owner)
         .await
         .map_err(not_started_storage)?;
-    direct_uploader(
-        credentials,
-        DirectPost {
-            caption: settings.caption(&request.title, &request.description, &request.hashtags),
-            privacy_level: settings.privacy_level,
-            allow_comment: settings.allow_comment,
-            allow_duet: settings.allow_duet,
-            allow_stitch: settings.allow_stitch,
-        },
-    )
+    match settings.direct_post(
+        review,
+        music_consent,
+        &request.title,
+        &request.description,
+        &request.hashtags,
+    ) {
+        Some(post) => direct_uploader(credentials, post),
+        None => draft_uploader(credentials),
+    }
 }
 
 pub struct PublishExecutor {

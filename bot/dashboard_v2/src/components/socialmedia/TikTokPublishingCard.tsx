@@ -70,7 +70,7 @@ export function TikTokPublishingCard({ twitchUserId }: { twitchUserId?: string }
 
   return <section className="studio-card schedule-queue pp-plan" aria-labelledby={`${id}-title`}>
     <h2 id={`${id}-title`} className="sq-platform-label"><img src={platformIconUrl('tiktok')} width="18" height="18" alt="" aria-hidden="true" />{text('TikTok-Veröffentlichung')}</h2>
-    <p className="sq-help">{text('Mit „Freigabe nötig“ landet der Clip als Entwurf in deiner TikTok-App. Bei „Vollautomatisch“ und „Veto bis Frist“ wird direkt gepostet.')}</p>
+    <p className="sq-help">{text('Mit „Freigabe nötig“ landet der Clip als Entwurf in deiner TikTok-App. Bei „Vollautomatisch“ und „Veto bis Frist“ wird direkt gepostet, sobald Sichtbarkeit und Musiknutzung bestätigt sind. Bis dahin kommen auch dort nur Entwürfe an.')}</p>
     {!draft ? (error ? <p className="sq-error" role="alert">{text(error)}</p> : <p role="status">{text('Wird geladen.')}</p>) : <form onSubmit={event => { event.preventDefault(); void submit(); }}>
       <fieldset className="pp-group">
         <legend>{text('Wer darf das Video sehen?')}</legend>
@@ -91,6 +91,14 @@ export function TikTokPublishingCard({ twitchUserId }: { twitchUserId?: string }
         </div>
         <p className="sq-help">{text('Ist etwas in deinem TikTok-Konto gesperrt, bleibt es auch hier aus.')}</p>
       </fieldset>
+      <fieldset className="pp-group">
+        <legend>{text('Musiknutzung')}</legend>
+        {draft.account_connected ? <label className="pp-choice">
+          <input type="checkbox" checked={draft.music_consent} onChange={event => edit({ music_consent: event.target.checked })} />
+          <span><strong>{text('Ich stimme TikToks Bestätigung zur Musiknutzung zu.')}</strong> <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">{text('Bestätigung lesen')}</a></span>
+        </label> : <p className="sq-help">{text('Verbinde zuerst ein TikTok-Konto.')}</p>}
+      </fieldset>
+      <p className="sq-help" role="status">{text(draft.privacy_level && draft.music_consent ? 'Direktes Posten ist eingerichtet.' : 'Ohne Sichtbarkeit und Musiknutzung kommen alle Clips als Entwurf in deiner TikTok-App an.')}</p>
       <div className="pp-group pp-text">
         <label htmlFor={`${id}-tags`}>{text('Feste Hashtags')}<input id={`${id}-tags`} type="text" value={draft.hashtags} placeholder="#deadlock #deadlockdeutsch" onChange={event => edit({ hashtags: event.target.value })} /></label>
         <small className="sq-help">{text('Kommen bei jedem TikTok-Post nach den Hashtags der KI dazu. Höchstens 10, mit Leerzeichen trennen.')}</small>

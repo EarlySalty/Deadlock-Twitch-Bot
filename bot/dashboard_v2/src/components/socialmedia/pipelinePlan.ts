@@ -64,7 +64,13 @@ export function planPreview(snapshot: ScheduleQueueSnapshot, policy: Distributio
 
 export const PLAN_EN: Record<string, string> = {
   'TikTok-Veröffentlichung': 'TikTok publishing',
-  'Mit „Freigabe nötig“ landet der Clip als Entwurf in deiner TikTok-App. Bei „Vollautomatisch“ und „Veto bis Frist“ wird direkt gepostet.': 'With “Approval required” the clip lands as a draft in your TikTok app. With “Fully automatic” and “Veto until deadline” it is posted directly.',
+  'Mit „Freigabe nötig“ landet der Clip als Entwurf in deiner TikTok-App. Bei „Vollautomatisch“ und „Veto bis Frist“ wird direkt gepostet, sobald Sichtbarkeit und Musiknutzung bestätigt sind. Bis dahin kommen auch dort nur Entwürfe an.': 'With “Approval required” the clip lands as a draft in your TikTok app. With “Fully automatic” and “Veto until deadline” it is posted directly once visibility and music usage are confirmed. Until then those modes send drafts too.',
+  'Musiknutzung': 'Music usage',
+  'Ich stimme TikToks Bestätigung zur Musiknutzung zu.': 'I agree to TikTok’s Music Usage Confirmation.',
+  'Bestätigung lesen': 'Read confirmation',
+  'Verbinde zuerst ein TikTok-Konto.': 'Connect a TikTok account first.',
+  'Direktes Posten ist eingerichtet.': 'Direct posting is set up.',
+  'Ohne Sichtbarkeit und Musiknutzung kommen alle Clips als Entwurf in deiner TikTok-App an.': 'Without visibility and music usage every clip arrives as a draft in your TikTok app.',
   'Wer darf das Video sehen?': 'Who can watch the video?',
   'Öffentlich': 'Public',
   'Nur Follower': 'Followers only',

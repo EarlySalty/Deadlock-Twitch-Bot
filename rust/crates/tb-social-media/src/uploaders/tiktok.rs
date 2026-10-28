@@ -12,7 +12,7 @@ use super::{
 use crate::video_processor::format_hashtags;
 
 const MAX_FILE_MB: f64 = 4096.0;
-const CAPTION_MAX: usize = 2200;
+pub(crate) const CAPTION_MAX: usize = 2200;
 
 const MIN_CHUNK_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_CHUNK_BYTES: u64 = 64 * 1024 * 1024;
@@ -186,7 +186,11 @@ pub(crate) fn direct_uploader(
     credentials: &crate::credentials::SocialMediaCredentials,
     post: DirectPost,
 ) -> Result<TikTokUploader, UploadError> {
-    Ok(scoped_uploader(credentials, &["video.publish"])?.with_direct_post(post))
+    if !has_scope(credentials, "video.publish") {
+        return draft_uploader(credentials);
+    }
+    let uploader = scoped_uploader(credentials, &["video.publish"])?.with_direct_post(post);
+    Ok(uploader.with_draft_fallback(has_scope(credentials, "video.upload")))
 }
 
 pub(crate) fn status_reader(
@@ -240,6 +244,7 @@ pub struct TikTokUploader {
     access_token: String,
     api_base: String,
     direct: Option<DirectPost>,
+    draft_fallback: bool,
     video_processor: crate::video_processor::VideoProcessor,
     #[cfg(test)]
     known_duration: Option<f64>,
@@ -252,6 +257,7 @@ impl TikTokUploader {
             access_token: access_token.into(),
             api_base: DEFAULT_API_BASE.to_string(),
             direct: None,
+            draft_fallback: false,
             video_processor: crate::video_processor::VideoProcessor::default(),
             #[cfg(test)]
             known_duration: None,
@@ -272,8 +278,27 @@ impl TikTokUploader {
         self
     }
 
-    pub fn posts_directly(&self) -> bool {
-        self.direct.is_some()
+    pub fn with_draft_fallback(mut self, enabled: bool) -> Self {
+        self.draft_fallback = enabled;
+        self
+    }
+
+    async fn direct_or_draft_body(
+        &self,
+        post: &DirectPost,
+        video_path: &str,
+        source: Value,
+    ) -> Result<Option<Value>, UploadError> {
+        match self.direct_body(post, video_path, source).await {
+            Ok(body) => Ok(Some(body)),
+            Err(UploadError::NotStarted(cause))
+                if self.draft_fallback && matches!(*cause, UploadError::Validation(_)) =>
+            {
+                tracing::warn!(reason = %cause, "TikTok direct post not possible, sending draft");
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     #[cfg(test)]
@@ -360,9 +385,15 @@ impl TikTokUploader {
             total_chunk_count,
         };
         let source = source_info(video_size, plan);
-        let (publish_id, upload_url) = match &self.direct {
+        let direct = match &self.direct {
             Some(post) => {
-                let body = self.direct_body(post, video_path, source).await?;
+                self.direct_or_draft_body(post, video_path, source.clone())
+                    .await?
+            }
+            None => None,
+        };
+        let (publish_id, upload_url) = match direct {
+            Some(body) => {
                 self.init_transfer("/post/publish/video/init/", "TikTok direct init", body)
                     .await?
             }
@@ -1146,6 +1177,45 @@ mod tests {
             matches!(error, UploadError::NotStarted(ref inner) if matches!(**inner, UploadError::Validation(_)))
         );
         assert!(checkpoint.ids.lock().unwrap().is_empty());
+        tokio::fs::remove_file(video).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn direktpost_mit_gesperrter_sichtbarkeit_wird_entwurf() {
+        let server = MockServer::start().await;
+        mount_creator_info(&server, json!(["SELF_ONLY"])).await;
+        Mock::given(method("POST"))
+            .and(path("/post/publish/inbox/video/init/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "publish_id": "draft-1", "upload_url": format!("{}/upload/", server.uri()) },
+                "error": { "code": "ok" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        let checkpoint = RecordingCheckpoint {
+            ids: Default::default(),
+            fail: false,
+        };
+        let video = temp_video("tb_tiktok_direct_fallback.mp4", 16).await;
+        let id = TikTokUploader::new("tok")
+            .with_api_base(server.uri())
+            .with_direct_post(direct_post("PUBLIC_TO_EVERYONE"))
+            .with_draft_fallback(true)
+            .with_known_duration(15.0)
+            .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
+            .await
+            .unwrap();
+        assert_eq!(id, "draft-1");
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests
+            .iter()
+            .all(|r| r.url.path() != "/post/publish/video/init/"));
         tokio::fs::remove_file(video).await.unwrap();
     }
 

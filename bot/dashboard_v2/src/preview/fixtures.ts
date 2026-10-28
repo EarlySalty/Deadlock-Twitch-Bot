@@ -1041,12 +1041,14 @@ const AUTOPILOT_POLICY_FIXTURE = {
 };
 
 const TIKTOK_PUBLISHING_FIXTURE = {
-  privacy_level: 'PUBLIC_TO_EVERYONE',
-  allow_comment: true,
-  allow_duet: true,
-  allow_stitch: true,
+  privacy_level: '',
+  allow_comment: false,
+  allow_duet: false,
+  allow_stitch: false,
   fixed_hashtags: ['deadlock', 'deadlockdeutsch', 'ddc'],
   caption_footer: 'Discord: discord.gg/z5TfVHuQq2',
+  music_consent: false,
+  account_connected: true,
 };
 
 export function getPreviewPathFixture(pathname: string): unknown | undefined {

@@ -3,12 +3,14 @@ import { fetchJson, withCookieCredentials } from '@/api/core';
 export type TikTokPrivacy = 'PUBLIC_TO_EVERYONE' | 'MUTUAL_FOLLOW_FRIENDS' | 'FOLLOWER_OF_CREATOR' | 'SELF_ONLY';
 
 export interface TikTokPublishing {
-  privacy_level: TikTokPrivacy;
+  privacy_level: TikTokPrivacy | '';
   allow_comment: boolean;
   allow_duet: boolean;
   allow_stitch: boolean;
   fixed_hashtags: string[];
   caption_footer: string;
+  music_consent: boolean;
+  account_connected: boolean;
 }
 
 const PATH = '/twitch/social-media/api/autopilot/tiktok-publishing';
