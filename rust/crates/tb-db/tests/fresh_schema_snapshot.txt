@@ -2672,6 +2672,7 @@ twitch_streamers_partner_state|discord_user_id|text|YES|
 twitch_streamers_partner_state|is_monitored_only|integer|YES|
 twitch_streamers_partner_state|is_on_discord|integer|YES|
 twitch_streamers_partner_state|is_partner_active|integer|YES|
+twitch_streamers_partner_state|is_partner_enrolled|integer|YES|
 twitch_streamers_partner_state|is_partner|integer|YES|
 twitch_streamers_partner_state|is_verified|integer|YES|
 twitch_streamers_partner_state|live_ping_enabled|integer|YES|

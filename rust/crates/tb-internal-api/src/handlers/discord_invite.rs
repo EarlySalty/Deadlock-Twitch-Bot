@@ -75,7 +75,7 @@ pub async fn list_all_handler(State(pool): State<PgPool>) -> Result<impl IntoRes
          LEFT JOIN LATERAL (
              SELECT twitch_user_id FROM twitch_streamers_partner_state
              WHERE LOWER(twitch_login) = LOWER(i.streamer_login)
-                 AND COALESCE(is_partner_active, 0) <> 0
+                 AND COALESCE(is_partner_enrolled, 0) <> 0
              ORDER BY twitch_user_id LIMIT 1
          ) p ON TRUE
          ORDER BY i.streamer_login",

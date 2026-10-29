@@ -1463,7 +1463,7 @@ pub(crate) struct EventSubSubscriptionBroadcaster {
 /// Source of Truth für Subscription-Broadcaster:
 /// - Core/Event-Lifecycle: aktive Partner plus monitored-only Kanäle.
 /// - Chat-Reconcile: `(raid_enabled OR is_partner_active)` mit gültigem
-///   `channel:bot`-Grant, ohne Reauth-Block und ohne Inaktivitätsflag.
+///   `channel:bot`-Grant, ohne Reauth-Block und ohne Betriebszustand `inactive`.
 pub(crate) async fn select_eventsub_subscription_broadcasters(
     pool: &PgPool,
 ) -> Result<Vec<EventSubSubscriptionBroadcaster>, sqlx::Error> {

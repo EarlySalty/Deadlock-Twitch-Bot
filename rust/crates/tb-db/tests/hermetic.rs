@@ -419,8 +419,18 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
     );
     assert_eq!(
         partner_state("inactive_flag").await,
-        (1, "inactive".to_string()),
-        "Inaktivitaetsflag ist nur Anzeigezustand, nicht is_partner_active"
+        (0, "inactive".to_string()),
+        "Inaktivitaetsflag pausiert den Bot im Kanal"
+    );
+    let enrolled: i32 = sqlx::query_scalar(
+        "SELECT is_partner_enrolled FROM twitch_partners_all_state WHERE twitch_login = 'inactive_flag'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        enrolled, 1,
+        "Inaktivitaetsflag beendet die Partnerschaft nicht"
     );
     assert_eq!(
         partner_state("paused").await,

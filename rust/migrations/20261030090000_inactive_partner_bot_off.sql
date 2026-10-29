@@ -47,3 +47,29 @@ SELECT p.id,
     END AS is_partner_enrolled
    FROM twitch_partners p
      LEFT JOIN twitch_streamer_identities i ON i.twitch_user_id = p.twitch_user_id;
+
+CREATE OR REPLACE VIEW twitch_streamers_partner_state AS
+SELECT twitch_login,
+    twitch_user_id,
+    require_discord_link,
+    next_link_check_at,
+    discord_user_id,
+    discord_display_name,
+    is_on_discord,
+    manual_partner_opt_out,
+    created_at,
+    archived_at,
+    raid_bot_enabled,
+    silent_ban,
+    silent_raid,
+    is_monitored_only,
+    is_verified,
+    is_partner,
+    is_partner_active,
+    live_ping_role_id,
+    live_ping_enabled,
+    technical_pause_reason,
+    operational_state,
+    is_partner_enrolled
+   FROM twitch_partners_all_state
+  WHERE status = 'active'::text;

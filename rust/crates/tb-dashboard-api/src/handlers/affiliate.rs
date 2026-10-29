@@ -938,10 +938,10 @@ async fn claim_streamer_verified_at(
 
     let partner_state: Option<(i32, Option<String>)> = sqlx::query_as(
         r#"
-        SELECT COALESCE(is_partner_active, 0) AS is_partner_active, created_at
+        SELECT COALESCE(is_partner_enrolled, 0) AS is_partner_enrolled, created_at
         FROM twitch_streamers_partner_state
         WHERE LOWER(twitch_login) = LOWER($1)
-        ORDER BY COALESCE(is_partner_active, 0) DESC
+        ORDER BY COALESCE(is_partner_enrolled, 0) DESC
         LIMIT 1
         "#,
     )
@@ -1542,6 +1542,7 @@ mod tests {
             CREATE TABLE twitch_streamers_partner_state (
                 twitch_login TEXT,
                 is_partner_active INTEGER,
+                is_partner_enrolled INTEGER,
                 created_at TEXT
             )
             "#,
@@ -1636,14 +1637,33 @@ mod tests {
         is_partner_active: i32,
         created_at: Option<&str>,
     ) {
+        insert_partner_state_flags(
+            pool,
+            login,
+            is_partner_active,
+            is_partner_active,
+            created_at,
+        )
+        .await;
+    }
+
+    async fn insert_partner_state_flags(
+        pool: &PgPool,
+        login: &str,
+        is_partner_active: i32,
+        is_partner_enrolled: i32,
+        created_at: Option<&str>,
+    ) {
         sqlx::query(
             r#"
-            INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active, created_at)
-            VALUES ($1, $2, $3)
+            INSERT INTO twitch_streamers_partner_state
+                (twitch_login, is_partner_active, is_partner_enrolled, created_at)
+            VALUES ($1, $2, $3, $4)
             "#,
         )
         .bind(login)
         .bind(is_partner_active)
+        .bind(is_partner_enrolled)
         .bind(created_at)
         .execute(pool)
         .await
@@ -2251,7 +2271,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('customer_one', 1)",
+            "INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active, is_partner_enrolled) VALUES ('customer_one', 1, 1)",
         )
         .execute(&pool)
         .await
@@ -2625,6 +2645,21 @@ mod tests {
         insert_partner_state(&pool, "established", 1, Some(&partnered_at)).await;
 
         let status = claim_streamer(&pool, "aff_one", "established")
+            .await
+            .unwrap();
+        assert_eq!(status, ClaimStatus::StreamerAlreadyRegistered);
+    }
+
+    #[tokio::test]
+    async fn claim_inaktiv_markierter_partner_bleibt_registriert() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
+        let partnered_at = ts_offset(chrono::Duration::hours(-25));
+        insert_partner_state_flags(&pool, "flagged_partner", 0, 1, Some(&partnered_at)).await;
+
+        let status = claim_streamer(&pool, "aff_one", "flagged_partner")
             .await
             .unwrap();
         assert_eq!(status, ClaimStatus::StreamerAlreadyRegistered);
