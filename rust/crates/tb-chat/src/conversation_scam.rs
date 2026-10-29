@@ -387,33 +387,6 @@ static NAMED_CONTACT_DROP: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     .collect()
 });
 
-const FILLER_WORDS: &[&str] = &[
-    "back",
-    "also",
-    "always",
-    "often",
-    "never",
-    "mostly",
-    "usually",
-    "still",
-    "here",
-    "there",
-    "active",
-    "online",
-    "offline",
-    "rarely",
-    "sometimes",
-    "mainly",
-    "only",
-    "just",
-    "live",
-    "currently",
-    "already",
-    "barely",
-    "hardly",
-    "available",
-];
-
 fn is_hard_contact_drop(text: &str) -> bool {
     let handle_drop = CONTACT_DROP_HANDLE.iter().any(|pattern| {
         pattern.captures_iter(text).any(|caps| {
@@ -433,8 +406,15 @@ fn is_concrete_handle(handle: &str, rest: &str) -> bool {
     let handle = handle.trim_end_matches('.').to_ascii_lowercase();
     handle.len() >= 4
         && handle.starts_with(|c: char| c.is_ascii_alphabetic())
+        && handle.bytes().any(|b| b.is_ascii_digit() || b == b'_')
         && !is_invite_or_url(&handle, rest)
-        && !FILLER_WORDS.contains(&handle.as_str())
+        && !is_domain_shaped(&handle)
+}
+
+fn is_domain_shaped(handle: &str) -> bool {
+    handle.rsplit_once('.').is_some_and(|(_, tld)| {
+        (2..=3).contains(&tld.len()) && tld.bytes().all(|b| b.is_ascii_alphabetic())
+    })
 }
 
 fn is_invite_or_url(handle: &str, rest: &str) -> bool {
@@ -1766,6 +1746,7 @@ async fn fetch_samples(pool: &PgPool, actions: &[&str], limit: i64) -> Vec<Learn
     .await
     .unwrap_or_default()
     .into_iter()
+    .filter(|row| row.category != CONTACT_DROP_RULE_CATEGORY)
     .map(|row| LearningSample {
         category: row.category,
         reasoning: row.reasoning,
@@ -2344,34 +2325,49 @@ mod tests {
     #[test]
     fn harter_kontaktabwurf_braucht_einen_echten_handle() {
         for text in [
-            "down to play sometimes, I'm cluthub on dc",
             "On DC:novas8",
-            "Hey you good?? I enjoyed your stream and I would like to be a friend probably stream together if you don't mind linking up on dc.                  deenexus",
             "dc: meydix_02",
             "dc:   david_nek",
             "On DISCORD.     itsveyro5",
             "Komme nächstes Mal gerne mit Freunden wieder - Disscord: united_247",
             "Add me on Discord:  zombie_141   haha",
             "If you’re interested, add him on Discord :    laka_5 and tell him James sent you.",
-            "my dc is shadow.kid",
+            "my dc is shadow_kid7",
+            "I'm cluthub_99 on dc",
         ] {
             assert!(is_hard_contact_drop(text), "{text}");
         }
         for text in [
+            "down to play sometimes, I'm cluthub on dc",
+            "linking up on dc.                  deenexus",
             "add me on discord we can duo",
             "Add me up on discord",
+            "add me later on discord",
+            "I'm streaming on dc",
+            "I'm muted on discord",
+            "I'm back on dc",
+            "my discord is lagging",
+            "my dc is down",
+            "my discord is broken",
             "dc: 3rd time today",
             "dc: 10min weg",
             "dc: brb",
+            "dc: morgen",
+            "dc: kaputt",
+            "discord: tomorrow",
+            "on dc. tonight",
             "dc: bin gleich zurück",
-            "I'm back on dc",
-            "i'm always on dc",
             "Unser discord: discord.gg/SBRrArXjHf",
             "Unser discord: discordapp.com/invite/xyz",
             "dc: dsc.gg/abc",
             "dc: www.mysite.de",
+            "dc: ddc.gg",
+            "dc: myserver.gg",
+            "dc: my_server.com",
+            "dc: server2.de",
+            "my dc is mysite.de",
             "my discord is discord.gg/SBRrArXjHf",
-            "my dc is mysite.de/invite",
+            "my dc is my_site.de/invite",
             "gg ich geh jetzt off, sehen uns im dc",
         ] {
             assert!(!is_hard_contact_drop(text), "{text}");
