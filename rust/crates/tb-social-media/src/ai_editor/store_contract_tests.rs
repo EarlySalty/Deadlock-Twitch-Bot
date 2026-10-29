@@ -101,6 +101,7 @@ fn base(id: i64, status: &str, stage: &str) -> AiJobView {
         selected_version_id: None,
         revision_proposal: None,
         publishing_in_autopilot: false,
+        revisions_left: None,
     }
 }
 

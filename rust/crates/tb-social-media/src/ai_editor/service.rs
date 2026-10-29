@@ -101,6 +101,11 @@ async fn project(
     }
     .into();
     job.original_url = None;
+    let mut connection = pool.acquire().await.map_err(|_| AiEditorError::Storage)?;
+    job.revisions_left = Some(
+        super::revision::revisions_left(&mut connection, runtime, owner, job.root_job_id).await?,
+    );
+    drop(connection);
     for version in &mut job.versions {
         let video = super::revision::owned_version(pool, owner, job.id, version.id).await?;
         job.publishing_in_autopilot |= super::autopilot_revision::production_id(&video).is_some();

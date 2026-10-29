@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CalendarPlus, CheckCircle2, Film, FlaskConical, MessageSquareText, Play, Sparkles, Trash2, X } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import type { SocialClipMitPosting } from '@/api/socialMedia';
@@ -104,7 +104,20 @@ function ApprovalActions({ video, snapshot, owner, client, onNavigate, testRunAp
   const [confirmed, setConfirmed] = useState(false);
   const feedbackBytes = new TextEncoder().encode(feedback).length;
   const platforms = quickApprovalPlatforms(snapshot, video);
+  const editorJob = useQuery({
+    queryKey: ['social-ai', 'editor', owner, video.id],
+    queryFn: async () => {
+      const { fetchAiConsent, openAiVideoEditor } = await import('./ai/api');
+      const consent = await fetchAiConsent(owner);
+      if (!consent.global_allowed || !consent.external_ai_consent) return null;
+      return openAiVideoEditor(owner, video.id);
+    },
+    enabled: revising && video.mode === 'ai',
+    retry: false,
+  });
+  const revisionsLeft = editorJob.data?.revisions_left ?? null;
   const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ['social-ai', 'editor', owner, video.id] });
     void queryClient.invalidateQueries({ queryKey: ['social-media', 'autopilot-publish', owner] });
     void queryClient.invalidateQueries({ queryKey: ['social-ai', 'jobs', owner] });
   };
@@ -169,7 +182,7 @@ function ApprovalActions({ video, snapshot, owner, client, onNavigate, testRunAp
     </div>
     {videoPlatforms(snapshot, video).includes('tiktok') && <p className="studio-approval-note">{t('TikTok erhält das Video als Entwurf. Veröffentlichen kannst du es danach in der TikTok-App.')}</p>}
     {approve.isSuccess && <p className="studio-approval-note" role="status">{t(testJobId ? 'Für den nächsten Termin eingeplant.' : 'Freigegeben.')}</p>}
-    {revising && <form id={feedbackId} className="studio-approval-feedback" onSubmit={event => { event.preventDefault(); if (feedback.trim() && feedbackBytes <= 2000) revise.mutate(feedback.trim()); }}>
+    {revising && <form id={feedbackId} className="studio-approval-feedback" onSubmit={event => { event.preventDefault(); if (revisionsLeft !== 0 && feedback.trim() && feedbackBytes <= 2000) revise.mutate(feedback.trim()); }}>
       <label>
         <span>{t('Was soll die KI ändern?')}</span>
         <textarea className="studio-input" rows={3} maxLength={2000} value={feedback} disabled={busy}
@@ -177,8 +190,9 @@ function ApprovalActions({ video, snapshot, owner, client, onNavigate, testRunAp
           onChange={event => setFeedback(event.target.value)} />
       </label>
       {feedbackBytes > 2000 && <p className="studio-approval-error" role="alert">{t('Bitte kürze deine Anweisung, bevor du sie abschickst.')}</p>}
+      {revisionsLeft !== null && <p className={revisionsLeft === 0 ? 'studio-approval-error' : 'studio-approval-note'} role="status">{revisionsLeft === 0 ? t('Für diesen Clip sind alle Änderungswünsche aufgebraucht. Gib eine der Fassungen frei oder verwirf das Video.') : t('Noch {count} Änderungswünsche für diesen Clip.', { count: revisionsLeft })}</p>}
       <div className="studio-approval-buttons">
-        <button type="submit" className="studio-button studio-primary" disabled={busy || !feedback.trim() || feedbackBytes > 2000}>{t(revise.isPending ? 'Wird gesendet …' : 'Änderung senden')}</button>
+        <button type="submit" className="studio-button studio-primary" disabled={busy || revisionsLeft === 0 || !feedback.trim() || feedbackBytes > 2000}>{t(revise.isPending ? 'Wird gesendet …' : 'Änderung senden')}</button>
         <button type="button" className="studio-button" disabled={busy} onClick={() => { setRevising(false); setFeedback(''); revise.reset(); }}>{t('Abbrechen')}</button>
       </div>
     </form>}

@@ -175,6 +175,23 @@ async fn append_event(
     Ok(())
 }
 
+pub(crate) async fn revisions_left(
+    connection: &mut PgConnection,
+    runtime: &EditorRuntime,
+    owner: &str,
+    root: i64,
+) -> Result<i64, AiEditorError> {
+    let used: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM social_ai_jobs WHERE root_job_id=$1 AND id<>$1 AND twitch_user_id::text=$2 AND status<>'failed'",
+    )
+    .bind(root)
+    .bind(owner)
+    .fetch_one(connection)
+    .await
+    .map_err(|_| AiEditorError::Storage)?;
+    Ok((runtime.limits.revisions.max_revisions - used).max(0))
+}
+
 pub async fn create_revision(
     pool: &PgPool,
     runtime: &EditorRuntime,
@@ -218,20 +235,12 @@ pub async fn create_revision(
         .map_err(|_| AiEditorError::Storage)?;
     ensure_ready(&mut tx, owner, version_id).await?;
     let root: i64 = sqlx::query_scalar("SELECT COALESCE(root_job_id,id) FROM social_ai_jobs WHERE id=$1 AND twitch_user_id::text=$2").bind(maker).bind(owner).fetch_one(&mut *tx).await.map_err(|_| AiEditorError::Storage)?;
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM social_ai_jobs WHERE root_job_id=$1 AND twitch_user_id::text=$2",
-    )
-    .bind(root)
-    .bind(owner)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|_| AiEditorError::Storage)?;
-    if count >= frozen.limits.revisions.max_revisions {
-        return Err(AiEditorError::Attempts);
+    if revisions_left(&mut tx, runtime, owner, root).await? == 0 {
+        return Err(AiEditorError::RevisionLimit);
     }
     let busy: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_ai_jobs WHERE twitch_user_id::text=$1 AND clip_db_id=$2 AND status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating','awaiting_confirmation'))").bind(owner).bind(video.clip_id).fetch_one(&mut *tx).await.map_err(|_| AiEditorError::Storage)?;
     if busy {
-        return Err(AiEditorError::Conflict);
+        return Err(AiEditorError::RevisionBusy);
     }
     let id: i64 = sqlx::query_scalar("INSERT INTO social_ai_jobs(twitch_user_id,clip_db_id,source_clip_id,source_twitch_clip_id,root_job_id,parent_version_id,revision_feedback,stage,checkpoints,original_duration_ms,highlights,uncertainty) SELECT twitch_user_id,clip_db_id,source_clip_id,source_twitch_clip_id,$3,$4,$5,'planning',$6::text::jsonb,original_duration_ms,highlights,uncertainty FROM social_ai_jobs WHERE id=$1 AND twitch_user_id::text=$2 RETURNING id")
         .bind(maker).bind(owner).bind(root).bind(version_id).bind(feedback.trim()).bind(serde_json::to_string(&checkpoints).map_err(|_| AiEditorError::Storage)?).fetch_one(&mut *tx).await.map_err(|_| AiEditorError::Storage)?;

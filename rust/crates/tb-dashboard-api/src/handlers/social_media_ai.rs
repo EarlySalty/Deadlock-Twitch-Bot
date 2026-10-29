@@ -141,7 +141,10 @@ impl From<AiEditorError> for ApiError {
             | AiEditorError::SourceMissing
             | AiEditorError::SourceUnreadable => StatusCode::NOT_FOUND,
             AiEditorError::Consent => StatusCode::FORBIDDEN,
-            AiEditorError::Conflict | AiEditorError::Attempts => StatusCode::CONFLICT,
+            AiEditorError::Conflict
+            | AiEditorError::Attempts
+            | AiEditorError::RevisionLimit
+            | AiEditorError::RevisionBusy => StatusCode::CONFLICT,
             AiEditorError::Configuration | AiEditorError::Storage => {
                 StatusCode::SERVICE_UNAVAILABLE
             }

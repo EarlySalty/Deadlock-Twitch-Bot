@@ -1673,7 +1673,7 @@ async fn revisions_preserve_parent_reuse_checkpoints_and_confirm_before_renderin
         && !skill.text.is_empty()));
     assert!(matches!(
         revision::create_revision(&db.pool, &runtime, "101", root, parent.id, "Noch kürzer").await,
-        Err(AiEditorError::Conflict)
+        Err(AiEditorError::RevisionBusy)
     ));
     let mut lease = super::super::store::acquire_production_lease(&db.pool)
         .await
@@ -1874,7 +1874,8 @@ async fn unchanged_revision_ends_without_a_new_version_and_keeps_its_summary() {
     use super::super::revision;
     let db = database().await;
     let directory = tempfile::tempdir().expect("root");
-    let runtime = runtime(directory.path());
+    let mut runtime = runtime(directory.path());
+    runtime.limits.revisions.max_revisions = 1;
     let clip = source(&db.pool, &runtime).await;
     let (root, parent, checkpoints) = revision_fixture(&db.pool, &runtime, clip).await;
     let child = revision::create_revision(
@@ -1913,6 +1914,28 @@ async fn unchanged_revision_ends_without_a_new_version_and_keeps_its_summary() {
             .expect("C2")
             .is_none()
     );
+
+    assert_eq!(
+        super::super::get_manual_job(&db.pool, &runtime, "101", root)
+            .await
+            .expect("root after failed revision")
+            .revisions_left,
+        Some(1)
+    );
+    revision::create_revision(&db.pool, &runtime, "101", root, parent.id, "Kürzer")
+        .await
+        .expect("failed revision does not count");
+    assert_eq!(
+        super::super::get_manual_job(&db.pool, &runtime, "101", root)
+            .await
+            .expect("root after second revision")
+            .revisions_left,
+        Some(0)
+    );
+    assert!(matches!(
+        revision::create_revision(&db.pool, &runtime, "101", root, parent.id, "Noch kürzer").await,
+        Err(AiEditorError::RevisionLimit)
+    ));
 }
 
 #[tokio::test]

@@ -89,12 +89,13 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
         <div className="social-ai-actions"><button type="button" className="studio-button" aria-pressed={preferred} disabled={blocked || historical} onClick={() => { if (!preferred) action.mutate('select'); }}>{preferred ? t("Bevorzugte Fassung") : t("Diese Fassung verwenden")}</button><button type="button" className="studio-button" aria-pressed={rating === 'accepted'} disabled={blocked || historical} onClick={() => action.mutate('accept')}>{t("Fassung gefällt mir")}</button><button type="button" className="studio-button" aria-pressed={rating === 'rejected'} disabled={blocked || version.status !== 'review'} onClick={() => action.mutate('reject')}>{t("Fassung gefällt mir nicht")}</button></div>
         {ratingFeedback && <ActionFeedback pending={action.isPending} message={message} />}
       </div>
-      <form onSubmit={(event) => {event.preventDefault(); if (canStart && !historical && !busyJob && !blocked && feedback.trim() && feedbackBytes <= 2000) action.mutate('revise');}}>
+      <form onSubmit={(event) => {event.preventDefault(); if (canStart && !historical && !busyJob && !blocked && job.revisions_left !== 0 && feedback.trim() && feedbackBytes <= 2000) action.mutate('revise');}}>
         <label htmlFor={feedbackId}>{t("Was soll sich an dieser Fassung ändern?")}</label>
         <textarea id={feedbackId} value={feedback} rows={3} maxLength={2000} disabled={blocked || busyJob || historical} onChange={(event) => setFeedback(event.target.value)} placeholder={t("Zum Beispiel: Kürze den Einstieg, aber behalte die ursprüngliche Reaktion.")} aria-describedby={`${feedbackId}-help`} />
         <p id={`${feedbackId}-help`}>{t("Kleine Änderungen nutzen die gespeicherte Analyse. Umfangreiche Änderungen brauchen deine Bestätigung. Die bisherige Fassung wird nicht überschrieben.")}</p>
         {feedbackBytes > 2000 && <p className="social-ai-caution" role="alert">{t("Bitte kürze deine Anweisung, bevor du sie abschickst.")}</p>}
-        <button type="submit" className="studio-primary" disabled={!canStart || historical || busyJob || blocked || !feedback.trim() || feedbackBytes > 2000}>{t("Änderung anfordern")}</button>
+        {typeof job.revisions_left === 'number' && <p className={job.revisions_left === 0 ? 'social-ai-caution' : undefined} role="status">{job.revisions_left === 0 ? t("Für diesen Clip sind alle Änderungswünsche aufgebraucht. Gib eine der Fassungen frei oder verwirf das Video.") : t("Noch {count} Änderungswünsche für diesen Clip.", { count: job.revisions_left })}</p>}
+        <button type="submit" className="studio-primary" disabled={!canStart || historical || busyJob || blocked || job.revisions_left === 0 || !feedback.trim() || feedbackBytes > 2000}>{t("Änderung anfordern")}</button>
       </form>
       <MetadataPanel key={version.id} channel={channel} videoId={version.id} disabled={action.isPending || busyJob || reloading || version.status !== 'review'} onEditingChange={setMetadataEditing} />
       {metadataEditing && <p role="status">{t("Speichere oder verwirf die Textänderungen vor der nächsten Aktion.")}</p>}

@@ -353,6 +353,8 @@ pub struct AiJobView {
     pub revision_proposal: Option<super::revision::RevisionProposal>,
     #[serde(default)]
     pub publishing_in_autopilot: bool,
+    #[serde(default)]
+    pub revisions_left: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -516,6 +518,7 @@ fn view_from_row(row: &PgRow, limit: AttemptLimit) -> Result<AiJobView, AiStoreE
         parent_version_id: row.try_get("parent_version_id")?,
         selected_version_id: row.try_get("selected_version_id")?,
         publishing_in_autopilot: false,
+        revisions_left: None,
         revision_proposal: row
             .try_get::<Option<String>, _>("revision_proposal_text")?
             .map(|text| parse_json(&text))

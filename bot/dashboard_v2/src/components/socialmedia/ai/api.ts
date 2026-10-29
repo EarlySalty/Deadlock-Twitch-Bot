@@ -94,6 +94,7 @@ export interface AiJobView {
   parent_version_id: number | null;
   selected_version_id: number | null;
   revision_proposal: AiRevisionProposal | null;
+  revisions_left?: number | null;
 }
 
 function invalidResponse(): never {
@@ -245,6 +246,7 @@ export function decodeAiJob(value: unknown): AiJobView {
     parent_version_id: item.parent_version_id === null ? null : number(item.parent_version_id,true),
     selected_version_id: item.selected_version_id === null ? null : number(item.selected_version_id,true),
     revision_proposal: decodeProposal(item.revision_proposal),
+    revisions_left: item.revisions_left === undefined ? null : optionalNumber(item.revisions_left),
   };
 }
 

@@ -73,5 +73,6 @@
   "parent_version_id": null,
   "selected_version_id": 2201,
   "revision_proposal": null,
-  "publishing_in_autopilot": false
+  "publishing_in_autopilot": false,
+  "revisions_left": null
 }

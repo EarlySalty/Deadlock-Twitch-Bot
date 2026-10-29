@@ -8,9 +8,9 @@ mod model;
 mod observation;
 pub mod options;
 mod pipeline;
-mod scene;
 pub mod revision;
 pub mod runtime_config;
+mod scene;
 mod service;
 pub mod skill_registry;
 mod skills;
@@ -19,8 +19,9 @@ mod stage_contract;
 mod validation;
 
 pub use media::{
-    audio_levels, contact_sheet_grid, extract_frames, extract_stills, inspect_media, prepare_intervals,
-    render_prepared, AudioLevels, FrameBatch, MediaInfo, PreparedMedia, MAX_CONTACT_SHEET_FPS,
+    audio_levels, contact_sheet_grid, extract_frames, extract_stills, inspect_media,
+    prepare_intervals, render_prepared, AudioLevels, FrameBatch, MediaInfo, PreparedMedia,
+    MAX_CONTACT_SHEET_FPS,
 };
 pub use model::{
     EditPlan, EditorOptions, Highlight, KeptInterval, LayoutIntent, PlanLimits, ResourceLimits,
@@ -84,6 +85,10 @@ pub enum AiEditorError {
     RevisionUnchanged,
     #[error("Die erlaubten Versuche sind aufgebraucht.")]
     Attempts,
+    #[error("Für diesen Clip sind alle Änderungswünsche aufgebraucht. Gib eine der Fassungen frei oder verwirf das Video.")]
+    RevisionLimit,
+    #[error("Für diesen Clip wird gerade schon eine Änderung umgesetzt. Die neue Fassung erscheint hier, sobald sie fertig ist.")]
+    RevisionBusy,
     #[error("Das Zeitlimit für die Verarbeitung ist erreicht.")]
     Deadline,
     #[error("Bitte gib eine gültige Änderungsanweisung ein.")]

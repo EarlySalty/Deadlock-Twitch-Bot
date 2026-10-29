@@ -43,5 +43,6 @@
     "requires_confirmation": false,
     "estimated_provider_cost_usd": 0.0
   },
-  "publishing_in_autopilot": false
+  "publishing_in_autopilot": false,
+  "revisions_left": null
 }
