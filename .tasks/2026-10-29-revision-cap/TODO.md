@@ -20,3 +20,13 @@
 2. GET single job 171 (owner 1376724506) returns revisions_left 12 (20 minus 8 non-failed children) via DB-equivalent query:
    SELECT COUNT(*) FROM social_ai_jobs WHERE root_job_id=159 AND id<>159 AND status<>'failed'.
 3. Throwaway owner 1186925760: open Studio > Freigaben on an AI video, click "Änderung wünschen": counter line visible.
+
+## State after merge
+- c2be811b2 on main, gate ALLOW (Opus, Sol at quota), deploy-queue ticket 13.
+- Follow-up branch for gate nits: singular "Noch 1 Änderungswunsch" (de+en); retry_manual_job must check revisions_left for children; do not POST open_editor just by opening the form (only show counter once a maker job exists); list rows also get revisions_left (fix note or drop count from list); screenshots N>0 and 0.
+
+## Live proof (2026-10-29, after ticket 13)
+- Release c2be811b26 live since 16:17; `deploy-twitch-release --pruefen` exit 0; bot and dashboard journal -p err empty since deploy.
+- Live dashboard bundle (SocialMediaManager chunk) contains the counter string, the used-up message and the revisions_left decoder.
+- Lucky root 159: 5 non-failed and 5 failed children, so the live API now reports 15 left (the earlier estimate of 12 counted children that have since failed).
+- Open: UI check on the throwaway owner needs a dashboard login (no stored session); covered by fixture screenshots on the follow-up branch.
