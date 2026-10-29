@@ -274,7 +274,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         <button
           type="button"
           className="studio-button"
-          disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data}
+          disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data || saveLayoutMutation.isPending}
           onClick={() => {
             saveLayoutMutation.reset();
             setLayoutChoice(layoutForEditor);
@@ -292,7 +292,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
             { format: 'tall', label: '9:16', hint: 'Spielbild füllt das Hochformat komplett' },
           ] as const
         ).map((option) => {
-          const aktiv = (layoutForEditor.mode === 'fill') === (option.format === 'tall');
+          const aktiv = layoutForEditor.mode === (option.format === 'tall' ? 'fill' : 'blur_pad');
           return (
             <button
               key={option.format}
@@ -326,7 +326,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
             key={preset.mode}
             type="button"
             className="studio-template"
-            disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data}
+            disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data || saveLayoutMutation.isPending}
             onClick={() => {
               saveLayoutMutation.reset();
               if (preset.mode === 'fill') {
