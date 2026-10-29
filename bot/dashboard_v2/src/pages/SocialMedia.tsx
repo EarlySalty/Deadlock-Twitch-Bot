@@ -28,7 +28,7 @@ import { LayoutEditor, type VorschauClip } from '@/components/socialmedia/Layout
 import { LadeFehlerHinweis } from '@/components/socialmedia/LadeFehlerHinweis';
 import { SocialMediaForbiddenError, fetchPostingPlan, fetchClips, fetchVodArchiveSettings, fetchPlatformStatus, disconnectPlatform, oauthStartUrl, type PlatformStatus, fetchStreamerLayout, saveStreamerLayout, saveVodArchiveSettings, uploadClip } from '@/api/socialMedia';
 import { fehlerText, PLATFORM_LABELS, SOCIAL_MEDIA_TABS, type SocialMediaView, type SocialMediaViewTarget } from '@/components/socialmedia/labels';
-import { type PostingPlan, DEFAULT_LAYOUT, type LayoutPayload, type SocialPlatform, type StreamerLayoutResponse, type VodArchivePrivacy, type VodArchiveSettings } from '@/types/socialMedia';
+import { type PostingPlan, DEFAULT_LAYOUT, asFillLayout, type LayoutPayload, type SocialPlatform, type StreamerLayoutResponse, type VodArchivePrivacy, type VodArchiveSettings } from '@/types/socialMedia';
 
 export interface SocialMediaProps {
   streamer: string;
@@ -284,9 +284,10 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         </button>
       </div>
       {layoutQuery.isError ? <LadeFehlerHinweis fehler={layoutQuery.error} /> : null}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {(
           [
+            { mode: 'fill', title: 'Hochformat füllen', cam: false, description: 'Das Spielbild füllt das ganze 9:16-Video ohne Balken. Den sichtbaren Ausschnitt legst du selbst fest.' },
             { mode: 'blur_pad', title: 'Gameplay mit Hintergrund', cam: false, description: 'Das ganze Spielbild bleibt sichtbar, der Hintergrund füllt das Hochformat.' },
             { mode: 'pip', title: 'Facecam & Gameplay', cam: true, description: 'Deine Kamera sitzt über dem vollständigen Spielbild.' },
             { mode: 'stacked', title: 'Kamera oben mit DDC-Branding', cam: true, description: 'Kamera und Spielbild untereinander, mit DDC-Trenner.' },
@@ -299,6 +300,10 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
             disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data}
             onClick={() => {
               saveLayoutMutation.reset();
+              if (preset.mode === 'fill') {
+                setLayoutChoice(asFillLayout(layoutForEditor));
+                return;
+              }
               setLayoutChoice({
                 ...layoutForEditor,
                 mode: preset.mode,

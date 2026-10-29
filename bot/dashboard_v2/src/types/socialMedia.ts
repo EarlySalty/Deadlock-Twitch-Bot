@@ -5,7 +5,7 @@ export interface LayoutBox {
   h: number;
 }
 
-export type LayoutMode = 'pip' | 'stacked' | 'blur_pad';
+export type LayoutMode = 'pip' | 'stacked' | 'blur_pad' | 'fill';
 
 /**
  * Effective layout payload as returned/accepted by the backend.
@@ -281,3 +281,15 @@ export const DEFAULT_LAYOUT: LayoutPayload = {
   cam_enabled: true,
   mode: 'stacked',
 };
+
+export function fillGameCrop(source: LayoutPayload['source'], crop: LayoutBox): LayoutBox {
+  if (crop.w * 16 <= crop.h * 9 + 16) return crop;
+  const w = Math.max(2, Math.round((crop.h * 9) / 16 / 2) * 2);
+  const mitte = crop.x + crop.w / 2;
+  const x = Math.min(Math.max(0, Math.round(mitte - w / 2)), Math.max(0, source.width - w));
+  return { x, y: crop.y, w, h: crop.h };
+}
+
+export function asFillLayout(layout: LayoutPayload): LayoutPayload {
+  return { ...layout, mode: 'fill', cam_enabled: false, game_crop: fillGameCrop(layout.source, layout.game_crop) };
+}

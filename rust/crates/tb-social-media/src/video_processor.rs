@@ -170,7 +170,7 @@ pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bo
     let game_height = TARGET_HEIGHT - top_height;
 
     if mode == FILL_MODE {
-        return build_fill_filter();
+        return build_fill_filter(layout);
     }
     if mode == "blur_pad" || !cam_enabled {
         return build_fallback_filter();
@@ -276,9 +276,18 @@ pub fn build_crop_filter(
     format!("crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale={target_width}:{target_height}")
 }
 
-pub fn build_fill_filter() -> String {
+pub fn build_fill_filter(layout: &StreamerLayout) -> String {
+    let g = &layout.game_crop;
+    let sw = layout.source.width.max(1);
+    let sh = layout.source.height.max(1);
     format!(
-        "[0:v]scale={tw}:{th}:force_original_aspect_ratio=increase,crop={tw}:{th},setsar=1[vout]",
+        "[0:v]crop=iw*{gw}/{sw}:ih*{gh}/{sh}:iw*{gx}/{sw}:ih*{gy}/{sh},\
+         scale={tw}:{th}:force_original_aspect_ratio=increase,\
+         crop={tw}:{th},setsar=1[vout]",
+        gw = g.w,
+        gh = g.h,
+        gx = g.x,
+        gy = g.y,
         tw = TARGET_WIDTH,
         th = TARGET_HEIGHT,
     )
@@ -1096,7 +1105,7 @@ mod tests {
     fn fill_layout_fills_the_vertical_frame_without_blur() {
         let layout = crate::layout::fill_layout();
         let f = build_compose_filter(&layout, &layout.mode, layout.cam_enabled);
-        assert_eq!(f, build_fill_filter());
+        assert_eq!(f, build_fill_filter(&layout));
         assert!(f.contains("force_original_aspect_ratio=increase,crop=1080:1920"));
         assert!(!f.contains("boxblur"));
     }

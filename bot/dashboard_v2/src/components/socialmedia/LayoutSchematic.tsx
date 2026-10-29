@@ -5,6 +5,20 @@ export function LayoutSchematic({ mode }: { mode: LayoutPayload['mode'] }) {
   const t = useT();
   const stacked = mode === 'stacked';
   const pip = mode === 'pip';
+  if (mode === 'fill') {
+    return (
+      <svg className="studio-layout-schematic" viewBox="0 0 108 192" aria-hidden="true">
+        <rect className="studio-layout-background" fill="#161616" stroke="#362c23" x="1" y="1" width="106" height="190" rx="7" />
+        <rect className="studio-layout-game" fill="#2a221c" stroke="#7a6c57" x="6" y="6" width="96" height="160" rx="3" />
+        <path className="studio-layout-scene" fill="#3a2e25" d="M6 150 28 92 48 118 74 70 102 150Z" />
+        <circle className="studio-layout-crosshair" fill="none" stroke="#f2eee6" strokeWidth="0.8" cx="54" cy="86" r="7" />
+        <path className="studio-layout-crosshair" fill="none" stroke="#f2eee6" strokeWidth="0.8" d="M54 74v24m-12-12h24" />
+        <rect className="studio-layout-hud" fill="#b5a488" x="13" y="155" width="24" height="4" rx="1" />
+        <text x="54" y="175" className="studio-layout-label" fill="#f2eee6" fontSize="9" textAnchor="middle">{t('Gameplay')}</text>
+        <text x="54" y="185" className="studio-layout-ratio" fill="#9d968a" fontSize="7" textAnchor="middle">{t('9:16 · ohne Balken')}</text>
+      </svg>
+    );
+  }
   return (
     <svg className="studio-layout-schematic" viewBox="0 0 108 192" aria-hidden="true">
       <rect className="studio-layout-background" fill="#161616" stroke="#362c23" x="1" y="1" width="106" height="190" rx="7" />

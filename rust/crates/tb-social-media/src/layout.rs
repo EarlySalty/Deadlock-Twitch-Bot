@@ -20,7 +20,7 @@
 //!   "cam_position": {"x":712,"y":48,"w":320,"h":320} }
 //! ```
 //! Validierung: version==1, x/y>=0, w/h>0, Crops innerhalb `source`,
-//! `cam_position` innerhalb des Zielframes, mode ∈ {pip, stacked, blur_pad}.
+//! `cam_position` innerhalb des Zielframes, mode ∈ {pip, stacked, blur_pad, fill}.
 //!
 //! Kompatibilität: Layouts aus der Zeit, als `cam_position` im Quellraum
 //! validiert wurde, können Werte tragen, die im Zielframe nicht mehr passen.
@@ -273,8 +273,11 @@ impl StreamerLayout {
                 .to_string(),
         };
         let resolved_mode = resolved_mode.trim().to_lowercase();
-        if resolved_mode != "pip" && resolved_mode != "stacked" && resolved_mode != "blur_pad" {
-            return Err(err("mode must be one of: pip, stacked, blur_pad"));
+        if !matches!(
+            resolved_mode.as_str(),
+            "pip" | "stacked" | "blur_pad" | FILL_MODE
+        ) {
+            return Err(err("mode must be one of: pip, stacked, blur_pad, fill"));
         }
         let resolved_cam_enabled = match cam_enabled {
             Some(c) => c,
@@ -612,6 +615,19 @@ mod tests {
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+
+    #[test]
+    fn fill_mode_is_accepted_and_renders_the_chosen_game_crop() {
+        let mut payload = valid_payload();
+        payload["game_crop"] = json!({"x": 656, "y": 0, "w": 608, "h": 1080});
+        let layout = StreamerLayout::from_value(&payload, Some(false), Some("fill"))
+            .expect("fill layout must be accepted");
+        assert_eq!(layout.mode, FILL_MODE);
+        let filter =
+            crate::video_processor::build_compose_filter(&layout, &layout.mode, layout.cam_enabled);
+        assert!(filter.starts_with("[0:v]crop=iw*608/1920:ih*1080/1080:iw*656/1920:ih*0/1080,"));
+        assert!(!filter.contains("boxblur"));
+    }
 
     fn valid_payload() -> Value {
         json!({

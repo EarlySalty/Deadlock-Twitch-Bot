@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { Camera, Image as ImageIcon, Layers, Maximize2, Save, RotateCcw, EyeOff, Eye, Frame } from 'lucide-react';
 import { useT } from '@/context/LanguageContext';
 import type { LayoutBox, LayoutPayload, LayoutMode } from '@/types/socialMedia';
-import { DEFAULT_LAYOUT, DEFAULT_SOURCE_HEIGHT, DEFAULT_SOURCE_WIDTH } from '@/types/socialMedia';
+import { DEFAULT_LAYOUT, DEFAULT_SOURCE_HEIGHT, DEFAULT_SOURCE_WIDTH, asFillLayout } from '@/types/socialMedia';
 import type { DragMode } from '@/utils/socialMediaLayout';
 import {
   MAX_BAND_HEIGHT,
@@ -363,7 +363,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
   const t = useT();
   const bandHeight = layout.cam_position.h;
   const isStacked = mode === 'stacked';
-  const isBlurPad = mode === 'blur_pad' || !camEnabled;
+  const isBlurPad = mode === 'blur_pad' || (!camEnabled && mode !== 'fill');
 
   if (isBlurPad) {
     const gameAspect = layout.source.width / layout.source.height;
@@ -549,9 +549,10 @@ export function LayoutEditor({
   const camEnabled = layout.cam_enabled;
   const mode = layout.mode;
   const blurPad = mode === 'blur_pad';
-  const camWirksam = camEnabled && !blurPad;
+  const fill = mode === 'fill';
+  const camWirksam = camEnabled && !blurPad && !fill;
   const setCamEnabled = (next: boolean) => setLayout((l) => ({ ...l, cam_enabled: next }));
-  const setMode = (next: LayoutMode) => setLayout((l) => ({ ...l, mode: next }));
+  const setMode = (next: LayoutMode) => setLayout((l) => (next === 'fill' ? asFillLayout(l) : { ...l, mode: next }));
   const [selectedBox, setSelectedBox] = useState<BoxId | null>('game_crop');
 
   // Vorschaubild: der erste Clip ist vorgewaehlt, damit der Editor nicht leer
@@ -673,12 +674,23 @@ export function LayoutEditor({
                 <Frame className="w-3.5 h-3.5" /> {t('Blur-Rand')}
               </span>
             </button>
+            <button
+              type="button"
+              onClick={() => setMode('fill')}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                mode === 'fill' ? 'bg-orange text-on-gold shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
+              }`}
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <Maximize2 className="w-3.5 h-3.5" /> {t('Füllen')}
+              </span>
+            </button>
           </div>
 
           {/* Cam toggle */}
           <button
             type="button"
-            disabled={blurPad}
+            disabled={blurPad || fill}
             onClick={() => setCamEnabled(!camEnabled)}
             className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition disabled:opacity-40 disabled:cursor-not-allowed ${
               camWirksam
@@ -792,7 +804,9 @@ export function LayoutEditor({
             />
           </div>
           <div className="text-[11px] text-text-secondary leading-relaxed">
-            {blurPad
+            {fill
+              ? t('Hochformat füllen: Das Spiel füllt das ganze Video ohne Balken. Verschiebe links den Spielausschnitt, um festzulegen, welcher Teil sichtbar bleibt.')
+              : blurPad
               ? t('Blur-Rand: das Game liegt mittig, oben und unten ein verschwommener Rand. Ohne Cam.')
               : !camWirksam
               ? t('Cam ist aus: Das Spiel füllt das ganze Bild.')
