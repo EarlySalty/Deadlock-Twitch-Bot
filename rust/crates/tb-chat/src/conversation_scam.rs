@@ -376,6 +376,9 @@ fn is_contact_drop(text: &str) -> bool {
 
 fn looks_like_handle(handle: &str, is_last_token: bool) -> bool {
     let handle = handle.trim_end_matches('.');
+    if handle.to_ascii_lowercase().starts_with("discord.") {
+        return false;
+    }
     if handle
         .bytes()
         .any(|b| b.is_ascii_digit() || b == b'_' || b == b'.')
@@ -1132,18 +1135,25 @@ impl ConversationScamGuard {
             return;
         }
 
-        let verdict = match self.judge.judge(&mut dialog).await {
-            Ok(verdict) => verdict,
-            // Ein technischer Fehler ist kein Urteil über den Chatter.
-            // Der Dialog bleibt für die nächste Nachricht offen.
-            Err(_) => return,
+        let rule_verdict = contact_drop_rule_verdict(&settings, &dialog);
+        let decided_by_rule = rule_verdict.is_some();
+        let verdict = match rule_verdict {
+            Some(verdict) => verdict,
+            None => match self.judge.judge(&mut dialog).await {
+                Ok(verdict) => verdict,
+                // Ein technischer Fehler ist kein Urteil über den Chatter.
+                // Der Dialog bleibt für die nächste Nachricht offen.
+                Err(_) => return,
+            },
         };
         let enforcement_threshold =
             dialog_enforcement_threshold(&settings, dialog.account_age_days, dialog.contact_drop);
         let regular_threshold = settings.threshold.max(settings.suggestion_floor);
         let curve_threshold =
             effective_scam_enforcement_threshold(&settings, dialog.account_age_days);
-        let threshold_source = if enforcement_threshold < curve_threshold {
+        let threshold_source = if decided_by_rule {
+            "contact_drop_rule"
+        } else if enforcement_threshold < curve_threshold {
             "contact_drop"
         } else if enforcement_threshold < regular_threshold {
             "young_account_curve"
@@ -1314,11 +1324,7 @@ impl ConversationScamGuard {
                     if event.chatter_user_id.is_empty() {
                         return ("ban_failed_no_mod".to_string(), true);
                     }
-                    let is_known_new = matches!(
-                        account_age_days,
-                        Some(age_days) if (0..ACCOUNT_NEW_MAX_DAYS).contains(&age_days)
-                    );
-                    if !is_known_new {
+                    if !is_known_new_account(account_age_days) {
                         let timed_out = self
                             .moderation
                             .timeout_and_cleanup(
@@ -1383,6 +1389,27 @@ impl ConversationScamGuard {
             },
         }
     }
+}
+
+fn is_known_new_account(account_age_days: Option<i64>) -> bool {
+    matches!(account_age_days, Some(age_days) if (0..ACCOUNT_NEW_MAX_DAYS).contains(&age_days))
+}
+
+fn contact_drop_rule_verdict(settings: &GuardSettings, dialog: &DialogState) -> Option<Verdict> {
+    if settings.mode != GuardMode::AutoBan
+        || !dialog.contact_drop
+        || !is_known_new_account(dialog.account_age_days)
+    {
+        return None;
+    }
+    Some(Verdict {
+        verdict: VerdictKind::Scam,
+        confidence: 1.0,
+        category: "contact_drop".to_string(),
+        reasoning: "Erstschreiber mit neuem Konto wirft einen Discord-Kontakt in den Chat"
+            .to_string(),
+        pattern: None,
+    })
 }
 
 fn dialog_enforcement_threshold(
@@ -2238,6 +2265,7 @@ mod tests {
             "dc: bin gleich zurück",
             "dc: brb",
             "dc: gleich",
+            "Unser discord: discord.gg/SBRrArXjHf",
         ] {
             assert!(!is_contact_drop(text), "{text}");
         }
@@ -2270,6 +2298,35 @@ mod tests {
             dialog_enforcement_threshold(&alert_only, Some(500), true),
             alert_only.threshold
         );
+    }
+
+    #[test]
+    fn kontaktabwurf_von_neuem_konto_bannt_ohne_judge() {
+        let auto_ban = GuardSettings::default();
+        let mut dialog = DialogState::with_context(true, Some(0), 0, None, "c", "tifeh90_");
+        dialog.push_user_message("On DC:novas8");
+        let verdict = contact_drop_rule_verdict(&auto_ban, &dialog).expect("Regel greift");
+        assert_eq!(verdict.verdict, VerdictKind::Scam);
+        assert!(verdict.confidence >= dialog_enforcement_threshold(&auto_ban, Some(0), true));
+
+        for age in [None, Some(ACCOUNT_NEW_MAX_DAYS), Some(1500)] {
+            let mut dialog = DialogState::with_context(true, age, 0, None, "c", "x");
+            dialog.push_user_message("On DC:novas8");
+            assert!(
+                contact_drop_rule_verdict(&auto_ban, &dialog).is_none(),
+                "{age:?}"
+            );
+        }
+
+        let alert_only = GuardSettings {
+            mode: GuardMode::AlertOnly,
+            ..GuardSettings::default()
+        };
+        assert!(contact_drop_rule_verdict(&alert_only, &dialog).is_none());
+
+        let mut harmless = DialogState::with_context(true, Some(0), 0, None, "c", "x");
+        harmless.push_user_message("gg ich geh jetzt off, sehen uns im dc");
+        assert!(contact_drop_rule_verdict(&auto_ban, &harmless).is_none());
     }
 
     fn verdict(kind: VerdictKind, confidence: f32) -> Verdict {
@@ -3092,8 +3149,9 @@ mod tests {
             Some("deepseek-v4-flash".to_string()),
             None,
         )));
-        let (guard, store, _api, _moderation) =
+        let (guard, store, api, _moderation) =
             build_guard_with_judge(GuardSettings::default(), judge);
+        *api.created_at.lock().unwrap() = Ok(None);
         guard
             .process(&event(
                 "contact_bait",
