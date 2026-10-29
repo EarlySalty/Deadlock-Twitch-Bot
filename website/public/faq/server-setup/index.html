@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, follow" />
+    <meta name="description" content="How to add the Deadlock Twitch bot to your Discord server: invite, role order, /setup and streamer signup." />
+    <meta name="theme-color" content="#0b0b0b" />
+    <link rel="canonical" href="https://deutsche-deadlock-community.de/twitch/faq/server-setup/" />
+    <link rel="icon" type="image/png" href="/brand/logo/favicon-64.png" />
+    <title>Server setup guide · Deadlock Twitch bot</title>
+    <style>
+      @font-face { font-family: "Sora"; src: url("/streamer/fonts/sora-latin.woff2") format("woff2"); font-weight: 400 800; font-display: swap; }
+      @font-face { font-family: "Manrope"; src: url("/streamer/fonts/manrope-latin.woff2") format("woff2"); font-weight: 400 800; font-display: swap; }
+      :root {
+        --bg: #0b0b0b;
+        --card: rgba(20, 20, 20, 0.82);
+        --border: rgba(239, 212, 157, 0.16);
+        --border-strong: rgba(239, 212, 157, 0.34);
+        --text: #f2eee6;
+        --muted: #b3ac9f;
+        --gold: #efd49d;
+        --warn: #f0b36b;
+      }
+      * { box-sizing: border-box; }
+      html { background: var(--bg); }
+      body {
+        margin: 0;
+        color: var(--text);
+        font: 16px/1.65 "Manrope", system-ui, sans-serif;
+        background: linear-gradient(180deg, #0f0f0e 0%, #0b0b0b 55%, #101010 100%);
+      }
+      main { max-width: 820px; margin: 0 auto; padding: 56px 22px 96px; }
+      h1, h2, h3 { font-family: "Sora", "Manrope", system-ui, sans-serif; line-height: 1.25; }
+      h1 { font-size: clamp(30px, 5vw, 42px); margin: 0 0 14px; letter-spacing: -0.01em; }
+      h2 { font-size: 22px; margin: 52px 0 14px; }
+      h3 { font-size: 17px; margin: 0 0 6px; }
+      p { margin: 0 0 14px; }
+      a { color: var(--gold); text-underline-offset: 3px; }
+      .eyebrow { color: var(--gold); font-size: 13px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; margin: 0 0 12px; }
+      .lead { color: var(--muted); font-size: 18px; max-width: 640px; }
+      .note {
+        border: 1px solid rgba(240, 179, 107, 0.35);
+        background: rgba(240, 179, 107, 0.07);
+        border-radius: 14px;
+        padding: 16px 18px;
+        margin: 26px 0 0;
+      }
+      .note strong { color: var(--warn); }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 18px;
+      }
+      .card p { color: var(--muted); margin: 0; font-size: 15px; }
+      ol.steps { list-style: none; padding: 0; margin: 0; }
+      ol.steps > li {
+        position: relative;
+        padding: 20px 20px 20px 70px;
+        margin: 0 0 14px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+      }
+      ol.steps .num {
+        position: absolute;
+        left: 20px;
+        top: 20px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 1px solid var(--border-strong);
+        color: var(--gold);
+        font: 700 16px/34px "Sora", system-ui, sans-serif;
+        text-align: center;
+      }
+      ol.steps p:last-child, ol.steps ul:last-child { margin-bottom: 0; }
+      ul { padding-left: 20px; margin: 0 0 14px; }
+      li { margin: 4px 0; }
+      code {
+        font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: rgba(239, 212, 157, 0.08);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 1px 6px;
+        color: var(--gold);
+      }
+      .table-wrap { overflow-x: auto; margin: 12px 0 0; }
+      table { width: 100%; border-collapse: collapse; font-size: 15px; }
+      th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+      th { color: var(--muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; }
+      td:first-child { white-space: nowrap; }
+      .muted { color: var(--muted); }
+      dl { margin: 0; }
+      dt { font-weight: 700; margin-top: 16px; }
+      dd { margin: 4px 0 0; color: var(--muted); }
+      footer { margin-top: 64px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--border); padding-top: 20px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Server setup guide</p>
+      <h1>Add the Deadlock Twitch bot to your community</h1>
+      <p class="lead">This takes about ten minutes. You invite the bot, run one command and your streamers sign up through a short login page. After that, live posts and raids run on their own.</p>
+      <div class="note">
+        <p><strong>Testing phase.</strong> Multi-server support is built but not battle-tested yet. Expect rough edges and tell us what breaks. During the test, invite links are handed out personally: message <strong>Nani</strong> on Discord and you get the link for your server.</p>
+      </div>
+
+      <h2>What your server gets</h2>
+      <div class="grid">
+        <div class="card"><h3>Go-live posts</h3><p>A post in your Discord channel when one of your streamers goes live, only when they play Deadlock.</p></div>
+        <div class="card"><h3>Auto-raids</h3><p>When a streamer goes offline, the bot raids another live streamer of your community.</p></div>
+        <div class="card"><h3>Chat commands</h3><p>Commands like <code>!rank</code> in the Twitch chat. <a href="/streamer/commands">Full list</a>.</p></div>
+        <div class="card"><h3>Streamer dashboard</h3><p>Stats and settings for each streamer. A social media manager for clips is in beta.</p></div>
+      </div>
+
+      <h2>What you need</h2>
+      <ul>
+        <li>A Discord server where you have <strong>Manage Server</strong> or Administrator.</li>
+        <li>A text channel for the live posts.</li>
+        <li>A few Deadlock streamers who want to take part.</li>
+        <li>One contact person, for example a mod, who can make decisions for the server.</li>
+        <li>Optional: a streamer role and a role people can ping for live posts.</li>
+      </ul>
+
+      <h2>Setup in five steps</h2>
+      <ol class="steps">
+        <li>
+          <span class="num" aria-hidden="true">1</span>
+          <h3>Invite the bot</h3>
+          <p>Open the invite link you got from Nani and pick your server. The bot only asks for these permissions:</p>
+          <ul>
+            <li>View Channels</li>
+            <li>Send Messages</li>
+            <li>Embed Links</li>
+            <li>Manage Roles, only to give streamers your streamer role</li>
+          </ul>
+          <p class="muted">It does not ask for Administrator and cannot ping @everyone.</p>
+        </li>
+        <li>
+          <span class="num" aria-hidden="true">2</span>
+          <h3>Fix the role order</h3>
+          <p>Go to <strong>Server Settings → Roles</strong> and drag the bot's role <strong>above</strong> your streamer role and your ping role. Discord only lets a bot manage roles that sit below its own.</p>
+          <p>The ping role must have <strong>"Allow anyone to @mention this role"</strong> turned on.</p>
+        </li>
+        <li>
+          <span class="num" aria-hidden="true">3</span>
+          <h3>Run <code>/setup</code></h3>
+          <p>Type <code>/setup</code> in any channel. Only members with Manage Server can use it. Fill in the options you want; all of them are optional and you can run <code>/setup</code> again anytime to change something.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Option</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr><td><code>language</code></td><td>German or English for the bot's messages on your server.</td></tr>
+                <tr><td><code>announce_channel</code></td><td>Channel for the go-live posts.</td></tr>
+                <tr><td><code>alert_channel</code></td><td>Channel for moderation alerts, ideally only visible to your mods.</td></tr>
+                <tr><td><code>streamer_role</code></td><td>Role the bot gives to your partnered streamers.</td></tr>
+                <tr><td><code>ping_role</code></td><td>Role that gets pinged in live posts.</td></tr>
+                <tr><td><code>invite</code></td><td>Invite link to your Discord, used when the bot promotes your server.</td></tr>
+                <tr><td><code>auto_partner</code></td><td>On (default): streamers who sign up are active right away. Off: new streamers stay pending until Nani activates them for you.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p style="margin-top:14px">The bot answers with a permission check that only you can see. If something is missing, it tells you what, and nothing is saved until the check passes.</p>
+        </li>
+        <li>
+          <span class="num" aria-hidden="true">4</span>
+          <h3>Let your streamers sign up</h3>
+          <p>Send your streamers this link: <a href="https://deutsche-deadlock-community.de/twitch/guild-onboarding">deutsche-deadlock-community.de/twitch/guild-onboarding</a></p>
+          <ul>
+            <li>Log in with Twitch.</li>
+            <li>Log in with Discord. This proves they are a member of your server.</li>
+            <li>Pick your server from the list.</li>
+          </ul>
+          <p class="muted">With <code>auto_partner</code> on they are active immediately. Otherwise they stay pending; tell Nani who should be activated.</p>
+        </li>
+        <li>
+          <span class="num" aria-hidden="true">5</span>
+          <h3>Do a test stream</h3>
+          <p>Have one streamer go live in Deadlock. The post should show up in your announce channel within a few minutes. If not, send Nani your server name and the time of the stream.</p>
+        </li>
+      </ol>
+
+      <h2>If something goes wrong</h2>
+      <dl>
+        <dt>"You need Manage Server permission."</dt>
+        <dd>Only members with Manage Server or Administrator can run <code>/setup</code>.</dd>
+        <dt>"The channel is not in this server or the bot cannot view it…"</dt>
+        <dd>Give the bot View Channel, Send Messages and Embed Links in that channel, then run <code>/setup</code> again.</dd>
+        <dt>"The streamer role was not saved."</dt>
+        <dd>The bot's role sits below your streamer role. Move it up (step 2) and run <code>/setup</code> again.</dd>
+        <dt>"The ping role was not saved."</dt>
+        <dd>The role is not mentionable or sits above the bot's role. @everyone cannot be used as ping role.</dd>
+        <dt>A streamer does not see your server in the list</dt>
+        <dd>They have to be a member of your Discord with the same Discord account they log in with.</dd>
+      </dl>
+
+      <h2>Good to know</h2>
+      <ul>
+        <li>AI features stay off on partner servers. This is enforced by a database rule, not just a setting.</li>
+        <li>If a streamer leaves your Discord, their membership for your server ends automatically.</li>
+        <li>If you remove the bot, all memberships for your server end. Adding it back later does not restore them; streamers sign up again.</li>
+        <li>Streamers can be part of several communities at the same time.</li>
+      </ul>
+
+      <footer>
+        <p>Questions or feedback: message Nani on Discord. Run by the <a href="https://deutsche-deadlock-community.de/">Deutsche Deadlock Community</a>.</p>
+      </footer>
+    </main>
+  </body>
+</html>
