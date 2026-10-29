@@ -83,10 +83,7 @@ pub fn upload_wait_reason_kind(
     };
     let complete = !creds.access_token.trim().is_empty()
         && match platform {
-            "tiktok" => {
-                has_client_id(creds)
-                    && (has_scope(creds, "video.upload") || has_scope(creds, "video.publish"))
-            }
+            "tiktok" => has_client_id(creds) && has_scope(creds, "video.upload"),
             "youtube" => has_client_id(creds),
             "instagram" => creds
                 .platform_user_id
@@ -168,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn tiktok_needs_an_upload_or_publish_scope() {
+    fn tiktok_drafts_need_the_upload_scope() {
         let mut creds = SocialMediaCredentials {
             id: 1,
             platform: "tiktok".into(),
@@ -178,7 +175,7 @@ mod tests {
             client_id: Some("client".into()),
             client_secret: None,
             expires_at: None,
-            scopes: Some("user.info.basic".into()),
+            scopes: Some("user.info.basic,video.publish".into()),
             platform_user_id: None,
             platform_username: None,
         };
@@ -186,13 +183,6 @@ mod tests {
             upload_wait_reason_kind("tiktok", Some(&creds)),
             Some(UploadWaitReason::ConnectionIncomplete)
         );
-        creds.scopes = None;
-        assert_eq!(
-            upload_wait_reason_kind("tiktok", Some(&creds)),
-            Some(UploadWaitReason::ConnectionIncomplete)
-        );
-        creds.scopes = Some("user.info.basic,video.publish".into());
-        assert_eq!(upload_wait_reason_kind("tiktok", Some(&creds)), None);
         creds.scopes = Some("user.info.basic,video.upload".into());
         assert_eq!(upload_wait_reason_kind("tiktok", Some(&creds)), None);
     }

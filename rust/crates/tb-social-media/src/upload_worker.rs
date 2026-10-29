@@ -897,8 +897,8 @@ impl UploadWorker {
         )
         .await;
         for item in waiting {
-            match self.resolve_waiting(&item, cache).await {
-                Ok(()) => {
+            match self.resolve_upload(&item.platform, item.clip_db_id, cache).await {
+                Ok(_) => {
                     match sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'pending', last_error = NULL WHERE id = $1 AND status = 'waiting_connection'")
                         .bind(item.id).execute(&self.task.pool).await {
                         Ok(result) if result.rows_affected() == 1 => {
@@ -919,21 +919,6 @@ impl UploadWorker {
         }
     }
 
-    async fn resolve_waiting(
-        &self,
-        item: &UploadQueueItem,
-        cache: &mut HashMap<(String, i32), Option<Arc<dyn PlatformUploader>>>,
-    ) -> Result<(), crate::capabilities::UploadWaitReason> {
-        self.resolve_upload(&item.platform, item.clip_db_id, cache)
-            .await?;
-        if item.platform == "tiktok" {
-            self.resolve_tiktok_uploader(item)
-                .await
-                .map_err(|_| crate::capabilities::UploadWaitReason::ConnectionIncomplete)?;
-        }
-        Ok(())
-    }
-
     async fn resolve_tiktok_uploader(
         &self,
         item: &UploadQueueItem,
@@ -952,6 +937,10 @@ impl UploadWorker {
             .get_channel_credentials_for_id("tiktok", &user)
             .await
             .ok_or(UploadError::NotAuthenticated)?;
+        crate::uploaders::tiktok::draft_uploader(&credentials).map_err(|error| match error {
+            UploadError::NotStarted(cause) => *cause,
+            other => other,
+        })?;
         let title = post_title(item);
         let description = item.description.clone().unwrap_or_default();
         let hashtags = parse_hashtags(item.hashtags.as_deref());
@@ -1378,6 +1367,8 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
+            "CREATE TABLE social_media_autopilot_settings (twitch_user_id TEXT PRIMARY KEY, review_policy TEXT, pipeline_mode TEXT, publish_mode TEXT, tiktok_publishing JSONB NOT NULL DEFAULT '{}'::jsonb)",
+            "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB)",
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, twitch_user_id TEXT, enabled INTEGER DEFAULT 1, access_token_enc BYTEA, refresh_token_enc BYTEA, client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, platform_user_id TEXT, platform_username TEXT, enc_version INTEGER, authorized_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, custom_title TEXT, layout_override_json JSONB, streamer_login TEXT NOT NULL, twitch_user_id TEXT DEFAULT '42', local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
