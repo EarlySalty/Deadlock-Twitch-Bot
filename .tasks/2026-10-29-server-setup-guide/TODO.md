@@ -12,3 +12,11 @@ Gate (gpt-6.1-sol, 2026-10-29) BLOCKED because the runtime does not deliver what
 - Production: guild_runtime.enabled = false, only the home guild registered, Hub gateway never connected in 30 days.
 
 Continue: decide whether to build per-guild delivery (announce channel, ping role, language, alerts, roles) plus raid auth in onboarding, and enable the runtime. Then rewrite the guide against the real behavior and re-run gate-review.
+
+## Session register
+
+| Package | Thread | Creator | Model | Status | Branch |
+|---|---|---|---|---|---|
+| Multi-server A-E (sub-orchestrator) | mcp:45e98718-6eac-4a78-80cc-cc4870f715db | 3870f9b0-591b-40cd-b430-e09f1136613f | claude-opus-5-5 medium | started 2026-10-29 | orchestrator/multiserver-20261029 |
+
+Briefing: BRIEFING-multiserver.md. Guide rewrite waits for E and the user's activation decision.
