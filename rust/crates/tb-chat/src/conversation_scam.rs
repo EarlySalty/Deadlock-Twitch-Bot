@@ -172,6 +172,7 @@ pub struct DialogState {
     substantial_messages: usize,
     single_message_pitch: bool,
     contact_drop: bool,
+    hard_contact_drop: bool,
     is_first_global: bool,
     obfuscation_detected: bool,
     account_age_days: Option<i64>,
@@ -219,6 +220,7 @@ impl DialogState {
             substantial_messages: 0,
             single_message_pitch: false,
             contact_drop: false,
+            hard_contact_drop: false,
             is_first_global,
             obfuscation_detected: false,
             account_age_days,
@@ -244,6 +246,7 @@ impl DialogState {
             self.contact_drop = true;
             self.single_message_pitch = true;
         }
+        self.hard_contact_drop |= is_hard_contact_drop(&normalized.text);
         self.obfuscation_detected |= normalized.was_obfuscated;
         self.transcript.push(normalized.text.clone());
 
@@ -374,11 +377,75 @@ fn is_contact_drop(text: &str) -> bool {
         })
 }
 
+static NAMED_CONTACT_DROP: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    [
+        r"\b(?:i'?m|i\s+am|add\s+me)\s+@?(?P<handle>[a-z0-9_.]{3,})(?P<rest>)\s+on\s+(?:dis{1,2}cord|dc)\b",
+        r"\bmy\s+(?:dis{1,2}cord|dc)\s+(?:is|name\s+is)\s+@?(?P<handle>[a-z0-9_.]{3,})(?P<rest>\S*)",
+    ]
+    .iter()
+    .filter_map(|pattern| Regex::new(&format!("(?i){pattern}")).ok())
+    .collect()
+});
+
+const FILLER_WORDS: &[&str] = &[
+    "back",
+    "also",
+    "always",
+    "often",
+    "never",
+    "mostly",
+    "usually",
+    "still",
+    "here",
+    "there",
+    "active",
+    "online",
+    "offline",
+    "rarely",
+    "sometimes",
+    "mainly",
+    "only",
+    "just",
+    "live",
+    "currently",
+    "already",
+    "barely",
+    "hardly",
+    "available",
+];
+
+fn is_hard_contact_drop(text: &str) -> bool {
+    let handle_drop = CONTACT_DROP_HANDLE.iter().any(|pattern| {
+        pattern.captures_iter(text).any(|caps| {
+            looks_like_handle(&caps["handle"], caps["rest"].trim().is_empty())
+                && is_concrete_handle(&caps["handle"], &caps["rest"])
+        })
+    });
+    handle_drop
+        || NAMED_CONTACT_DROP.iter().any(|pattern| {
+            pattern
+                .captures_iter(text)
+                .any(|caps| is_concrete_handle(&caps["handle"], &caps["rest"]))
+        })
+}
+
+fn is_concrete_handle(handle: &str, rest: &str) -> bool {
+    let handle = handle.trim_end_matches('.').to_ascii_lowercase();
+    handle.len() >= 4
+        && handle.starts_with(|c: char| c.is_ascii_alphabetic())
+        && !is_invite_or_url(&handle, rest)
+        && !FILLER_WORDS.contains(&handle.as_str())
+}
+
+fn is_invite_or_url(handle: &str, rest: &str) -> bool {
+    handle.contains("discord")
+        || handle.starts_with("dsc.")
+        || handle.starts_with("www.")
+        || rest.starts_with('/')
+}
+
 fn looks_like_handle(handle: &str, is_last_token: bool) -> bool {
     let handle = handle.trim_end_matches('.');
-    if handle.to_ascii_lowercase().starts_with("discord.") {
-        return false;
-    }
     if handle
         .bytes()
         .any(|b| b.is_ascii_digit() || b == b'_' || b == b'.')
@@ -1343,10 +1410,12 @@ impl ConversationScamGuard {
                         }
                         return ("suggested".to_string(), true);
                     }
-                    if !crate::safe_list::is_safe(
-                        Some(&event.chatter_user_id),
-                        &event.chatter_user_login,
-                    ) {
+                    if verdict.category != CONTACT_DROP_RULE_CATEGORY
+                        && !crate::safe_list::is_safe(
+                            Some(&event.chatter_user_id),
+                            &event.chatter_user_login,
+                        )
+                    {
                         if let Err(error) = self
                             .store
                             .add_global_ban(
@@ -1391,13 +1460,15 @@ impl ConversationScamGuard {
     }
 }
 
+const CONTACT_DROP_RULE_CATEGORY: &str = "contact_drop_rule";
+
 fn is_known_new_account(account_age_days: Option<i64>) -> bool {
     matches!(account_age_days, Some(age_days) if (0..ACCOUNT_NEW_MAX_DAYS).contains(&age_days))
 }
 
 fn contact_drop_rule_verdict(settings: &GuardSettings, dialog: &DialogState) -> Option<Verdict> {
     if settings.mode != GuardMode::AutoBan
-        || !dialog.contact_drop
+        || !dialog.hard_contact_drop
         || !is_known_new_account(dialog.account_age_days)
     {
         return None;
@@ -1405,7 +1476,7 @@ fn contact_drop_rule_verdict(settings: &GuardSettings, dialog: &DialogState) -> 
     Some(Verdict {
         verdict: VerdictKind::Scam,
         confidence: 1.0,
-        category: "contact_drop".to_string(),
+        category: CONTACT_DROP_RULE_CATEGORY.to_string(),
         reasoning: "Erstschreiber mit neuem Konto wirft einen Discord-Kontakt in den Chat"
             .to_string(),
         pattern: None,
@@ -2265,9 +2336,45 @@ mod tests {
             "dc: bin gleich zurück",
             "dc: brb",
             "dc: gleich",
-            "Unser discord: discord.gg/SBRrArXjHf",
         ] {
             assert!(!is_contact_drop(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn harter_kontaktabwurf_braucht_einen_echten_handle() {
+        for text in [
+            "down to play sometimes, I'm cluthub on dc",
+            "On DC:novas8",
+            "Hey you good?? I enjoyed your stream and I would like to be a friend probably stream together if you don't mind linking up on dc.                  deenexus",
+            "dc: meydix_02",
+            "dc:   david_nek",
+            "On DISCORD.     itsveyro5",
+            "Komme nächstes Mal gerne mit Freunden wieder - Disscord: united_247",
+            "Add me on Discord:  zombie_141   haha",
+            "If you’re interested, add him on Discord :    laka_5 and tell him James sent you.",
+            "my dc is shadow.kid",
+        ] {
+            assert!(is_hard_contact_drop(text), "{text}");
+        }
+        for text in [
+            "add me on discord we can duo",
+            "Add me up on discord",
+            "dc: 3rd time today",
+            "dc: 10min weg",
+            "dc: brb",
+            "dc: bin gleich zurück",
+            "I'm back on dc",
+            "i'm always on dc",
+            "Unser discord: discord.gg/SBRrArXjHf",
+            "Unser discord: discordapp.com/invite/xyz",
+            "dc: dsc.gg/abc",
+            "dc: www.mysite.de",
+            "my discord is discord.gg/SBRrArXjHf",
+            "my dc is mysite.de/invite",
+            "gg ich geh jetzt off, sehen uns im dc",
+        ] {
+            assert!(!is_hard_contact_drop(text), "{text}");
         }
     }
 
@@ -2324,9 +2431,17 @@ mod tests {
         };
         assert!(contact_drop_rule_verdict(&alert_only, &dialog).is_none());
 
-        let mut harmless = DialogState::with_context(true, Some(0), 0, None, "c", "x");
-        harmless.push_user_message("gg ich geh jetzt off, sehen uns im dc");
-        assert!(contact_drop_rule_verdict(&auto_ban, &harmless).is_none());
+        for text in [
+            "gg ich geh jetzt off, sehen uns im dc",
+            "add me on discord we can duo",
+        ] {
+            let mut harmless = DialogState::with_context(true, Some(0), 0, None, "c", "x");
+            harmless.push_user_message(text);
+            assert!(
+                contact_drop_rule_verdict(&auto_ban, &harmless).is_none(),
+                "{text}"
+            );
+        }
     }
 
     fn verdict(kind: VerdictKind, confidence: f32) -> Verdict {
