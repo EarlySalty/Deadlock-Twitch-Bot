@@ -3533,6 +3533,12 @@ fn revision_summary_lists_only_the_real_plan_difference() {
         summary(&nothing_left),
         "Geändert: Untertitel ausgeblendet, Titel „Dunked on her ahh“ entfernt und Kanalname ausgeblendet."
     );
+    let mut shown_again = nothing_left.clone();
+    shown_again.channel_credit = Default::default();
+    assert_eq!(
+        revision_summary(&nothing_left, &shown_again, title, 512),
+        "Geändert: Kanalname als @Name eingeblendet."
+    );
 }
 
 #[test]

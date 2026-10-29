@@ -634,7 +634,10 @@ fn zoom_change(base: &Planning, next: &Planning) -> Option<String> {
 
 fn credit_changes(base: ChannelCredit, next: ChannelCredit) -> Vec<String> {
     let mut changes = Vec::new();
-    if base.position != next.position && next.label != CreditLabel::Hidden {
+    if base.position != next.position
+        && base.label != CreditLabel::Hidden
+        && next.label != CreditLabel::Hidden
+    {
         changes.extend([format!(
             "Kanalname nach {} verschoben",
             credit_position_label(next.position)
@@ -678,6 +681,7 @@ pub(super) fn revision_summary(
 ) -> String {
     let only_channel_left = !next.subtitles_enabled
         && next.overlay_title.resolve(clip_title).trim().is_empty()
+        && base.channel_credit.label != CreditLabel::Hidden
         && next.channel_credit.label != CreditLabel::Hidden;
     let length = (cut_identity(&base.plan) != cut_identity(&next.plan))
         .then(|| format!("jetzt {} s lang", seconds(output_ms(&next.plan))));
