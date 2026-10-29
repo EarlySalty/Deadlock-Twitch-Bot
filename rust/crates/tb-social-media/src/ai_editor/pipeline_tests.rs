@@ -3495,7 +3495,7 @@ fn revision_summary_lists_only_the_real_plan_difference() {
     assert!(changes_output(&base, &no_text, title));
     assert_eq!(
         summary(&no_text),
-        "Geändert: Untertitel ausgeblendet und Titel „Dunked on her ahh“ entfernt. Der Kanalname bleibt als Quellenangabe eingeblendet."
+        "Geändert: Untertitel ausgeblendet und Titel „Dunked on her ahh“ entfernt. Der Kanalname bleibt weiterhin eingeblendet."
     );
     let title_only = revised(&base, true, json!({ "mode": "none", "text": null }));
     assert_eq!(
@@ -3511,15 +3511,27 @@ fn revision_summary_lists_only_the_real_plan_difference() {
     );
     assert_eq!(
         revision_summary(&no_text, &resized_hidden, title, 512),
-        "Am Video wurde nichts geändert. Der Kanalname bleibt als Quellenangabe eingeblendet."
+        "Am Video wurde nichts geändert. Der Kanalname bleibt weiterhin eingeblendet."
     );
     assert_eq!(
         revision_summary(&base, &no_text, title, 108),
-        "Geändert: Untertitel ausgeblendet und Titel geändert. Der Kanalname bleibt als Quellenangabe eingeblendet."
+        "Geändert: Untertitel ausgeblendet und Titel geändert. Der Kanalname bleibt weiterhin eingeblendet."
     );
     assert_eq!(
         revision_summary(&base, &no_text, title, 60),
         "Geändert: Untertitel ausgeblendet und Titel geändert."
+    );
+    let mut credit_hidden = base.clone();
+    credit_hidden.channel_credit =
+        serde_json::from_value(json!({ "position": "top_center", "label": "hidden" }))
+            .expect("hidden credit");
+    assert!(changes_output(&base, &credit_hidden, title));
+    assert_eq!(summary(&credit_hidden), "Geändert: Kanalname ausgeblendet.");
+    let mut nothing_left = no_text.clone();
+    nothing_left.channel_credit = credit_hidden.channel_credit;
+    assert_eq!(
+        summary(&nothing_left),
+        "Geändert: Untertitel ausgeblendet, Titel „Dunked on her ahh“ entfernt und Kanalname ausgeblendet."
     );
 }
 
@@ -3539,8 +3551,8 @@ fn revision_summary_stays_valid_for_every_limit_and_title() {
         "Geändert: Titel „Erste Zeile zweite Zeile“ entfernt."
     );
     let unchanged = [
-        "Am Video wurde nichts geändert. Der Kanalname bleibt als Quellenangabe eingeblendet.",
-        "Nichts geändert. Der Kanalname bleibt als Quellenangabe eingeblendet.",
+        "Am Video wurde nichts geändert. Der Kanalname bleibt weiterhin eingeblendet.",
+        "Nichts geändert. Der Kanalname bleibt weiterhin eingeblendet.",
         "Am Video wurde nichts geändert.",
         "Nichts geändert.",
     ];
@@ -3620,6 +3632,16 @@ fn disabled_captions_render_without_speech_burn_in() {
             && dialogue[0].contains(",Channel,")
             && dialogue[0].ends_with("@luckymakkydead"),
         "{dialogue:?}"
+    );
+    let mut hidden = revised(&base, false, json!({ "mode": "none", "text": null }));
+    hidden.channel_credit =
+        serde_json::from_value(json!({ "position": "top_center", "label": "hidden" }))
+            .expect("hidden credit");
+    let hidden = ass(&hidden);
+    assert!(
+        !hidden.lines().any(|line| line.starts_with("Dialogue:"))
+            && !hidden.contains("luckymakkydead"),
+        "{hidden}"
     );
 }
 

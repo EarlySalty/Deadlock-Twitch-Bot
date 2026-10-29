@@ -99,7 +99,7 @@ const FRAME_DESCRIPTION: &str = "Picture of the vertical 9:16 video. The output 
 
 const ZOOM_DESCRIPTION: &str = "Only used when frame is fill; previous frame full counts as zoom_percent 0. 100 fills the whole 9:16 frame and cuts the sides of the game picture. Lower values zoom out step by step and show more of the sides with blurred bars above and below; 0 equals the complete picture. A little more out lowers the previous value by about 20, much more out by about 40; a little more in raises it by about 20. Keep previous.zoom_percent (100 when absent) unless the feedback asks for zoom. At 0 or full a further zoom out is impossible: keep previous.frame and say so in impact. Use 100 for a new edit.";
 
-const CREDIT_DESCRIPTION: &str = "The small channel name burned in as source credit for the whole video. It cannot be removed, only moved or relabelled. position places it: bottom_left (default), bottom_right, top_left, top_center or top_right. label handle shows @channel, label twitch shows Twitch: @channel. A request to remove it and show it elsewhere means moving it; say in impact that it stays as source credit. Keep previous.channel_credit (bottom_left and handle when absent) unless the feedback asks to move or relabel the channel name.";
+const CREDIT_DESCRIPTION: &str = "The small channel name burned in for the whole video. position: bottom_left (default), bottom_right, top_left, top_center or top_right. label handle shows @channel, twitch shows Twitch: @channel, hidden removes it. Removing or hiding the channel name or @name means hidden; removing it and showing it elsewhere means moving it. Keep previous.channel_credit (bottom_left and handle when absent) unless the feedback names the channel name.";
 
 pub(super) const ZOOM_MIN_PERCENT: u8 = 0;
 pub(super) const ZOOM_MAX_PERCENT: u8 = 100;
@@ -125,6 +125,7 @@ pub(super) enum CreditLabel {
     #[default]
     Handle,
     Twitch,
+    Hidden,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,13 +138,11 @@ pub(super) struct ChannelCredit {
 impl ChannelCredit {
     pub fn render(self, login: &str) -> crate::subtitles::ChannelCredit {
         let handle = login.trim().trim_start_matches('@');
-        let text = if handle.is_empty() {
-            String::new()
-        } else {
-            match self.label {
-                CreditLabel::Handle => format!("@{handle}"),
-                CreditLabel::Twitch => format!("Twitch: @{handle}"),
-            }
+        let text = match self.label {
+            _ if handle.is_empty() => String::new(),
+            CreditLabel::Handle => format!("@{handle}"),
+            CreditLabel::Twitch => format!("Twitch: @{handle}"),
+            CreditLabel::Hidden => String::new(),
         };
         let position = match self.position {
             CreditPosition::BottomLeft => crate::subtitles::CreditAnchor::BottomLeft,
@@ -307,7 +306,7 @@ pub(super) fn planning_schema(
     }));
     let frame = json!({ "type": "string", "enum": ["layout", "fill", "full"], "description": FRAME_DESCRIPTION });
     let zoom = json!({ "type": "integer", "minimum": ZOOM_MIN_PERCENT, "maximum": ZOOM_MAX_PERCENT, "description": ZOOM_DESCRIPTION });
-    let credit = json!({ "type": "object", "additionalProperties": false, "description": CREDIT_DESCRIPTION, "required": ["position", "label"], "properties": { "position": { "type": "string", "enum": ["bottom_left", "bottom_right", "top_left", "top_center", "top_right"] }, "label": { "type": "string", "enum": ["handle", "twitch"] } } });
+    let credit = json!({ "type": "object", "additionalProperties": false, "description": CREDIT_DESCRIPTION, "required": ["position", "label"], "properties": { "position": { "type": "string", "enum": ["bottom_left", "bottom_right", "top_left", "top_center", "top_right"] }, "label": { "type": "string", "enum": ["handle", "twitch", "hidden"] } } });
     let variant = object(
         json!({"plan":plan.clone(),"platforms":object(json!({"youtube":copy.clone(),"tiktok":copy.clone(),"instagram":copy.clone()})),"subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140},"subtitles_enabled":{"type":"boolean"},"frame":frame.clone(),"zoom_percent":zoom.clone(),"channel_credit":credit.clone(),"overlay_title":overlay.clone()}),
     );

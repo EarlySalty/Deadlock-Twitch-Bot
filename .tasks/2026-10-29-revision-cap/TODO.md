@@ -30,3 +30,8 @@
 - Live dashboard bundle (SocialMediaManager chunk) contains the counter string, the used-up message and the revisions_left decoder.
 - Lucky root 159: 5 non-failed and 5 failed children, so the live API now reports 15 left (the earlier estimate of 12 counted children that have since failed).
 - Open: UI check on the throwaway owner needs a dashboard login (no stored session); covered by fixture screenshots on the follow-up branch.
+
+## Channel name removable (2026-10-29)
+- Lucky asked three times (jobs 169, 170, 172) to remove "@luckymakkydead"; the planner refused because the channel credit was declared non-removable source credit (our own branding choice from 2026-09-29, not a legal requirement).
+- Change: channel_credit.label gains `hidden`; render emits no channel line; summary "Kanalname ausgeblendet"; "no text" still leaves the name unless it is named.
+- Live proof: Lucky (or throwaway) asks "remove @name"; new job's revision_proposal summary contains "Kanalname ausgeblendet" and the new produced video has no channel line.
