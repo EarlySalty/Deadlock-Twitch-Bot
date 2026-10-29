@@ -214,8 +214,8 @@ pub struct CrewRadarAlert {
     pub notify_only: bool,
 }
 
-/// Timeout-Dauer bei AI-bestätigtem Spam: 24h — bewusst reversibel statt Ban,
-/// damit ein Judge-Fehlurteil gegen echte Viewer per Button korrigierbar bleibt.
+/// Timeout-Dauer bei AI-bestätigtem Spam ohne Scam-Pitch: 24h, reversibel per Button.
+/// Ein von der KI bestätigter Scam-Pitch führt dagegen zum dauerhaften Ban.
 const AI_SPAM_TIMEOUT_SECS: u32 = 24 * 60 * 60;
 const BAN_REASON_SCAM_PITCH: &str = "Automatischer Ban: Scam-Pitch, von der KI bestätigt";
 
@@ -1030,8 +1030,8 @@ impl ChatPipeline {
         }
 
         // Schritt 6: Scam-Pitch (Z. 1597–1601) — Detektor sendet Chat-Warnung intern.
-        // Wie Python wird NIE gelöscht; ein Timeout erfolgt nur bei Eskalation
-        // (StrongTimeout). Erst-Warnung (StrongWarn/PublicWarn) ist nicht-destruktiv.
+        // Der Detektor selbst löscht nie und timeoutet nur bei Eskalation (StrongTimeout).
+        // Bestätigt der Judge danach den Scam-Pitch, folgt der dauerhafte Ban.
         let mut scam_punished = false;
         let mut scam_pitch_hit = false;
         if mod_settings.scam_pitch_enabled {
@@ -1659,7 +1659,7 @@ impl ChatPipeline {
     }
 
     /// Verdachtsfall (Score 1–2): Judge fragen, bei Spam-Urteil handeln
-    /// (Nachricht löschen + 24h-Timeout, reversibel), und in JEDEM Fall genau
+    /// (Nachricht löschen + 24h-Timeout, bei Scam-Pitch dauerhafter Ban), und in JEDEM Fall genau
     /// einen Alert mit Urteil, Begründung und Aktion schicken.
     /// `safe_wording`: der Text trug ein harmloses Umgangssprache-Muster und als
     /// einziges Spam-Signal den weichen Viewer-Regex. Der Judge urteilt trotzdem,

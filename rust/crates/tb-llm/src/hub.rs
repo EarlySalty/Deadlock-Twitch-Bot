@@ -803,9 +803,10 @@ async fn send_openai_compatible(
     finish(response).await
 }
 
-const ANTHROPIC_DEFAULT_MAX_TOKENS: i64 = 1024;
+const ANTHROPIC_DEFAULT_MAX_TOKENS: i64 = 4096;
 
 fn anthropic_body(endpoint: &LlmEndpoint, request: &Request) -> Value {
+    melde_verworfene_anthropic_parameter(request);
     let system: Vec<&str> = request
         .system
         .iter()
@@ -835,6 +836,34 @@ fn anthropic_body(endpoint: &LlmEndpoint, request: &Request) -> Value {
     body
 }
 
+fn melde_verworfene_anthropic_parameter(request: &Request) {
+    let verworfen: Vec<&str> = [
+        ("temperature", request.temperature.is_some()),
+        ("json_object", request.json_object),
+        ("reasoning_off", request.reasoning_off),
+    ]
+    .into_iter()
+    .filter_map(|(name, gesetzt)| gesetzt.then_some(name))
+    .collect();
+    if !verworfen.is_empty() {
+        tracing::debug!(
+            parameter = verworfen.join(","),
+            "Anthropic Messages API: nicht unterstützte Anfrageparameter verworfen"
+        );
+    }
+}
+
+fn anthropic_finish_reason(payload: &Value) -> &'static str {
+    match payload.get("stop_reason").and_then(Value::as_str) {
+        Some("max_tokens") => {
+            tracing::warn!("Anthropic-Antwort an max_tokens abgeschnitten");
+            "length"
+        }
+        Some(_) => "stop",
+        None => "",
+    }
+}
+
 fn anthropic_als_openai(payload: Value) -> Value {
     let text: String = payload
         .get("content")
@@ -855,7 +884,10 @@ fn anthropic_als_openai(payload: Value) -> Value {
             .unwrap_or(Value::Null)
     };
     let mut result = serde_json::json!({
-        "choices": [{"message": {"role": "assistant", "content": text}}],
+        "choices": [{
+            "message": {"role": "assistant", "content": text},
+            "finish_reason": anthropic_finish_reason(&payload),
+        }],
         "usage": {
             "prompt_tokens": token("input_tokens"),
             "completion_tokens": token("output_tokens"),
@@ -1187,8 +1219,15 @@ mod tests {
         let antwort = anthropic_als_openai(serde_json::json!({
             "id": "msg_1",
             "content": [{"type": "text", "text": "{\"is_spam\":true}"}],
+            "stop_reason": "end_turn",
             "usage": {"input_tokens": 12, "output_tokens": 5},
         }));
+        assert_eq!(antwort["choices"][0]["finish_reason"], "stop");
+        let abgeschnitten = anthropic_als_openai(serde_json::json!({
+            "content": [{"type": "text", "text": "{\"is_spam\""}],
+            "stop_reason": "max_tokens",
+        }));
+        assert_eq!(abgeschnitten["choices"][0]["finish_reason"], "length");
         assert_eq!(extract_openai_text(&antwort, false), "{\"is_spam\":true}");
         assert_eq!(antwort["usage"]["prompt_tokens"], 12);
         assert_eq!(antwort["usage"]["completion_tokens"], 5);

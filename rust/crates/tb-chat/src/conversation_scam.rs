@@ -341,10 +341,20 @@ fn is_substantial(text: &str) -> bool {
     words >= 4 && text.chars().count() >= 18
 }
 
+static CONTACT_DROP_HANDLE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    [
+        r"\b(?:dis{1,2}cord|dc)\s*[:：]\s*@?(?P<handle>[a-z0-9_.]{3,})(?P<rest>.*)$",
+        r"\bon\s+(?:dis{1,2}cord|dc)\s*[.:,]\s*@?(?P<handle>[a-z0-9_.]{3,})(?P<rest>.*)$",
+    ]
+    .iter()
+    .filter_map(|pattern| Regex::new(&format!("(?i){pattern}")).ok())
+    .collect()
+});
+
+const NO_HANDLE_WORDS: &[&str] = &["gleich", "later", "spaeter", "offline", "online", "kurz"];
+
 static CONTACT_DROP: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
-        r"\b(?:dis{1,2}cord|dc)\s*[:：]\s*@?[a-z0-9_.]{3,}",
-        r"\bon\s+(?:dis{1,2}cord|dc)\s*[.:,]\s*@?[a-z0-9_.]{3,}",
         r"\b(?:i'?m|i\s+am|add\s+me)\s+@?[a-z0-9_.]{3,}\s+on\s+(?:dis{1,2}cord|dc)\b",
         r"\badd\s+me\s+(?:up\s+)?on\s+(?:dis{1,2}cord|dc)\b",
         r"\blink(?:ing)?\s+up\s+on\s+(?:dis{1,2}cord|dc)\b",
@@ -357,6 +367,24 @@ static CONTACT_DROP: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 
 fn is_contact_drop(text: &str) -> bool {
     CONTACT_DROP.iter().any(|pattern| pattern.is_match(text))
+        || CONTACT_DROP_HANDLE.iter().any(|pattern| {
+            pattern
+                .captures_iter(text)
+                .any(|caps| looks_like_handle(&caps["handle"], caps["rest"].trim().is_empty()))
+        })
+}
+
+fn looks_like_handle(handle: &str, is_last_token: bool) -> bool {
+    let handle = handle.trim_end_matches('.');
+    if handle
+        .bytes()
+        .any(|b| b.is_ascii_digit() || b == b'_' || b == b'.')
+    {
+        return true;
+    }
+    is_last_token
+        && handle.len() >= 5
+        && !NO_HANDLE_WORDS.contains(&handle.to_ascii_lowercase().as_str())
 }
 
 fn is_single_message_pitch(text: &str) -> bool {
@@ -1113,7 +1141,9 @@ impl ConversationScamGuard {
         let enforcement_threshold =
             dialog_enforcement_threshold(&settings, dialog.account_age_days, dialog.contact_drop);
         let regular_threshold = settings.threshold.max(settings.suggestion_floor);
-        let threshold_source = if dialog.contact_drop && settings.mode == GuardMode::AutoBan {
+        let curve_threshold =
+            effective_scam_enforcement_threshold(&settings, dialog.account_age_days);
+        let threshold_source = if enforcement_threshold < curve_threshold {
             "contact_drop"
         } else if enforcement_threshold < regular_threshold {
             "young_account_curve"
@@ -1360,10 +1390,11 @@ fn dialog_enforcement_threshold(
     account_age_days: Option<i64>,
     contact_drop: bool,
 ) -> f32 {
+    let curve = effective_scam_enforcement_threshold(settings, account_age_days);
     if contact_drop && settings.mode == GuardMode::AutoBan {
-        return settings.suggestion_floor;
+        return settings.suggestion_floor.min(curve);
     }
-    effective_scam_enforcement_threshold(settings, account_age_days)
+    curve
 }
 
 fn effective_scam_enforcement_threshold(
@@ -2195,6 +2226,7 @@ mod tests {
             "Hey you good?? I enjoyed your stream and I would like to be a friend probably stream together if you don't mind linking up on dc. deenexus",
             "add me on discord we can duo",
             "my dc is shadow.kid",
+            "dc: meydix_02",
         ] {
             assert!(is_contact_drop(text), "{text}");
         }
@@ -2203,6 +2235,9 @@ mod tests {
             "bin grad dc gegangen, internet spinnt",
             "hey, bist du auch auf dem deadlock community discord?",
             "der dc server ist echt nice",
+            "dc: bin gleich zurück",
+            "dc: brb",
+            "dc: gleich",
         ] {
             assert!(!is_contact_drop(text), "{text}");
         }

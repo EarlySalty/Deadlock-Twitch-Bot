@@ -29,6 +29,9 @@ pub struct LlmEndpoint {
 /// Der Anbieter und die Flash-Familie sind zentral per YAML festgelegt.
 /// `use_case` bleibt für Ledger und Warnungen erhalten.
 pub fn endpoint_for(use_case: &str) -> LlmEndpoint {
+    if FIREWORKS_ONLY_USE_CASES.contains(&use_case) {
+        return fireworks_endpoint();
+    }
     if let Some(endpoint) = anthropic_endpoint() {
         return endpoint;
     }
@@ -55,11 +58,19 @@ fn valid_anthropic_model(model: &str) -> bool {
 }
 
 fn anthropic_endpoint() -> Option<LlmEndpoint> {
-    configured_anthropic_model().map(|model| LlmEndpoint {
+    let model = configured_anthropic_model()?;
+    let Some(api_key) = crate::keys::anthropic_api_key() else {
+        static GEWARNT: OnceLock<()> = OnceLock::new();
+        GEWARNT.get_or_init(|| {
+            warn!("Anthropic als zentraler LLM-Anbieter gesetzt, aber ANTHROPIC_API_KEY fehlt; Rückfall auf Fireworks");
+        });
+        return None;
+    };
+    Some(LlmEndpoint {
         provider: ANTHROPIC_PROVIDER,
         base_url: ANTHROPIC_BASE_URL.to_string(),
         model,
-        api_key: crate::keys::anthropic_api_key(),
+        api_key: Some(api_key),
     })
 }
 
@@ -181,6 +192,40 @@ mod tests {
         }
         std::env::set_var(CENTRAL_MODEL_VAR, "gpt-5");
         assert_eq!(endpoint_for("spam_judge").provider, "fireworks");
+        clear();
+    }
+
+    #[test]
+    fn fireworks_only_faelle_bleiben_bei_zentraler_anthropic_wahl_auf_fireworks() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear();
+        std::env::set_var("ANTHROPIC_API_KEY", "a-key");
+        std::env::set_var("FIREWORK_API_KEY", "f-key");
+        std::env::set_var(CENTRAL_PROVIDER_VAR, "anthropic");
+        std::env::set_var(CENTRAL_MODEL_VAR, "claude-haiku-5-5");
+        for use_case in FIREWORKS_ONLY_USE_CASES {
+            let endpoint = endpoint_for(use_case);
+            assert_eq!(endpoint.provider, "fireworks");
+            assert_eq!(endpoint.model, configured_fireworks_model());
+        }
+        assert_eq!(endpoint_for("spam_judge").provider, ANTHROPIC_PROVIDER);
+        clear();
+    }
+
+    #[test]
+    fn anthropic_ohne_schluessel_faellt_auf_fireworks_zurueck() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear();
+        std::env::set_var("FIREWORK_API_KEY", "f-key");
+        std::env::set_var(CENTRAL_PROVIDER_VAR, "anthropic");
+        std::env::set_var(CENTRAL_MODEL_VAR, "claude-haiku-5-5");
+        let chain = endpoint_chain("spam_judge");
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].provider, "fireworks");
         clear();
     }
 
