@@ -386,14 +386,18 @@ pub fn fill_layout() -> StreamerLayout {
 
 pub const FIT_MODE: &str = "fit";
 
-pub fn fill_layout_zoomed(zoom_percent: u8) -> StreamerLayout {
+pub fn fill_layout_zoomed(zoom_percent: u8, source: LayoutSource) -> StreamerLayout {
     let zoom = i64::from(zoom_percent.min(100));
-    if zoom == 100 {
-        return fill_layout();
-    }
     let mut layout = fill_layout();
+    if zoom == 100 || source.width < 2 || source.height < 2 {
+        return layout;
+    }
+    layout.source = source;
     let full = layout.source.width;
     let narrow = layout.source.height * TARGET_WIDTH / TARGET_HEIGHT;
+    if narrow >= full {
+        return fill_layout();
+    }
     let width = (narrow + (full - narrow) * (100 - zoom) / 100).clamp(narrow, full) / 2 * 2;
     layout.game_crop = LayoutBox {
         x: (full - width) / 2,
@@ -1150,6 +1154,47 @@ mod tests {
         assert_eq!(
             get_clip_effective_layout(&pool, clip).await,
             no_layout_fallback()
+        );
+    }
+
+    #[test]
+    fn zoomed_fill_widens_the_crop_from_the_real_source() {
+        for (width, height) in [(1920, 1080), (1440, 1080), (1280, 720), (2560, 1080)] {
+            let source = LayoutSource { width, height };
+            let narrow = height * TARGET_WIDTH / TARGET_HEIGHT;
+            let mut previous = narrow;
+            for zoom in [99, 80, 50, 0] {
+                let layout = fill_layout_zoomed(zoom, source);
+                assert_eq!(layout.mode, FIT_MODE);
+                assert_eq!((layout.source.width, layout.source.height), (width, height));
+                let crop = layout.game_crop;
+                assert!(
+                    crop.w >= previous && crop.w <= width,
+                    "{width}x{height} zoom {zoom}"
+                );
+                assert_eq!(crop.x * 2 + crop.w, width - width % 2);
+                previous = crop.w;
+            }
+        }
+        assert_eq!(
+            fill_layout_zoomed(
+                100,
+                LayoutSource {
+                    width: 1440,
+                    height: 1080
+                }
+            ),
+            fill_layout()
+        );
+        assert_eq!(
+            fill_layout_zoomed(
+                50,
+                LayoutSource {
+                    width: 1080,
+                    height: 1920
+                }
+            ),
+            fill_layout()
         );
     }
 }

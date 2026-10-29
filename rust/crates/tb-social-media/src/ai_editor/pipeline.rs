@@ -1091,13 +1091,17 @@ fn render_layout(
     stored: Option<&Value>,
     frame: FrameFormat,
     zoom_percent: u8,
+    media: &MediaInfo,
 ) -> Result<Option<StreamerLayout>, AiEditorError> {
     match frame {
         FrameFormat::Layout => stored
             .map(|value| StreamerLayout::from_stored_value(value, None, None))
             .transpose()
             .map_err(|_| AiEditorError::Source),
-        FrameFormat::Fill => Ok(Some(crate::layout::fill_layout_zoomed(zoom_percent))),
+        FrameFormat::Fill => Ok(Some(crate::layout::fill_layout_zoomed(
+            zoom_percent,
+            clip_source(media),
+        ))),
         FrameFormat::Full => Ok(None),
     }
 }
@@ -1748,7 +1752,12 @@ async fn render_one(
         )
         .await
         .map_err(|error| render_failure(ctx.identity, "prepare_intervals", &error))?;
-        let layout = render_layout(frozen.layout.as_ref(), result.frame, result.zoom_percent)?;
+        let layout = render_layout(
+            frozen.layout.as_ref(),
+            result.frame,
+            result.zoom_percent,
+            &frozen.media,
+        )?;
         let mapped = subtitles(ctx.checkpoints, &validated, runtime)?;
         let cam_height = layout
             .as_ref()
@@ -1924,6 +1933,7 @@ async fn validate_one(
         frozen.layout.as_ref(),
         planning.frame,
         planning.zoom_percent,
+        &frozen.media,
     )?;
     let cam_height = layout
         .as_ref()
