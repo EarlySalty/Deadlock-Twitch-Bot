@@ -186,6 +186,8 @@ pub struct OptionsInput {
     publish_language: Option<tb_social_media::autopilot_settings::PublishLanguage>,
     #[serde(default)]
     frame_format: Option<tb_social_media::autopilot_settings::FrameFormat>,
+    #[serde(default)]
+    auto_cam: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -338,6 +340,7 @@ pub async fn options_put(
         experimental_ai_layout: input.experimental_ai_layout,
         publish_language: input.publish_language.unwrap_or(current.publish_language),
         frame_format: input.frame_format.unwrap_or(current.frame_format),
+        auto_cam: input.auto_cam.unwrap_or(current.auto_cam),
     };
     Ok(Json(json!(
         ai_editor::options::save(&pool, &owner, options).await?

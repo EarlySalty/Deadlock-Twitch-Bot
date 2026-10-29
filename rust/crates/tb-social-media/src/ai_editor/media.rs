@@ -443,6 +443,83 @@ pub async fn extract_frames(
     })
 }
 
+pub fn still_positions(duration_ms: u64, count: usize) -> Vec<u64> {
+    let slots = count as u64 + 1;
+    (1..=count as u64)
+        .map(|index| duration_ms.saturating_mul(index) / slots)
+        .collect()
+}
+
+async fn write_still(
+    path: &Path,
+    output: &Path,
+    at_ms: u64,
+    limits: &ResourceLimits,
+) -> Result<(), EditorError> {
+    let mut failure = EditorError::new(ErrorCode::ProcessFailed);
+    for quality in CONTACT_SHEET_QUALITIES {
+        let mut command = bounded_ffmpeg_command("ffmpeg", limits.max_frame_bytes);
+        command
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+            .args(["-threads", &limits.encoder_threads.to_string()])
+            .arg("-ss")
+            .arg(format_time(at_ms))
+            .arg("-i")
+            .arg(path)
+            .args(["-an", "-vf"])
+            .arg(format!("scale='min({},iw)':-2", limits.frame_width))
+            .args(["-frames:v", "1", "-q:v"])
+            .arg(quality.to_string())
+            .args(["-y"])
+            .arg(output);
+        match run_status(command, limits.process_deadline_ms).await {
+            Ok(()) => match check_output(output, limits.max_frame_bytes) {
+                Ok(()) => return Ok(()),
+                Err(error) => failure = error,
+            },
+            Err(error) if error.code == ErrorCode::ProcessDeadline => return Err(error),
+            Err(error) => failure = error,
+        }
+    }
+    Err(failure)
+}
+
+pub async fn extract_stills(
+    source_root: &Path,
+    input: &Path,
+    workspace_root: &Path,
+    limits: &ResourceLimits,
+    count: usize,
+) -> Result<FrameBatch, EditorError> {
+    check_resources(limits)?;
+    if count == 0 || count > limits.max_frames {
+        return Err(EditorError::new(ErrorCode::InvalidLimits));
+    }
+    let path = source_path(source_root, input, limits.max_source_bytes)?;
+    let info = probe_path(&path, limits).await?;
+    let owned = make_temp_directory(workspace_root)?;
+    let positions = still_positions(info.duration_ms, count);
+    tokio::time::timeout(
+        Duration::from_millis(limits.total_frames_deadline_ms),
+        async {
+            for (index, at_ms) in positions.iter().enumerate() {
+                let output = owned.0.join(format!("frame-{index:04}.jpg"));
+                write_still(&path, &output, *at_ms, limits).await?;
+                if !has_jpeg_magic(&output).await? {
+                    return Err(EditorError::new(ErrorCode::InvalidMedia));
+                }
+            }
+            Ok(())
+        },
+    )
+    .await
+    .map_err(|_| EditorError::new(ErrorCode::ProcessDeadline))??;
+    Ok(FrameBatch {
+        owned,
+        timestamps_ms: positions,
+    })
+}
+
 pub const AUDIO_LEVEL_STEP_MS: u64 = 250;
 const AUDIO_LEVEL_SAMPLE_RATE: u64 = 8000;
 const AUDIO_LEVEL_FLOOR_DBFS: f64 = -90.0;

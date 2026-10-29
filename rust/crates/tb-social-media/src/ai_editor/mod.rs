@@ -8,6 +8,7 @@ mod model;
 mod observation;
 pub mod options;
 mod pipeline;
+mod scene;
 pub mod revision;
 pub mod runtime_config;
 mod service;
@@ -18,7 +19,7 @@ mod stage_contract;
 mod validation;
 
 pub use media::{
-    audio_levels, contact_sheet_grid, extract_frames, inspect_media, prepare_intervals,
+    audio_levels, contact_sheet_grid, extract_frames, extract_stills, inspect_media, prepare_intervals,
     render_prepared, AudioLevels, FrameBatch, MediaInfo, PreparedMedia, MAX_CONTACT_SHEET_FPS,
 };
 pub use model::{

@@ -484,13 +484,14 @@ async fn prepare(ctx: &StageContext<'_>) -> Result<StageCheckpoint, AiEditorErro
             text: skill.text,
         });
     }
+    let (layout, scene) = scene_layout(ctx, &settings, &source).await;
     let frozen = PreparingSnapshot {
         source: identity,
         media: media.clone(),
         configuration: ctx.current.configuration.clone(),
         skills,
-        layout: source.layout,
-        publication: json!({ "language": settings.publish_language, "template": source.template, "multi_output_enabled": settings.multi_output_enabled, "experimental_ai_layout": settings.experimental_ai_layout, "frame_format": settings.ai_frame_format }),
+        layout,
+        publication: json!({ "language": settings.publish_language, "template": source.template, "multi_output_enabled": settings.multi_output_enabled, "experimental_ai_layout": settings.experimental_ai_layout, "frame_format": settings.ai_frame_format, "auto_cam": scene }),
     };
     let _ = frozen.runtime(ctx.current)?;
     let snapshot = serde_json::to_value(frozen)
@@ -510,6 +511,37 @@ async fn prepare(ctx: &StageContext<'_>) -> Result<StageCheckpoint, AiEditorErro
         original_duration_ms: i64::try_from(media.duration_ms).ok(),
         snapshot,
     })
+}
+
+async fn scene_layout(
+    ctx: &StageContext<'_>,
+    settings: &autopilot_settings::AutopilotSettings,
+    source: &super::source::SourceRecord,
+) -> (Option<Value>, Value) {
+    if !settings.ai_auto_cam
+        || settings.ai_frame_format != autopilot_settings::FrameFormat::Layout
+        || source.layout_is_override
+    {
+        return (source.layout.clone(), Value::Null);
+    }
+    match super::scene::detect(
+        ctx.pool,
+        ctx.owner,
+        ctx.identity.namespace(),
+        ctx.current,
+        &source.path,
+    )
+    .await
+    {
+        Ok(scene) => match super::scene::adapt(source.layout.as_ref(), &scene) {
+            Some(layout) => (Some(layout), scene.record(true)),
+            None => (source.layout.clone(), scene.record(false)),
+        },
+        Err(error) => {
+            tracing::warn!(error = %error, "Social AI cam detection failed, keeping stored layout");
+            (source.layout.clone(), json!({ "failed": true }))
+        }
+    }
 }
 
 fn segment_ms(seconds: f64) -> Result<i64, AiEditorError> {

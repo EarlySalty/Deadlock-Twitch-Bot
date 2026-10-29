@@ -138,6 +138,7 @@ pub struct AutopilotSettings {
     pub experimental_ai_layout: bool,
     pub publish_language: PublishLanguage,
     pub ai_frame_format: FrameFormat,
+    pub ai_auto_cam: bool,
     pub notifications: NotificationPreferences,
 }
 
@@ -158,6 +159,7 @@ impl Default for AutopilotSettings {
             experimental_ai_layout: false,
             publish_language: PublishLanguage::De,
             ai_frame_format: FrameFormat::Layout,
+            ai_auto_cam: true,
             notifications: NotificationPreferences::default(),
         }
     }

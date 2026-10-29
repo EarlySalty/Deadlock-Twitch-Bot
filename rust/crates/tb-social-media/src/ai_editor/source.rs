@@ -28,6 +28,7 @@ pub(super) struct SourceRecord {
     pub login: String,
     pub title: String,
     pub layout: Option<Value>,
+    pub layout_is_override: bool,
     pub template: Value,
 }
 
@@ -180,6 +181,7 @@ pub(super) async fn load_source(
     let layout_json: Option<String> = row
         .try_get("layout_json")
         .map_err(|_| AiEditorError::Storage)?;
+    let layout_is_override = override_json.is_some();
     let layout = if let Some(raw) = override_json {
         Some(parse_layout(&raw, None, None)?)
     } else if let Some(raw) = layout_json {
@@ -214,6 +216,7 @@ pub(super) async fn load_source(
             .map_err(|_| AiEditorError::Storage)?,
         title: row.try_get("title").map_err(|_| AiEditorError::Storage)?,
         layout,
+        layout_is_override,
         template,
     };
     if source.twitch_clip_id.is_empty()

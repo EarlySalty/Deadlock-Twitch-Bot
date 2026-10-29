@@ -493,7 +493,7 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
     if (scenario === 'ai-loading') return new Response(new ReadableStream(), { headers: { 'Content-Type': 'application/json' } });
     const aiScenario: AiPreviewScenario = scenario === 'ai-rendering' ? 'render' : scenario === 'ai-last-version' ? 'failed' : scenario === 'ai-revisions' ? 'revisions' : 'review';
     if (pathname.endsWith('/consent')) return json(aiPreviewConsent(aiScenario));
-    if (pathname.endsWith('/options')) return json({ multi_output_enabled: false, experimental_ai_layout: false, frame_format: 'layout' });
+    if (pathname.endsWith('/options')) return json({ multi_output_enabled: false, experimental_ai_layout: false, frame_format: 'layout', auto_cam: true });
     const sample = aiPreviewJob(aiScenario);
     const job = sample && {
       ...sample,

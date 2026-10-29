@@ -55,6 +55,7 @@ pub struct EditorOptions {
     pub experimental_ai_layout: bool,
     pub publish_language: PublishLanguage,
     pub frame_format: FrameFormat,
+    pub auto_cam: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

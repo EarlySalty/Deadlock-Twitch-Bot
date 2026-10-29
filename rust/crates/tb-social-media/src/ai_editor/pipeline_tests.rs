@@ -2806,11 +2806,12 @@ async fn editor_options_default_off_and_save_without_touching_other_settings() {
             experimental_ai_layout: true,
             publish_language: autopilot_settings::PublishLanguage::En,
             frame_format: autopilot_settings::FrameFormat::Fill,
+            auto_cam: false,
         },
     )
     .await
     .expect("opt-in");
-    assert!(saved.multi_output_enabled && saved.experimental_ai_layout);
+    assert!(saved.multi_output_enabled && saved.experimental_ai_layout && !saved.auto_cam);
     assert_eq!(
         saved.publish_language,
         autopilot_settings::PublishLanguage::En

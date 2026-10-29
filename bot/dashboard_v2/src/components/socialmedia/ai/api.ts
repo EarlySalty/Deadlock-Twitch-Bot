@@ -24,6 +24,7 @@ export interface AiEditorOptions {
   experimental_ai_layout: boolean;
   publish_language: AiPublishLanguage;
   frame_format: AiFrameFormat;
+  auto_cam: boolean;
 }
 
 export interface AiVideoVersion {
@@ -275,7 +276,7 @@ export function decodeAiOptions(value: unknown): AiEditorOptions {
   const item = record(value);
   const language = item.publish_language === 'en' || item.publish_language === 'auto' ? item.publish_language : 'de';
   const frame = item.frame_format === 'fill' || item.frame_format === 'full' ? item.frame_format : 'layout';
-  return { multi_output_enabled: flag(item.multi_output_enabled), experimental_ai_layout: flag(item.experimental_ai_layout), publish_language: language, frame_format: frame };
+  return { multi_output_enabled: flag(item.multi_output_enabled), experimental_ai_layout: flag(item.experimental_ai_layout), publish_language: language, frame_format: frame, auto_cam: item.auto_cam !== false };
 }
 
 export async function fetchAiOptions(twitchUserId: string, signal?: AbortSignal): Promise<AiEditorOptions> {
