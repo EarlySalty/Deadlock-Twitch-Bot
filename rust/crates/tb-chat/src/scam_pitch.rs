@@ -2070,7 +2070,11 @@ fn extract_verdict(text: &str) -> Option<AiReview> {
     let flat_json_re = Regex::new(r"\{[^{}]*\}").unwrap();
     let mut parsed: Option<serde_json::Value> = None;
     for m in flat_json_re.find_iter(text) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(m.as_str()) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(m.as_str()).or_else(|_| {
+            serde_json::from_str::<serde_json::Value>(
+                &crate::conversation_scam::without_dangling_comma(m.as_str()),
+            )
+        }) {
             // is_spam muss ein echter Bool sein — ein String "true" o.ä. darf
             // NICHT still als harmlos durchgehen, sondern gilt als unparsebar
             // (→ Provider-Fallback bzw. Error-Alert).

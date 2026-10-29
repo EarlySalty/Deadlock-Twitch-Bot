@@ -1,9 +1,11 @@
-use std::sync::Arc;
+use std::borrow::Cow;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
 use dashmap::DashMap;
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -169,6 +171,7 @@ pub struct DialogState {
     transcript: Vec<String>,
     substantial_messages: usize,
     single_message_pitch: bool,
+    contact_drop: bool,
     is_first_global: bool,
     obfuscation_detected: bool,
     account_age_days: Option<i64>,
@@ -215,6 +218,7 @@ impl DialogState {
             transcript: Vec::new(),
             substantial_messages: 0,
             single_message_pitch: false,
+            contact_drop: false,
             is_first_global,
             obfuscation_detected: false,
             account_age_days,
@@ -234,6 +238,10 @@ impl DialogState {
             self.substantial_messages += 1;
         }
         if is_single_message_pitch(&normalized.text) {
+            self.single_message_pitch = true;
+        }
+        if is_contact_drop(&normalized.text) {
+            self.contact_drop = true;
             self.single_message_pitch = true;
         }
         self.obfuscation_detected |= normalized.was_obfuscated;
@@ -333,6 +341,24 @@ fn is_substantial(text: &str) -> bool {
     words >= 4 && text.chars().count() >= 18
 }
 
+static CONTACT_DROP: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    [
+        r"\b(?:dis{1,2}cord|dc)\s*[:：]\s*@?[a-z0-9_.]{3,}",
+        r"\bon\s+(?:dis{1,2}cord|dc)\s*[.:,]\s*@?[a-z0-9_.]{3,}",
+        r"\b(?:i'?m|i\s+am|add\s+me)\s+@?[a-z0-9_.]{3,}\s+on\s+(?:dis{1,2}cord|dc)\b",
+        r"\badd\s+me\s+(?:up\s+)?on\s+(?:dis{1,2}cord|dc)\b",
+        r"\blink(?:ing)?\s+up\s+on\s+(?:dis{1,2}cord|dc)\b",
+        r"\bmy\s+(?:dis{1,2}cord|dc)\s+(?:is|name\s+is)\s+@?[a-z0-9_.]{3,}",
+    ]
+    .iter()
+    .filter_map(|pattern| Regex::new(&format!("(?i){pattern}")).ok())
+    .collect()
+});
+
+fn is_contact_drop(text: &str) -> bool {
+    CONTACT_DROP.iter().any(|pattern| pattern.is_match(text))
+}
+
 fn is_single_message_pitch(text: &str) -> bool {
     if !is_substantial(text) {
         return false;
@@ -405,12 +431,9 @@ fn parse_verdict_result(raw: &str) -> Result<Verdict, &'static str> {
     if raw.trim().is_empty() {
         return Err("empty_response");
     }
-    let parsed = serde_json::from_str::<RawVerdict>(raw.trim()).or_else(|_| {
-        extract_json_object(raw)
-            .ok_or_else(|| serde_json::Error::io(std::io::Error::other("missing JSON object")))
-            .and_then(serde_json::from_str::<RawVerdict>)
-    });
-    let parsed = parsed.map_err(|_| "parse_error")?;
+    let parsed = parse_raw_verdict(raw.trim())
+        .or_else(|| parse_raw_verdict(&without_dangling_comma(raw.trim())))
+        .ok_or("parse_error")?;
     let kind = match parsed.verdict.as_str() {
         "scam" => VerdictKind::Scam,
         "clean" => VerdictKind::Clean,
@@ -431,6 +454,22 @@ fn parse_verdict_result(raw: &str) -> Result<Verdict, &'static str> {
         reasoning: parsed.reasoning,
         pattern,
     })
+}
+
+fn parse_raw_verdict(raw: &str) -> Option<RawVerdict> {
+    serde_json::from_str::<RawVerdict>(raw)
+        .ok()
+        .or_else(|| extract_json_object(raw).and_then(|json| serde_json::from_str(json).ok()))
+}
+
+static DANGLING_COMMA: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r#",\s*"?\s*\}"#).ok());
+
+pub(crate) fn without_dangling_comma(raw: &str) -> Cow<'_, str> {
+    match DANGLING_COMMA.as_ref() {
+        Some(pattern) => pattern.replace_all(raw, "}"),
+        None => Cow::Borrowed(raw),
+    }
 }
 
 fn extract_json_object(raw: &str) -> Option<&str> {
@@ -1072,15 +1111,23 @@ impl ConversationScamGuard {
             Err(_) => return,
         };
         let enforcement_threshold =
-            effective_scam_enforcement_threshold(&settings, dialog.account_age_days);
+            dialog_enforcement_threshold(&settings, dialog.account_age_days, dialog.contact_drop);
         let regular_threshold = settings.threshold.max(settings.suggestion_floor);
-        let threshold_source = if enforcement_threshold < regular_threshold {
+        let threshold_source = if dialog.contact_drop && settings.mode == GuardMode::AutoBan {
+            "contact_drop"
+        } else if enforcement_threshold < regular_threshold {
             "young_account_curve"
         } else {
             "channel_threshold"
         };
         let (action_taken, completed) = self
-            .apply_decision(event, &settings, &verdict, dialog.account_age_days)
+            .apply_decision(
+                event,
+                &settings,
+                &verdict,
+                dialog.account_age_days,
+                enforcement_threshold,
+            )
             .await;
         let message: String = event.text().chars().take(120).collect();
         let reasoning: String = verdict.reasoning.chars().take(200).collect();
@@ -1200,9 +1247,8 @@ impl ConversationScamGuard {
         settings: &GuardSettings,
         verdict: &Verdict,
         account_age_days: Option<i64>,
+        enforcement_threshold: f32,
     ) -> (String, bool) {
-        let enforcement_threshold =
-            effective_scam_enforcement_threshold(settings, account_age_days);
         match verdict.verdict {
             VerdictKind::Clean => ("none".to_string(), true),
             VerdictKind::Unsure => ("watching".to_string(), false),
@@ -1307,6 +1353,17 @@ impl ConversationScamGuard {
             },
         }
     }
+}
+
+fn dialog_enforcement_threshold(
+    settings: &GuardSettings,
+    account_age_days: Option<i64>,
+    contact_drop: bool,
+) -> f32 {
+    if contact_drop && settings.mode == GuardMode::AutoBan {
+        return settings.suggestion_floor;
+    }
+    effective_scam_enforcement_threshold(settings, account_age_days)
 }
 
 fn effective_scam_enforcement_threshold(
@@ -2118,6 +2175,66 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ohne.pattern, None);
+    }
+
+    #[test]
+    fn parse_verdict_repariert_haengendes_komma_vor_der_klammer() {
+        let verdict = parse_verdict_result(
+            r#"{"verdict":"scam","confidence":0.85,"category":"befriending_pivot","pattern":"DC:novas8","reasoning":"Ungefragter Kontakt.","}"#,
+        )
+        .unwrap();
+        assert_eq!(verdict.verdict, VerdictKind::Scam);
+        assert_eq!(verdict.reasoning, "Ungefragter Kontakt.");
+    }
+
+    #[test]
+    fn kontaktabwurf_auf_dc_erkennt_echte_faelle_und_laesst_chat_in_ruhe() {
+        for text in [
+            "down to play sometimes, I'm cluthub on dc",
+            "On DC:novas8",
+            "Hey you good?? I enjoyed your stream and I would like to be a friend probably stream together if you don't mind linking up on dc. deenexus",
+            "add me on discord we can duo",
+            "my dc is shadow.kid",
+        ] {
+            assert!(is_contact_drop(text), "{text}");
+        }
+        for text in [
+            "gg ich geh jetzt off, sehen uns im dc",
+            "bin grad dc gegangen, internet spinnt",
+            "hey, bist du auch auf dem deadlock community discord?",
+            "der dc server ist echt nice",
+        ] {
+            assert!(!is_contact_drop(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn kontaktabwurf_loest_urteil_aus_und_senkt_banschwelle_auf_vorschlagsgrenze() {
+        let mut dialog = DialogState::new(true);
+        dialog.push_user_message(
+            "Your stream was fun to watch! Would you be open to gaming together sometime",
+        );
+        assert!(!dialog.has_enough_substance());
+        dialog.push_user_message("On DC:novas8");
+        assert!(dialog.has_enough_substance());
+
+        let settings = GuardSettings::default();
+        assert_eq!(
+            dialog_enforcement_threshold(&settings, Some(500), true),
+            settings.suggestion_floor
+        );
+        assert_eq!(
+            dialog_enforcement_threshold(&settings, Some(500), false),
+            settings.threshold
+        );
+        let alert_only = GuardSettings {
+            mode: GuardMode::AlertOnly,
+            ..GuardSettings::default()
+        };
+        assert_eq!(
+            dialog_enforcement_threshold(&alert_only, Some(500), true),
+            alert_only.threshold
+        );
     }
 
     fn verdict(kind: VerdictKind, confidence: f32) -> Verdict {
