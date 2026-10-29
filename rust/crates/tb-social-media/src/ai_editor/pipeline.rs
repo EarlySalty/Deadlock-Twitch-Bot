@@ -484,7 +484,7 @@ async fn prepare(ctx: &StageContext<'_>) -> Result<StageCheckpoint, AiEditorErro
             text: skill.text,
         });
     }
-    let (layout, scene) = scene_layout(ctx, &settings, &source).await;
+    let (layout, scene) = scene_layout(ctx, &settings, &source, &media).await;
     let frozen = PreparingSnapshot {
         source: identity,
         media: media.clone(),
@@ -513,10 +513,18 @@ async fn prepare(ctx: &StageContext<'_>) -> Result<StageCheckpoint, AiEditorErro
     })
 }
 
+fn clip_source(media: &super::MediaInfo) -> crate::layout::LayoutSource {
+    crate::layout::LayoutSource {
+        width: i64::from(media.width),
+        height: i64::from(media.height),
+    }
+}
+
 async fn scene_layout(
     ctx: &StageContext<'_>,
     settings: &autopilot_settings::AutopilotSettings,
     source: &super::source::SourceRecord,
+    media: &super::MediaInfo,
 ) -> (Option<Value>, Value) {
     if !settings.ai_auto_cam
         || settings.ai_frame_format != autopilot_settings::FrameFormat::Layout
@@ -533,10 +541,12 @@ async fn scene_layout(
     )
     .await
     {
-        Ok(scene) => match super::scene::adapt(source.layout.as_ref(), &scene) {
-            Some(layout) => (Some(layout), scene.record(true)),
-            None => (source.layout.clone(), scene.record(false)),
-        },
+        Ok(scene) => {
+            match super::scene::adapt(source.layout.as_ref(), &scene, clip_source(media)) {
+                Some(layout) => (Some(layout), scene.record(true)),
+                None => (source.layout.clone(), scene.record(false)),
+            }
+        }
         Err(error) => {
             tracing::warn!(error = %error, "Social AI cam detection failed, keeping stored layout");
             (source.layout.clone(), json!({ "failed": true }))

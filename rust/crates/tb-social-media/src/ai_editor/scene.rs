@@ -7,7 +7,8 @@ use tb_llm::social_editor::{self, EditorContext, EditorRequest, Frame, ImageMedi
 use tokio::io::AsyncReadExt;
 
 use crate::layout::{
-    default_streamer_layout, LayoutBox, StreamerLayout, FILL_MODE, TARGET_HEIGHT, TARGET_WIDTH,
+    default_streamer_layout, LayoutBox, LayoutSource, StreamerLayout, FILL_MODE, TARGET_HEIGHT,
+    TARGET_WIDTH,
 };
 
 use super::{runtime_config::EditorRuntime, source::Workspace, AiEditorError};
@@ -206,28 +207,31 @@ fn tile_around(position: LayoutBox, cam: LayoutBox) -> LayoutBox {
     .clamped_to_target()
 }
 
-pub(super) fn adapt(base: Option<&Value>, scene: &Scene) -> Option<Value> {
-    if !scene.confident {
+pub(super) fn adapt(base: Option<&Value>, scene: &Scene, source: LayoutSource) -> Option<Value> {
+    if !scene.confident || source.width < 2 || source.height < 2 {
         return None;
     }
+    let cam = scene.cam();
     let mut layout = match base {
         Some(value) => StreamerLayout::from_stored_value(value, None, None).ok()?,
-        None => default_streamer_layout(),
+        None if cam.is_some() => default_streamer_layout(),
+        None => return None,
     };
     if layout.mode == FILL_MODE || layout.mode == "blur_pad" {
         return None;
     }
-    let (width, height) = (layout.source.width, layout.source.height);
+    let (width, height) = (source.width, source.height);
+    layout.source = source;
     layout.game_crop = scene
         .game()
         .map(|game| game.to_box(width, height))
         .unwrap_or(LayoutBox {
             x: 0,
             y: 0,
-            w: width,
-            h: height,
+            w: even_floor(width),
+            h: even_floor(height),
         });
-    match scene.cam() {
+    match cam {
         Some(cam) => {
             let cam = cam.to_box(width, height);
             layout.cam_enabled = true;
@@ -274,6 +278,11 @@ mod tests {
         layout.to_override_json()
     }
 
+    const FULL_HD: LayoutSource = LayoutSource {
+        width: 1920,
+        height: 1080,
+    };
+
     fn parsed(value: Value) -> StreamerLayout {
         StreamerLayout::from_stored_value(&value, None, None).expect("valid layout")
     }
@@ -281,7 +290,8 @@ mod tests {
     #[test]
     fn stacked_band_follows_the_detected_cam() {
         let cam = region(781, 741, 1000, 1000);
-        let layout = parsed(adapt(Some(&stored("stacked")), &scene(Some(cam))).expect("adapted"));
+        let layout =
+            parsed(adapt(Some(&stored("stacked")), &scene(Some(cam)), FULL_HD).expect("adapted"));
         assert!(layout.cam_enabled);
         assert_eq!(layout.mode, "stacked");
         assert_eq!(
@@ -299,7 +309,8 @@ mod tests {
     #[test]
     fn pip_tile_keeps_its_corner_and_takes_the_cam_aspect() {
         let cam = region(0, 0, 250, 250);
-        let layout = parsed(adapt(Some(&stored("pip")), &scene(Some(cam))).expect("adapted"));
+        let layout =
+            parsed(adapt(Some(&stored("pip")), &scene(Some(cam)), FULL_HD).expect("adapted"));
         assert_eq!(layout.mode, "pip");
         assert_eq!(
             layout.cam_crop,
@@ -317,7 +328,8 @@ mod tests {
 
     #[test]
     fn missing_cam_turns_the_cam_off() {
-        let layout = parsed(adapt(Some(&stored("stacked")), &scene(None)).expect("adapted"));
+        let layout =
+            parsed(adapt(Some(&stored("stacked")), &scene(None), FULL_HD).expect("adapted"));
         assert!(!layout.cam_enabled);
     }
 
@@ -325,8 +337,8 @@ mod tests {
     fn unsure_or_camless_modes_keep_the_stored_layout() {
         let mut unsure = scene(Some(region(700, 0, 1000, 300)));
         unsure.confident = false;
-        assert!(adapt(Some(&stored("stacked")), &unsure).is_none());
-        assert!(adapt(Some(&stored("blur_pad")), &scene(None)).is_none());
+        assert!(adapt(Some(&stored("stacked")), &unsure, FULL_HD).is_none());
+        assert!(adapt(Some(&stored("blur_pad")), &scene(None), FULL_HD).is_none());
     }
 
     #[test]
@@ -335,9 +347,57 @@ mod tests {
             adapt(
                 Some(&stored("stacked")),
                 &scene(Some(region(10, 10, 20, 20))),
+                FULL_HD,
             )
             .expect("adapted"),
         );
         assert!(!layout.cam_enabled);
+    }
+
+    #[test]
+    fn crops_follow_the_clip_resolution_not_the_stored_one() {
+        let small = LayoutSource {
+            width: 1280,
+            height: 720,
+        };
+        let cam = region(781, 741, 1000, 1000);
+        let layout =
+            parsed(adapt(Some(&stored("stacked")), &scene(Some(cam)), small).expect("adapted"));
+        assert_eq!(layout.source, small);
+        assert_eq!(
+            layout.game_crop,
+            LayoutBox {
+                x: 0,
+                y: 0,
+                w: 1280,
+                h: 720
+            }
+        );
+        assert_eq!(
+            layout.cam_crop,
+            LayoutBox {
+                x: 998,
+                y: 532,
+                w: 282,
+                h: 188
+            }
+        );
+    }
+
+    #[test]
+    fn channels_without_layout_get_one_only_when_a_cam_is_seen() {
+        assert!(adapt(None, &scene(None), FULL_HD).is_none());
+        let layout =
+            parsed(adapt(None, &scene(Some(region(0, 0, 250, 250))), FULL_HD).expect("adapted"));
+        assert!(layout.cam_enabled);
+        assert_eq!(
+            layout.cam_crop,
+            LayoutBox {
+                x: 0,
+                y: 0,
+                w: 480,
+                h: 270
+            }
+        );
     }
 }

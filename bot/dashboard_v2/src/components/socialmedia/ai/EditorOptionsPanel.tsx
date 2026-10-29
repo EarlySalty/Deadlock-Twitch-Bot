@@ -23,7 +23,7 @@ const frameHelp: Record<AiFrameFormat, string> = {
 };
 
 const choices: { key: 'auto_cam' | 'multi_output_enabled' | 'experimental_ai_layout'; label: string; help: string }[] = [
-  { key: 'auto_cam', label: 'Cam automatisch erkennen', help: 'Die KI schaut sich bei jedem Clip ein paar Standbilder an. Ist eine Facecam zu sehen, baut sie dein Layout passend um die Cam herum. Ohne Cam zeigt das Video nur die Spielszene. Gilt für das Bildformat „Dein Layout“, solange der Clip kein eigenes Layout hat.' },
+  { key: 'auto_cam', label: 'Cam automatisch erkennen', help: 'Die KI schaut sich bei jedem Clip ein paar Standbilder an. Ist eine Facecam zu sehen, baut sie dein Layout passend um die Cam herum. Ohne Cam zeigt das Video das ganze Spielbild. Gilt für das Bildformat „Dein Layout“, solange der Clip kein eigenes Layout hat.' },
   { key: 'multi_output_enabled', label: 'Mehrere Videos aus einem Clip erlauben', help: 'Die KI erstellt zusätzlich zur Hauptfassung nur dann weitere Varianten, wenn der Clip genug eigenständiges Material hergibt. Ohne diese Einstellung entsteht genau ein Video.' },
   { key: 'experimental_ai_layout', label: 'Experimentelles KI-Layout', help: 'Vorbereitet für eigene Bildaufteilungen durch die KI. Vorerst gilt das gewählte Bildformat und es werden keine Item-Grafiken eingeblendet.' },
 ];

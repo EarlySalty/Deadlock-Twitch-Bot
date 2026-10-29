@@ -82,6 +82,12 @@ async fn database() -> postgres::TestPostgres {
     .execute(&db.pool)
     .await
     .expect("frame format migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261029180000_social_ai_auto_cam.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("auto cam migration");
     sqlx::query("INSERT INTO social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value")
         .execute(&db.pool).await.expect("synthetic global consent");
     super::super::store::upsert_user_consent(&db.pool, "101", true, "fixture-owner")
