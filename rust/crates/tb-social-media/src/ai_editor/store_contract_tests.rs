@@ -143,8 +143,8 @@ fn failed_revision() -> AiJobView {
     let mut job = revision_child(1127, "failed", "planning");
     let failure = PlanFailure::from(AiEditorError::Provider);
     job.completed_at = Some(at(4));
-    job.failure_code = Some(JobFailure::PlanningFailed.code().to_owned());
-    job.failure_message = Some(JobFailure::PlanningFailed.message().to_owned());
+    job.failure_code = Some(JobFailure::ProviderUnavailable.code().to_owned());
+    job.failure_message = Some(JobFailure::ProviderUnavailable.message().to_owned());
     job.can_retry = true;
     job.revision_proposal = Some(rejected_proposal(&failure.answer(), MAX_TEXT_BYTES));
     job

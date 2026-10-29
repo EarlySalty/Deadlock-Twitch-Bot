@@ -30,15 +30,15 @@
   "review_reasons": [],
   "original_url": null,
   "versions": [],
-  "failure_code": "planning_failed",
-  "failure_message": "Der Schnitt konnte nicht geplant werden.",
+  "failure_code": "provider_unavailable",
+  "failure_message": "Der KI-Dienst ist derzeit nicht verfügbar.",
   "can_retry": true,
   "root_job_id": 1101,
   "parent_version_id": 2201,
   "selected_version_id": 2201,
   "revision_proposal": {
     "summary": "Der KI-Dienst ist derzeit nicht verfügbar. Die bisherige Fassung bleibt unverändert.",
-    "impact": "Es entsteht keine neue Fassung, dein Video bleibt wie es war.",
+    "impact": "Du kannst es später noch einmal versuchen oder deinen Wunsch anders formulieren.",
     "reanalyze": false,
     "requires_confirmation": false,
     "estimated_provider_cost_usd": 0.0
