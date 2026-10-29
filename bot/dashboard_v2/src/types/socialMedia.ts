@@ -293,3 +293,7 @@ export function fillGameCrop(source: LayoutPayload['source'], crop: LayoutBox): 
 export function asFillLayout(layout: LayoutPayload): LayoutPayload {
   return { ...layout, mode: 'fill', cam_enabled: false, game_crop: fillGameCrop(layout.source, layout.game_crop) };
 }
+
+export function asWideLayout(layout: LayoutPayload): LayoutPayload {
+  return { ...layout, mode: 'blur_pad', cam_enabled: false, game_crop: { x: 0, y: 0, w: layout.source.width, h: layout.source.height } };
+}

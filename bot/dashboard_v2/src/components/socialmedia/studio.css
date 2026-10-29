@@ -1673,6 +1673,24 @@ select.studio-select {
   line-height: 1.6;
   color: var(--color-text-secondary);
 }
+.studio-format-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.studio-format-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.studio-format-switch .studio-button {
+  gap: 8px;
+}
+.studio-format-hint {
+  font-size: 12px;
+  font-weight: 400;
+}
 .studio-template {
   grid-template-columns: 86px minmax(0, 1fr);
   align-content: start;

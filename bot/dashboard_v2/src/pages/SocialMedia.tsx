@@ -28,7 +28,7 @@ import { LayoutEditor, type VorschauClip } from '@/components/socialmedia/Layout
 import { LadeFehlerHinweis } from '@/components/socialmedia/LadeFehlerHinweis';
 import { SocialMediaForbiddenError, fetchPostingPlan, fetchClips, fetchVodArchiveSettings, fetchPlatformStatus, disconnectPlatform, oauthStartUrl, type PlatformStatus, fetchStreamerLayout, saveStreamerLayout, saveVodArchiveSettings, uploadClip } from '@/api/socialMedia';
 import { fehlerText, PLATFORM_LABELS, SOCIAL_MEDIA_TABS, type SocialMediaView, type SocialMediaViewTarget } from '@/components/socialmedia/labels';
-import { type PostingPlan, DEFAULT_LAYOUT, asFillLayout, type LayoutPayload, type SocialPlatform, type StreamerLayoutResponse, type VodArchivePrivacy, type VodArchiveSettings } from '@/types/socialMedia';
+import { type PostingPlan, DEFAULT_LAYOUT, asFillLayout, asWideLayout, type LayoutPayload, type SocialPlatform, type StreamerLayoutResponse, type VodArchivePrivacy, type VodArchiveSettings } from '@/types/socialMedia';
 
 export interface SocialMediaProps {
   streamer: string;
@@ -284,6 +284,35 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         </button>
       </div>
       {layoutQuery.isError ? <LadeFehlerHinweis fehler={layoutQuery.error} /> : null}
+      <div className="studio-format-switch" role="group" aria-label={t('Format')}>
+        <span className="studio-format-label">{t('Format')}</span>
+        {(
+          [
+            { format: 'wide', label: '16:9', hint: 'Ganzes Spielbild, Hintergrund füllt den Rest' },
+            { format: 'tall', label: '9:16', hint: 'Spielbild füllt das Hochformat komplett' },
+          ] as const
+        ).map((option) => {
+          const aktiv = (layoutForEditor.mode === 'fill') === (option.format === 'tall');
+          return (
+            <button
+              key={option.format}
+              type="button"
+              className="studio-button"
+              aria-pressed={aktiv}
+              disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data || saveLayoutMutation.isPending}
+              onClick={() => {
+                if (aktiv) return;
+                saveLayoutMutation.mutate(option.format === 'tall' ? asFillLayout(layoutForEditor) : asWideLayout(layoutForEditor));
+              }}
+            >
+              <strong>{option.label}</strong>
+              <span className="studio-format-hint">{t(option.hint)}</span>
+            </button>
+          );
+        })}
+        {!layoutChoice && saveLayoutMutation.isSuccess ? <span role="status" className="text-sm text-success">{t('Format gespeichert.')}</span> : null}
+        {!layoutChoice && saveLayoutMutation.isError ? <span role="alert" className="text-sm text-danger">{fehlerText(saveLayoutMutation.error, t)}</span> : null}
+      </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {(
           [

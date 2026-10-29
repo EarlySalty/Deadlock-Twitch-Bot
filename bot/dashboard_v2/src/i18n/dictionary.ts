@@ -406,6 +406,10 @@ const EN: Record<string, string> = {
     'As soon as new Twitch clips arrive or you upload an MP4, they show up here.',
   'Speichern fehlgeschlagen: {message}': 'Saving failed: {message}',
   'Layout gespeichert.': 'Layout saved.',
+  'Format': 'Format',
+  'Format gespeichert.': 'Format saved.',
+  'Ganzes Spielbild, Hintergrund füllt den Rest': 'Whole game picture, background fills the rest',
+  'Spielbild füllt das Hochformat komplett': 'Game picture fills the vertical frame completely',
   'Default für {streamer} speichern': 'Save default for {streamer}',
 
   // Upload-Karte
