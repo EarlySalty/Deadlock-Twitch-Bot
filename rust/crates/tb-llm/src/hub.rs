@@ -6,7 +6,7 @@
 //! die Einordnung des Fehlers. Wer hier vorbeigeht und selbst HTTP spricht,
 //! umgeht damit den Modell-Lock und die Kostenerfassung; deshalb gibt es genau
 //! diese eine Tuer.
-//! Der einzige Transport ist Fireworks' OpenAI-kompatibles `/chat/completions`.
+//! Transporte: Fireworks per OpenAI-kompatiblem `/chat/completions`, Anthropic per `/messages`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -328,13 +328,10 @@ async fn complete_direct(use_case: &str, request: Request) -> Result<Response, L
             }
         }
     };
-    if let Some(endpoint) = chain.iter().find(|endpoint| {
-        let standard = endpoint.provider == "fireworks"
-            && crate::model_resolver::allowed_fireworks_model(&endpoint.model)
-            && (endpoint.base_url.trim_end_matches('/') == crate::selection::FIREWORKS_BASE_URL
-                || is_loopback_endpoint(&endpoint.base_url));
-        !standard
-    }) {
+    if let Some(endpoint) = chain
+        .iter()
+        .find(|endpoint| !freigegebener_endpunkt(endpoint))
+    {
         tracing::warn!(
             use_case,
             provider = endpoint.provider,
@@ -351,6 +348,23 @@ async fn complete_direct(use_case: &str, request: Request) -> Result<Response, L
         });
     }
     complete_chain(use_case, request, chain).await
+}
+
+fn freigegebener_endpunkt(endpoint: &LlmEndpoint) -> bool {
+    let basis = endpoint.base_url.trim_end_matches('/');
+    let lokal = is_loopback_endpoint(&endpoint.base_url);
+    match endpoint.provider {
+        "fireworks" => {
+            crate::model_resolver::allowed_fireworks_model(&endpoint.model)
+                && (basis == crate::selection::FIREWORKS_BASE_URL || lokal)
+        }
+        crate::selection::ANTHROPIC_PROVIDER => {
+            crate::selection::configured_anthropic_model().as_deref()
+                == Some(endpoint.model.as_str())
+                && (basis == crate::selection::ANTHROPIC_BASE_URL || lokal)
+        }
+        _ => false,
+    }
 }
 
 /// Mindestabstand zwischen zwei Warnungen "kein Anbieter konfiguriert" je
@@ -757,6 +771,9 @@ async fn send_openai_compatible(
     request: &Request,
     metadata: Option<&mut ResponseMetadata>,
 ) -> Result<Value, RawError> {
+    if endpoint.provider == crate::selection::ANTHROPIC_PROVIDER {
+        return send_anthropic(client, endpoint, api_key, request, metadata).await;
+    }
     let body = openai_compatible_body(endpoint, request);
     let url = format!(
         "{}/chat/completions",
@@ -784,6 +801,101 @@ async fn send_openai_compatible(
         return replay::finish_local(response).await;
     }
     finish(response).await
+}
+
+const ANTHROPIC_DEFAULT_MAX_TOKENS: i64 = 1024;
+
+fn anthropic_body(endpoint: &LlmEndpoint, request: &Request) -> Value {
+    let system: Vec<&str> = request
+        .system
+        .iter()
+        .map(String::as_str)
+        .chain(
+            request
+                .messages
+                .iter()
+                .filter(|message| message.role == "system")
+                .map(|message| message.content.as_str()),
+        )
+        .collect();
+    let messages: Vec<Value> = request
+        .messages
+        .iter()
+        .filter(|message| message.role != "system")
+        .map(|message| serde_json::json!({"role": message.role, "content": message.content}))
+        .collect();
+    let mut body = serde_json::json!({
+        "model": endpoint.model,
+        "max_tokens": request.max_tokens.unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS),
+        "messages": Value::Array(messages),
+    });
+    if !system.is_empty() {
+        body["system"] = Value::String(system.join("\n\n"));
+    }
+    body
+}
+
+fn anthropic_als_openai(payload: Value) -> Value {
+    let text: String = payload
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default();
+    let usage = payload.get("usage");
+    let token = |name: &str| {
+        usage
+            .and_then(|u| u.get(name))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    let mut result = serde_json::json!({
+        "choices": [{"message": {"role": "assistant", "content": text}}],
+        "usage": {
+            "prompt_tokens": token("input_tokens"),
+            "completion_tokens": token("output_tokens"),
+        },
+    });
+    if let Some(id) = payload.get("id") {
+        result["id"] = id.clone();
+    }
+    result
+}
+
+async fn send_anthropic(
+    client: &reqwest::Client,
+    endpoint: &LlmEndpoint,
+    api_key: Option<&str>,
+    request: &Request,
+    metadata: Option<&mut ResponseMetadata>,
+) -> Result<Value, RawError> {
+    let url = format!("{}/messages", endpoint.base_url.trim_end_matches('/'));
+    let mut builder = client.post(&url).header("anthropic-version", "2023-06-01");
+    if let Some(api_key) = api_key {
+        builder = builder.header("x-api-key", api_key);
+    }
+    if let Some(workspace) = crate::keys::anthropic_workspace_id() {
+        builder = builder.header("anthropic-workspace-id", workspace);
+    }
+    let response = builder
+        .json(&anthropic_body(endpoint, request))
+        .send()
+        .await
+        .map_err(|error| RawError::Fehler(transport_error(&error)))?;
+    if let Some(metadata) = metadata {
+        metadata.status = Some(i32::from(response.status().as_u16()));
+        metadata.request_id = response
+            .headers()
+            .get("request-id")
+            .and_then(|v| v.to_str().ok())
+            .and_then(safe_request_id);
+    }
+    finish(response).await.map(anthropic_als_openai)
 }
 
 /// Status pruefen, Body lesen, JSON parsen.
@@ -1054,6 +1166,33 @@ mod tests {
         // nicht zu einer eigenen Rolle.
         assert!(messages.iter().filter(|m| m["role"] == "system").count() == 1);
         assert_eq!(body["response_format"]["type"], "json_object");
+    }
+
+    #[test]
+    fn anthropic_body_und_antwort_folgen_der_messages_api() {
+        let endpoint = LlmEndpoint {
+            provider: crate::selection::ANTHROPIC_PROVIDER,
+            base_url: "http://x".to_string(),
+            model: "claude-haiku-5-5".to_string(),
+            api_key: Some("k".to_string()),
+        };
+        let request = Request::simple("SYSTEM", "Nachricht").temperature(0.0);
+        let body = anthropic_body(&endpoint, &request);
+        assert_eq!(body["system"], "SYSTEM");
+        assert_eq!(body["max_tokens"], ANTHROPIC_DEFAULT_MAX_TOKENS);
+        let messages = body["messages"].as_array().expect("messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert!(body.get("temperature").is_none());
+        let antwort = anthropic_als_openai(serde_json::json!({
+            "id": "msg_1",
+            "content": [{"type": "text", "text": "{\"is_spam\":true}"}],
+            "usage": {"input_tokens": 12, "output_tokens": 5},
+        }));
+        assert_eq!(extract_openai_text(&antwort, false), "{\"is_spam\":true}");
+        assert_eq!(antwort["usage"]["prompt_tokens"], 12);
+        assert_eq!(antwort["usage"]["completion_tokens"], 5);
+        assert_eq!(antwort["id"], "msg_1");
     }
 
     #[tokio::test]

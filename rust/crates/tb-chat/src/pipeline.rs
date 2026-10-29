@@ -217,6 +217,7 @@ pub struct CrewRadarAlert {
 /// Timeout-Dauer bei AI-bestätigtem Spam: 24h — bewusst reversibel statt Ban,
 /// damit ein Judge-Fehlurteil gegen echte Viewer per Button korrigierbar bleibt.
 const AI_SPAM_TIMEOUT_SECS: u32 = 24 * 60 * 60;
+const BAN_REASON_SCAM_PITCH: &str = "Automatischer Ban: Scam-Pitch, von der KI bestätigt";
 
 /// Ab welcher Judge-Confidence ein Text mit harmlosem Umgangssprache-Muster
 /// trotzdem geahndet wird.
@@ -1032,6 +1033,7 @@ impl ChatPipeline {
         // Wie Python wird NIE gelöscht; ein Timeout erfolgt nur bei Eskalation
         // (StrongTimeout). Erst-Warnung (StrongWarn/PublicWarn) ist nicht-destruktiv.
         let mut scam_punished = false;
+        let mut scam_pitch_hit = false;
         if mod_settings.scam_pitch_enabled {
             let scam_pitch = Arc::clone(&p.scam_pitch);
             let event_for_step = event.clone();
@@ -1044,6 +1046,7 @@ impl ChatPipeline {
             match &pitch {
                 PitchDecision::StrongTimeout { text, duration } => {
                     scam_punished = true;
+                    scam_pitch_hit = true;
                     debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: StrongTimeout (Eskalation) → Timeout (kein Delete)");
                     let api = Arc::clone(&p.api);
                     let alerter = Arc::clone(&p.alerter);
@@ -1072,6 +1075,7 @@ impl ChatPipeline {
                     .await;
                 }
                 PitchDecision::StrongWarn { .. } | PitchDecision::PublicWarn { .. } => {
+                    scam_pitch_hit = true;
                     debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: Warnung (kein Delete/Timeout, wie Python)");
                     if !event.chatter_user_id.is_empty()
                         && event.chatter_user_id != event.broadcaster_user_id
@@ -1108,6 +1112,7 @@ impl ChatPipeline {
                             &spam_channel,
                             &spam_chatter,
                             tracked_was_first_message,
+                            scam_pitch_hit,
                         )
                         .await
                 },
@@ -1378,6 +1383,7 @@ impl ChatPipeline {
         channel_login: &str,
         chatter_login: &str,
         tracked_was_first_message: Option<bool>,
+        scam_pitch_hit: bool,
     ) -> bool {
         let p = &self.parts;
         let text = event.message.text.as_str();
@@ -1609,6 +1615,7 @@ impl ChatPipeline {
                         &rule_reason,
                         already_deleted,
                         safe_wording,
+                        scam_pitch_hit,
                     )
                     .await;
                 });
@@ -1666,6 +1673,7 @@ impl ChatPipeline {
         rule_reason: &str,
         already_deleted: bool,
         safe_wording: bool,
+        scam_pitch_hit: bool,
     ) {
         let p = &self.parts;
         let text = event.message.text.as_str();
@@ -1747,6 +1755,10 @@ impl ChatPipeline {
                 || event.is_mod_or_broadcaster()
             {
                 action_taken = "übersprungen (Mod/Broadcaster)".to_string();
+            } else if scam_pitch_hit {
+                action_taken = self
+                    .ban_confirmed_scam_pitch(event, channel_login, &log_reason, *confidence)
+                    .await;
             } else {
                 let evidence_reason = log_reason.clone();
                 let enforced = p
@@ -1798,6 +1810,60 @@ impl ChatPipeline {
             outcome: &outcome,
             action_taken: &action_taken,
         });
+    }
+
+    async fn ban_confirmed_scam_pitch(
+        &self,
+        event: &ChatMessageEvent,
+        channel_login: &str,
+        judge_reason: &str,
+        confidence: Option<f32>,
+    ) -> String {
+        let p = &self.parts;
+        let chatter_login = event.chatter_user_login.to_lowercase();
+        let content = event.message.text.as_str();
+        let silent = self.is_silent_ban(&event.broadcaster_user_id).await;
+        let enforced = p
+            .moderation
+            .auto_ban_and_cleanup_with_evidence(
+                AutoBanRequest {
+                    channel_login,
+                    broadcaster_id: &event.broadcaster_user_id,
+                    bot_id: &p.bot_user_id,
+                    chatter_login: &chatter_login,
+                    chatter_id: &event.chatter_user_id,
+                    message_id: &event.message_id,
+                    content,
+                    ban: true,
+                    reason_text: BAN_REASON_SCAM_PITCH,
+                    notice_text: None,
+                    silent,
+                },
+                ModerationEvidence {
+                    source_path: "spam",
+                    reason: judge_reason,
+                    score: confidence,
+                    account_age_days: None,
+                },
+            )
+            .await;
+        if !enforced {
+            warn!(
+                channel = %channel_login,
+                chatter = %chatter_login,
+                "Scam-Pitch vom Judge bestätigt, Ban konnte nicht durchgesetzt werden"
+            );
+            return "Ban nicht durchgesetzt".to_string();
+        }
+        p.review_log.record(
+            channel_login,
+            &chatter_login,
+            &event.chatter_user_id,
+            content,
+            "AI_BANNED",
+            BAN_REASON_SCAM_PITCH,
+        );
+        "Nachricht gelöscht + permanenter Ban (Scam-Pitch bestätigt)".to_string()
     }
 
     /// Gemeinsamer Auto-Ban-Pfad — Python `_auto_ban_and_cleanup` inkl. der
@@ -2757,7 +2823,7 @@ mod tests {
 
         assert!(
             !pipeline
-                .run_spam_check(&event, "channel", "seller", None)
+                .run_spam_check(&event, "channel", "seller", None, false)
                 .await
         );
         let review_count: i64 =
@@ -3148,7 +3214,7 @@ mod tests {
         archive_message(&pool, &event.message_id, event.text()).await;
 
         pipeline
-            .run_spam_check(&event, "channel", "kubi_kubi_kubi", None)
+            .run_spam_check(&event, "channel", "kubi_kubi_kubi", None, false)
             .await;
 
         let calls = api.calls();
@@ -3173,7 +3239,7 @@ mod tests {
 
         assert!(
             pipeline
-                .run_spam_check(&event, "channel", "spammer", None)
+                .run_spam_check(&event, "channel", "spammer", None, false)
                 .await
         );
         let calls = api.calls();
@@ -3204,7 +3270,7 @@ mod tests {
             event.message_id = format!("meta-cooldown-{suffix}");
             archive_message(&pool, &event.message_id, event.text()).await;
             pipeline
-                .run_spam_check(&event, "channel", "kubi_kubi_kubi", None)
+                .run_spam_check(&event, "channel", "kubi_kubi_kubi", None, false)
                 .await;
         }
 

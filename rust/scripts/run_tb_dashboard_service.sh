@@ -111,6 +111,8 @@ export TWITCH_SPLIT_RUNTIME_ENFORCE="${TWITCH_SPLIT_RUNTIME_ENFORCE:-0}"
 # Legal-Overrides liegen relativ zum Repo-Root (WorkingDirectory der Unit).
 export TB_LEGAL_PAGES_PATH="${TB_LEGAL_PAGES_PATH:-$ROOT_DIR/data/admin_dashboard/legal_pages.json}"
 export RUST_LOG="${RUST_LOG:-info}"
+export TB_LLM_CENTRAL_PROVIDER="${TB_LLM_CENTRAL_PROVIDER:-anthropic}"
+export TB_LLM_CENTRAL_MODEL="${TB_LLM_CENTRAL_MODEL:-claude-haiku-5-5}"
 # B3-2: Nativer Twitch-OAuth-Dashboard-Login. Öffentliche Callback-URL (kein
 # Secret) — muss exakt der in der Twitch-Developer-Console registrierten
 # Redirect-URI entsprechen. Liegt der Wert in Infisical, gewinnt dieser (wird

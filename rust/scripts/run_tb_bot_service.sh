@@ -152,6 +152,8 @@ fi
 # Ohne diese Variable sucht der Bot selbst (venv, ~/.local/bin, PATH).
 export FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}"
 export FIREWORKS_BASE_URL="${FIREWORKS_BASE_URL:-https://api.fireworks.ai/inference/v1}"
+export TB_LLM_CENTRAL_PROVIDER="${TB_LLM_CENTRAL_PROVIDER:-anthropic}"
+export TB_LLM_CENTRAL_MODEL="${TB_LLM_CENTRAL_MODEL:-claude-haiku-5-5}"
 export TB_LLM_MODEL_RICKY_CREW_REVIEW="${TB_LLM_MODEL_RICKY_CREW_REVIEW:-accounts/fireworks/models/deepseek-v4-flash}"
 export RUST_LOG="${RUST_LOG:-info}"
 # Bot-Token-Write-Back (ADR 0005): INFISICAL_WRITE_TOKEN wurde oben gesetzt.

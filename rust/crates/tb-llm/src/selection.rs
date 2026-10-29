@@ -7,6 +7,10 @@ use std::sync::OnceLock;
 use tracing::warn;
 
 pub const FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
+pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
+pub const ANTHROPIC_PROVIDER: &str = "anthropic";
+const CENTRAL_PROVIDER_VAR: &str = "TB_LLM_CENTRAL_PROVIDER";
+const CENTRAL_MODEL_VAR: &str = "TB_LLM_CENTRAL_MODEL";
 pub use crate::model_resolver::configured_fireworks_model;
 
 /// Bestehende öffentliche Konstante für fachliche Guard-Tests. Inzwischen gilt
@@ -25,8 +29,38 @@ pub struct LlmEndpoint {
 /// Der Anbieter und die Flash-Familie sind zentral per YAML festgelegt.
 /// `use_case` bleibt für Ledger und Warnungen erhalten.
 pub fn endpoint_for(use_case: &str) -> LlmEndpoint {
+    if let Some(endpoint) = anthropic_endpoint() {
+        return endpoint;
+    }
     warne_ignorierte_altanbieter(use_case);
     fireworks_endpoint()
+}
+
+pub fn configured_anthropic_model() -> Option<String> {
+    let provider = nonempty_env(CENTRAL_PROVIDER_VAR)?;
+    if provider.trim() != ANTHROPIC_PROVIDER {
+        return None;
+    }
+    nonempty_env(CENTRAL_MODEL_VAR)
+        .map(|model| model.trim().to_owned())
+        .filter(|model| valid_anthropic_model(model))
+}
+
+fn valid_anthropic_model(model: &str) -> bool {
+    model.starts_with("claude-")
+        && model.len() <= 80
+        && model
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+fn anthropic_endpoint() -> Option<LlmEndpoint> {
+    configured_anthropic_model().map(|model| LlmEndpoint {
+        provider: ANTHROPIC_PROVIDER,
+        base_url: ANTHROPIC_BASE_URL.to_string(),
+        model,
+        api_key: crate::keys::anthropic_api_key(),
+    })
 }
 
 /// Ohne Fireworks-Schlüssel bleibt die Kette leer. Es gibt keinen Rückfall auf
@@ -109,6 +143,8 @@ mod tests {
             "TB_LLM_PROVIDER_DEFAULT",
             "TB_LLM_PROVIDER_AI_CHAT",
             "TB_LLM_MODEL_AI_CHAT",
+            CENTRAL_PROVIDER_VAR,
+            CENTRAL_MODEL_VAR,
         ] {
             std::env::remove_var(name);
         }
@@ -125,6 +161,26 @@ mod tests {
             assert_eq!(endpoint.provider, "fireworks");
             assert_eq!(endpoint.model, configured_fireworks_model());
         }
+        clear();
+    }
+
+    #[test]
+    fn zentrale_anthropic_wahl_gilt_fuer_jeden_anwendungsfall() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear();
+        std::env::set_var("ANTHROPIC_API_KEY", "a-key");
+        std::env::set_var(CENTRAL_PROVIDER_VAR, "anthropic");
+        std::env::set_var(CENTRAL_MODEL_VAR, "claude-haiku-5-5");
+        for use_case in ["spam_judge", "ai_chat"] {
+            let endpoint = endpoint_for(use_case);
+            assert_eq!(endpoint.provider, ANTHROPIC_PROVIDER);
+            assert_eq!(endpoint.base_url, ANTHROPIC_BASE_URL);
+            assert_eq!(endpoint.model, "claude-haiku-5-5");
+        }
+        std::env::set_var(CENTRAL_MODEL_VAR, "gpt-5");
+        assert_eq!(endpoint_for("spam_judge").provider, "fireworks");
         clear();
     }
 
