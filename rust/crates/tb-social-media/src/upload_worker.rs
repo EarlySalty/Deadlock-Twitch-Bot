@@ -119,6 +119,14 @@ fn parse_hashtags(raw: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn post_title(item: &UploadQueueItem) -> String {
+    item.title
+        .clone()
+        .filter(|t| !t.is_empty())
+        .or_else(|| item.clip_title.clone())
+        .unwrap_or_default()
+}
+
 #[derive(Clone)]
 struct UploadTask {
     pool: PgPool,
@@ -424,15 +432,9 @@ impl UploadTask {
             .await;
         }
 
-        let title = item
-            .title
-            .clone()
-            .filter(|t| !t.is_empty())
-            .or_else(|| item.clip_title.clone())
-            .unwrap_or_default();
         Ok(Converted {
             path: converted_path,
-            title,
+            title: post_title(item),
             description: item.description.clone().unwrap_or_default(),
             hashtags: parse_hashtags(item.hashtags.as_deref()),
         })
@@ -919,8 +921,9 @@ impl UploadWorker {
 
     async fn resolve_tiktok_uploader(
         &self,
-        queue_id: i64,
+        item: &UploadQueueItem,
     ) -> Result<Arc<dyn PlatformUploader>, UploadError> {
+        let queue_id = item.id;
         let user: Option<String> = sqlx::query_scalar(
             "SELECT c.twitch_user_id FROM twitch_clips_upload_queue q JOIN twitch_clips_social_media c ON c.id = q.clip_id WHERE q.id = $1 AND q.platform = 'tiktok'",
         )
@@ -934,13 +937,25 @@ impl UploadWorker {
             .get_channel_credentials_for_id("tiktok", &user)
             .await
             .ok_or(UploadError::NotAuthenticated)?;
-        let uploader =
-            crate::uploaders::tiktok::draft_uploader(&credentials).map_err(
-                |error| match error {
-                    UploadError::NotStarted(cause) => *cause,
-                    other => other,
-                },
-            )?;
+        let title = post_title(item);
+        let description = item.description.clone().unwrap_or_default();
+        let hashtags = parse_hashtags(item.hashtags.as_deref());
+        let caption = crate::autopilot_publish::TikTokCaption {
+            title: &title,
+            description: &description,
+            hashtags: &hashtags,
+        };
+        let uploader = crate::autopilot_publish::tiktok_uploader(
+            &self.task.pool,
+            &user,
+            &credentials,
+            &caption,
+        )
+        .await
+        .map_err(|error| match error {
+            UploadError::NotStarted(cause) => *cause,
+            other => other,
+        })?;
         Ok(Arc::new(uploader))
     }
 
@@ -966,7 +981,7 @@ impl UploadWorker {
         let mut batch: Vec<(UploadQueueItem, Arc<dyn PlatformUploader>)> = Vec::new();
         for item in queue {
             let uploader = if item.platform == "tiktok" {
-                match self.resolve_tiktok_uploader(item.id).await {
+                match self.resolve_tiktok_uploader(&item).await {
                     Ok(uploader) => Some(uploader),
                     Err(UploadError::NotAuthenticated) => {
                         if let Err(error) = wait_for_connection(

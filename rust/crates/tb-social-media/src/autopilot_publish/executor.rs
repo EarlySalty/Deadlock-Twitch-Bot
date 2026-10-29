@@ -152,8 +152,13 @@ impl DestinationPublisher for PlatformPublisher {
             .get_channel_credentials_for_id("tiktok", owner)
             .await
             .ok_or_else(|| UploadError::not_started(UploadError::NotAuthenticated))?;
-        let uploader =
-            tiktok_uploader(self.credentials.pool(), owner, &credentials, request).await?;
+        let uploader = tiktok_uploader(
+            self.credentials.pool(),
+            owner,
+            &credentials,
+            &request.caption(),
+        )
+        .await?;
         uploader
             .upload_video_checkpointed(
                 &request.file_path,
@@ -183,11 +188,27 @@ fn not_started_storage(error: impl std::fmt::Display) -> UploadError {
     UploadError::not_started(UploadError::Request(error.to_string()))
 }
 
-async fn tiktok_uploader(
+pub(crate) struct TikTokCaption<'a> {
+    pub title: &'a str,
+    pub description: &'a str,
+    pub hashtags: &'a [String],
+}
+
+impl PublishRequest {
+    fn caption(&self) -> TikTokCaption<'_> {
+        TikTokCaption {
+            title: &self.title,
+            description: &self.description,
+            hashtags: &self.hashtags,
+        }
+    }
+}
+
+pub(crate) async fn tiktok_uploader(
     pool: &PgPool,
     owner: &str,
     credentials: &crate::credentials::SocialMediaCredentials,
-    request: &PublishRequest,
+    caption: &TikTokCaption<'_>,
 ) -> Result<TikTokUploader, UploadError> {
     let mut connection = pool.acquire().await.map_err(not_started_storage)?;
     let review = review_mode_on(&mut connection, owner)
@@ -205,9 +226,9 @@ async fn tiktok_uploader(
     match settings.direct_post(
         review,
         music_consent,
-        &request.title,
-        &request.description,
-        &request.hashtags,
+        caption.title,
+        caption.description,
+        caption.hashtags,
     ) {
         Some(post) => direct_uploader(credentials, post),
         None => draft_uploader(credentials),

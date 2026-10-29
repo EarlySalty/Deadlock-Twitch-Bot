@@ -16,6 +16,7 @@ mod notify;
 mod tests;
 mod tiktok_delivery;
 
+pub(crate) use executor::{tiktok_uploader, TikTokCaption};
 pub use executor::{
     DestinationPublisher, PlatformPublisher, PublishExecutor, PublishOutcome, PublishRequest,
 };
