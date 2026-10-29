@@ -119,6 +119,14 @@ fn parse_hashtags(raw: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn post_title(item: &UploadQueueItem) -> String {
+    item.title
+        .clone()
+        .filter(|t| !t.is_empty())
+        .or_else(|| item.clip_title.clone())
+        .unwrap_or_default()
+}
+
 #[derive(Clone)]
 struct UploadTask {
     pool: PgPool,
@@ -424,15 +432,9 @@ impl UploadTask {
             .await;
         }
 
-        let title = item
-            .title
-            .clone()
-            .filter(|t| !t.is_empty())
-            .or_else(|| item.clip_title.clone())
-            .unwrap_or_default();
         Ok(Converted {
             path: converted_path,
-            title,
+            title: post_title(item),
             description: item.description.clone().unwrap_or_default(),
             hashtags: parse_hashtags(item.hashtags.as_deref()),
         })
@@ -919,8 +921,9 @@ impl UploadWorker {
 
     async fn resolve_tiktok_uploader(
         &self,
-        queue_id: i64,
+        item: &UploadQueueItem,
     ) -> Result<Arc<dyn PlatformUploader>, UploadError> {
+        let queue_id = item.id;
         let user: Option<String> = sqlx::query_scalar(
             "SELECT c.twitch_user_id FROM twitch_clips_upload_queue q JOIN twitch_clips_social_media c ON c.id = q.clip_id WHERE q.id = $1 AND q.platform = 'tiktok'",
         )
@@ -934,13 +937,29 @@ impl UploadWorker {
             .get_channel_credentials_for_id("tiktok", &user)
             .await
             .ok_or(UploadError::NotAuthenticated)?;
-        let uploader =
-            crate::uploaders::tiktok::draft_uploader(&credentials).map_err(
-                |error| match error {
-                    UploadError::NotStarted(cause) => *cause,
-                    other => other,
-                },
-            )?;
+        crate::uploaders::tiktok::draft_uploader(&credentials).map_err(|error| match error {
+            UploadError::NotStarted(cause) => *cause,
+            other => other,
+        })?;
+        let title = post_title(item);
+        let description = item.description.clone().unwrap_or_default();
+        let hashtags = parse_hashtags(item.hashtags.as_deref());
+        let caption = crate::autopilot_publish::TikTokCaption {
+            title: &title,
+            description: &description,
+            hashtags: &hashtags,
+        };
+        let uploader = crate::autopilot_publish::tiktok_uploader(
+            &self.task.pool,
+            &user,
+            &credentials,
+            &caption,
+        )
+        .await
+        .map_err(|error| match error {
+            UploadError::NotStarted(cause) => *cause,
+            other => other,
+        })?;
         Ok(Arc::new(uploader))
     }
 
@@ -966,7 +985,7 @@ impl UploadWorker {
         let mut batch: Vec<(UploadQueueItem, Arc<dyn PlatformUploader>)> = Vec::new();
         for item in queue {
             let uploader = if item.platform == "tiktok" {
-                match self.resolve_tiktok_uploader(item.id).await {
+                match self.resolve_tiktok_uploader(&item).await {
                     Ok(uploader) => Some(uploader),
                     Err(UploadError::NotAuthenticated) => {
                         if let Err(error) = wait_for_connection(
@@ -1348,6 +1367,8 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
+            "CREATE TABLE social_media_autopilot_settings (twitch_user_id TEXT PRIMARY KEY, review_policy TEXT, pipeline_mode TEXT, publish_mode TEXT, tiktok_publishing JSONB NOT NULL DEFAULT '{}'::jsonb)",
+            "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB)",
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, twitch_user_id TEXT, enabled INTEGER DEFAULT 1, access_token_enc BYTEA, refresh_token_enc BYTEA, client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, platform_user_id TEXT, platform_username TEXT, enc_version INTEGER, authorized_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, custom_title TEXT, layout_override_json JSONB, streamer_login TEXT NOT NULL, twitch_user_id TEXT DEFAULT '42', local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",

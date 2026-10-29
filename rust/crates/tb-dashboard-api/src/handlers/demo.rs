@@ -215,7 +215,7 @@ fn demo_overview_payload(days: i64) -> Value {
             "followersPerHour": 11.9, "followersGainedPerHour": 13.1,
             "retention10m": 71.2, "retentionReliable": true,
             "uniqueChatters": 634, "activeChatters": 421, "uniqueViewers": 1820,
-            "engagementRate": 23.1, "totalSessions": 14,
+            "engagementRate": 23.1, "totalSessions": 14, "streamCount": 14,
             "avgViewersTrend": 6.8, "followersTrend": 12.4, "retentionTrend": 1.9
         },
         "sessions": [
@@ -1505,6 +1505,9 @@ pub fn build_demo_router() -> Router {
             get(rundgang_assets_handler),
         )
         .route("/twitch/rundgang/{*path}", get(rundgang_page_handler))
+        .layer(middleware::from_fn(
+            crate::handlers::demo_dates::shift_demo_dates,
+        ))
         .layer(middleware::from_fn(reject_demo_writes))
 }
 

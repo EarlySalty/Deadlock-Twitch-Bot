@@ -115,7 +115,7 @@ export function PreiseUndTest() {
                 </p>
                 <p className="text-sm text-[var(--color-text-secondary)]">
                   {landingText(
-                    "Das Demo-Dashboard zeigt alle Auswertungen mit Beispieldaten, ohne Anmeldung.",
+                    "Klick dich durch das komplette Dashboard mit Beispieldaten: Analyse, Social Media, Uplink, Overlay und Verwaltung. Ohne Anmeldung.",
                   )}
                 </p>
               </div>

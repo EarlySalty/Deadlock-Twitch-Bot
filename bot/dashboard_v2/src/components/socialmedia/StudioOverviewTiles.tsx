@@ -24,7 +24,8 @@ function recentPublications(publish: PublishSnapshot | undefined, clips: SocialC
     const platforms = video.event?.destinations.filter(destination => destination.state === 'published' && destination.reason !== 'tiktok_draft').map(destination => destination.platform) ?? [];
     return platforms.length === 0 ? [] : [{ key: `video-${video.id}`, title: clipName(clips, video.clip_id, t('Video {id}', { id: video.id })), at: video.event?.completed_at ?? video.event?.executed_at ?? null, platforms }];
   });
-  const legacy = (clips ?? []).filter(clip => clip.status === 'published_all').map(clip => ({
+  const producedClips = new Set((publish?.videos ?? []).filter(video => video.event?.destinations.some(destination => destination.state === 'published')).map(video => video.clip_id));
+  const legacy = (clips ?? []).filter(clip => clip.status === 'published_all' && !producedClips.has(clip.clip_db_id)).map(clip => ({
     key: `clip-${clip.clip_db_id}`, title: clip.generated_title?.trim() || clip.title || clip.clip_id, at: null,
     platforms: Object.entries(clip.platform_status).filter(([, done]) => done).map(([platform]) => platform),
   }));

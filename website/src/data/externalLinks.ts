@@ -10,7 +10,7 @@ export const TWITCH_LOGIN_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/auth/login`;
 export const TWITCH_DASHBOARD_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/dashboard`;
 export const TWITCH_DASHBOARD_V2_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/dashboard-v2`;
 export const TWITCH_DEMO_DASHBOARD_URL =
-  "https://deutsche-deadlock-community.de/demo/twitch/demo/";
+  "https://deutsche-deadlock-community.de/twitch/rundgang/";
 export const TWITCH_LIVE_ANNOUNCEMENT_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/live-announcement`;
 export const TWITCH_ABBO_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/abbo`;
 export const TWITCH_AFFILIATE_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/affiliate`;

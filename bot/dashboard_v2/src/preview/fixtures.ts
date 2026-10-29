@@ -10,6 +10,7 @@ import { DEFAULT_LAYOUT, type ClipApprovalRecord, type PostingPlan } from '../ty
 import type { SocialClipMitPosting, PlatformStatus } from '@/api/socialMedia';
 import { aiPreviewConsent, aiPreviewJob, type AiPreviewScenario } from '../components/socialmedia/ai/preview';
 import { onPublicTour } from '../publicTour';
+import { tourAutopilotPath, tourChallengesPatch, tourInternalHome, tourPlanNextSlots, tourPlatforms, tourSchedulePatch, tourSocialClips, tourUplinkDestinations, tourUplinkMe } from './tourFixtures';
 
 const SOCIAL_WORKSPACE_PREVIEW = import.meta.env?.MODE === 'preview' || import.meta.env?.MODE === undefined;
 const NOW_ISO = '2026-04-22T09:30:00Z';
@@ -486,7 +487,7 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
     }
     return json(error, tour ? 403 : 409);
   }
-  if (SOCIAL_WORKSPACE_PREVIEW && pathname.startsWith('/twitch/social-media/api/ai/')) {
+  if ((SOCIAL_WORKSPACE_PREVIEW || onPublicTour()) && pathname.startsWith('/twitch/social-media/api/ai/')) {
     const owner = url.searchParams.get('twitch_user_id');
     if (!owner || !['123456789', '987654321'].includes(owner)) return json({ error: 'channel_not_found' }, 403);
     if (scenario === 'ai-error') return json({ error: 'preview_ai_unavailable' }, 503);
@@ -511,16 +512,17 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
   if (pathname.endsWith('/access')) return json({ items: [{ twitch_user_id: '123456789', streamer_login: 'midcore_live', granted: true }] });
   if (pathname.endsWith('/platforms/status')) {
     if (scenario === 'accounts-error') return json({ error: 'platform_status_failed' }, 503);
+    if (onPublicTour()) return json({ platforms: tourPlatforms() });
     return json({ platforms: scenario === 'unknown' ? [] : SOCIAL_PLATFORMS_FIXTURE });
   }
   if (pathname.endsWith('/streamer-layout')) return json({ streamer_login: 'midcore_live', layout: DEFAULT_LAYOUT, cam_enabled: true, mode: 'stacked', updated_at: null, updated_by: null });
-  if (pathname.endsWith('/posting-plan')) return json({ ...SOCIAL_PLAN_FIXTURE, streamer_login: streamer });
+  if (pathname.endsWith('/posting-plan')) return json(onPublicTour() ? tourPlanNextSlots({ ...SOCIAL_PLAN_FIXTURE, streamer_login: streamer }) : { ...SOCIAL_PLAN_FIXTURE, streamer_login: streamer });
   if (pathname.endsWith('/settings/vod-archive')) return json({ streamer_login: 'midcore_live', enabled: true, privacy: 'private', privacy_options: ['private', 'unlisted', 'public'], privacy_forced: true });
   if (pathname.endsWith('/admin/clips')) {
     if (scenario === 'clips-error') return json({ error: 'clip_list_failed' }, 503);
     const page = Number(url.searchParams.get('page') ?? 1);
     const pageSize = Number(url.searchParams.get('page_size') ?? 100);
-    const items = SOCIAL_WORKSPACE_PREVIEW && scenario === 'library-empty' ? [] : SOCIAL_CLIPS_FIXTURE;
+    const items = onPublicTour() ? tourSocialClips(SOCIAL_CLIPS_FIXTURE as unknown as Record<string, unknown>[]) : SOCIAL_WORKSPACE_PREVIEW && scenario === 'library-empty' ? [] : SOCIAL_CLIPS_FIXTURE;
     return json({ items: items.slice((page - 1) * pageSize, page * pageSize).map(clip => ({ ...clip, streamer_login: streamer })), total: items.length, page, page_size: pageSize });
   }
   if (pathname.endsWith('/vod-archive')) return json({ total: 1, items: [{ id: 1, twitch_id: 'synthetic-vod', channel: 'midcore_live', twitch_user_id: '123456789', title: 'Deadlock-Abend: Rangliste und Community', duration_sec: 7380, recorded_at: '2026-10-10T16:00:00Z', discovered_at: '2026-10-10T18:15:00Z', status: 'uploaded', status_label: 'YouTube-Upload abgeschlossen', display_status: 'youtube_uploaded', youtube_complete: true, youtube_verified_complete: false, can_check_youtube: false, drive_complete: false, confirmed_parts: 1, total_parts: 1, can_retry: false, can_drive: false, reason: null, drive_url: null, drive_requested: false, last_attempt_at: '2026-10-10T18:30:00Z', uploaded_at: '2026-10-10T18:45:00Z', parts: [{ index: 1, status: 'uploaded', youtube_video_id: null }], needs_connection: false }] });
@@ -733,7 +735,7 @@ export function getPreviewApiFixture(
       })),
     };
   }
-  if (endpoint === '/internal-home') return internalHomeApiFixture();
+  if (endpoint === '/internal-home') return onPublicTour() ? tourInternalHome() : internalHomeApiFixture();
   if (endpoint === '/title/insights') return getPreviewTitleInsights();
   if (endpoint === '/title/settings') {
     return {
@@ -747,7 +749,7 @@ export function getPreviewApiFixture(
     };
   }
   if (endpoint === '/feedback' && onPublicTour()) return { items: [], next: null };
-  if (endpoint === '/challenges/me') return CHALLENGES_ME_FIXTURE;
+  if (endpoint === '/challenges/me') return onPublicTour() ? { ...CHALLENGES_ME_FIXTURE, ...tourChallengesPatch() } : CHALLENGES_ME_FIXTURE;
   if (endpoint === '/challenges/viewers') return CHALLENGES_VIEWERS_FIXTURE;
   if (endpoint === '/leaderboard/effort') return EFFORT_LEADERBOARD_FIXTURE;
   if (endpoint === '/leaderboard') return VIEWER_LEADERBOARD_FIXTURE;
@@ -1052,6 +1054,10 @@ const TIKTOK_PUBLISHING_FIXTURE = {
 };
 
 export function getPreviewPathFixture(pathname: string): unknown | undefined {
+  if (onPublicTour()) {
+    const tour = tourPathFixture(pathname);
+    if (tour !== undefined) return tour;
+  }
   if (pathname === '/twitch/social-media/api/autopilot/tiktok-publishing') return TIKTOK_PUBLISHING_FIXTURE;
   if (pathname === '/twitch/social-media/api/autopilot/schedule') return AUTOPILOT_SCHEDULE_FIXTURE;
   if (pathname === '/twitch/social-media/api/autopilot/policy') return AUTOPILOT_POLICY_FIXTURE;
@@ -1088,6 +1094,13 @@ export function getPreviewPathFixture(pathname: string): unknown | undefined {
   if (pathname === '/twitch/api/v2/uplink/caps') return UPLINK_CAPS_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/admin/waitlist') return UPLINK_ADMIN_WAITLIST_FIXTURE;
   return undefined;
+}
+
+function tourPathFixture(pathname: string): unknown | undefined {
+  if (pathname === '/twitch/social-media/api/autopilot/schedule') return tourSchedulePatch(AUTOPILOT_SCHEDULE_FIXTURE);
+  if (pathname === '/twitch/api/v2/uplink/me') return tourUplinkMe(UPLINK_ME_FIXTURE);
+  if (pathname === '/twitch/api/v2/uplink/destinations') return tourUplinkDestinations();
+  return tourAutopilotPath(pathname);
 }
 
 export function getPreviewAdminFixture(pathname: string): unknown | undefined {

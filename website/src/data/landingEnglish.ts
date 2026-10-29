@@ -1054,7 +1054,7 @@ export const landingEnglish: Record<string, string> = {
   "Lurker-Erinnerung und Raid-Vorrang": "Lurker reminder and raid priority",
   "Community-Hinweise im Chat abschaltbar": "Community notices in chat can be switched off",
   "Erst mal reinschauen?": "Want a look first?",
-  "Das Demo-Dashboard zeigt alle Auswertungen mit Beispieldaten, ohne Anmeldung.": "The demo dashboard shows every report with sample data, no sign-in needed.",
+  "Klick dich durch das komplette Dashboard mit Beispieldaten: Analyse, Social Media, Uplink, Overlay und Verwaltung. Ohne Anmeldung.": "Click through the complete dashboard with sample data: analytics, social media, Uplink, overlay and settings. No sign-in needed.",
   "Alle Stufen im Vergleich": "Compare all plans",
   "Alle Beträge sind Endpreise. Kleinunternehmer nach § 19 UStG, kein Umsatzsteuerausweis.": "All amounts are final prices. Small business under § 19 UStG, no VAT shown.",
   "Integrationen": "Integrations",
