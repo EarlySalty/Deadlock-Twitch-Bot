@@ -43,6 +43,12 @@ pub(crate) async fn fixture() -> crate::test_database::Database {
     .execute(&db.pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261030090000_inactive_partner_bot_off.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     db
 }
 

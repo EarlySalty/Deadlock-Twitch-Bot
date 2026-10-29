@@ -336,8 +336,8 @@ impl PollHooks for SubscriptionPollHooks {
         }
     }
 
-    /// Inaktiver Partner (> N Tage keine relevante Aktivität) → informativ
-    /// markieren. Das ist keine Operator-Deaktivierung.
+    /// Inaktiver Partner (zu wenige Deadlock-Tage) → Bot im Kanal pausieren,
+    /// Dashboard-Zugang bleibt.
     async fn on_auto_archive(&self, login: &str) -> bool {
         let changed = match mark_partner_inactivity_flagged(&self.pool, login).await {
             Ok(changed) => changed,

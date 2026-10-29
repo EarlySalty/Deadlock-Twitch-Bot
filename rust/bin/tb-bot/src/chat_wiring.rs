@@ -1463,7 +1463,7 @@ pub(crate) struct EventSubSubscriptionBroadcaster {
 /// Source of Truth für Subscription-Broadcaster:
 /// - Core/Event-Lifecycle: aktive Partner plus monitored-only Kanäle.
 /// - Chat-Reconcile: `(raid_enabled OR is_partner_active)` mit gültigem
-///   `channel:bot`-Grant und ohne Reauth-Block.
+///   `channel:bot`-Grant, ohne Reauth-Block und ohne Inaktivitätsflag.
 pub(crate) async fn select_eventsub_subscription_broadcasters(
     pool: &PgPool,
 ) -> Result<Vec<EventSubSubscriptionBroadcaster>, sqlx::Error> {
@@ -1505,6 +1505,7 @@ pub(crate) async fn select_eventsub_subscription_broadcasters(
               FROM twitch_streamers_partner_state ps
               JOIN twitch_raid_auth ra ON ra.twitch_user_id = ps.twitch_user_id
              WHERE (ra.raid_enabled IS TRUE OR COALESCE(ps.is_partner_active, 0) = 1)
+               AND COALESCE(ps.operational_state, 'active') <> 'inactive'
                AND COALESCE(ps.twitch_user_id, '') <> ''
                AND ra.needs_reauth = FALSE
                AND COALESCE(ra.scopes, '') LIKE '%channel:bot%'
@@ -4151,7 +4152,8 @@ mod db_tests {
         // Vereinfachte Tabelle statt der View — genau die Spalten, die die Query liest.
         sqlx::query(
             "CREATE TABLE twitch_streamers_partner_state (
-                twitch_login TEXT, twitch_user_id TEXT, is_partner_active INTEGER DEFAULT 0)",
+                twitch_login TEXT, twitch_user_id TEXT, is_partner_active INTEGER DEFAULT 0,
+                operational_state TEXT DEFAULT 'active')",
         )
         .execute(&pool)
         .await
@@ -4219,6 +4221,19 @@ mod db_tests {
         .await
         .unwrap();
 
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state VALUES ('Flagged', '50', 0, 'inactive')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth VALUES ('50', 'flagged', 'channel:bot', TRUE, FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
         let mut rows = select_chat_subscription_channels(&pool).await.unwrap();
         rows.sort();
         assert_eq!(
@@ -4236,7 +4251,8 @@ mod db_tests {
         sqlx::query(
             "CREATE TABLE twitch_streamers_partner_state (
                 twitch_login TEXT, twitch_user_id TEXT,
-                is_partner_active INTEGER DEFAULT 0, is_partner INTEGER DEFAULT 0)",
+                is_partner_active INTEGER DEFAULT 0, is_partner INTEGER DEFAULT 0,
+                operational_state TEXT DEFAULT 'active')",
         )
         .execute(&pool)
         .await

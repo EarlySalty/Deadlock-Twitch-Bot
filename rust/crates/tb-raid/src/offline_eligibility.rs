@@ -71,6 +71,7 @@ impl OfflineEligibilityStore {
         let partner_row: Option<Option<i32>> = sqlx::query_scalar!(
             r#"SELECT raid_bot_enabled AS "raid_bot_enabled?" FROM twitch_partners
               WHERE twitch_user_id = $1 AND status = 'active'
+                AND inactivity_flagged_at IS NULL
               ORDER BY id DESC LIMIT 1"#,
             user_id
         )

@@ -2002,7 +2002,7 @@ impl DashboardAuthState {
     }
 
     /// `true` wenn der Partner **aktiv** geführt ist. Kanonische Definition
-    /// wie `twitch_partners_all_state.is_partner_active`: active =
+    /// wie `twitch_partners_all_state.is_partner_enrolled`: active =
     /// `status='active'` UND `manual_partner_opt_out=0` UND
     /// `technical_pause_reason=''` UND `admin_archived_at IS NULL`.
     /// Keine Zeile ODER DB-Fehler → `false` (passive) — 1:1 Python (gibt dort
@@ -2013,7 +2013,7 @@ impl DashboardAuthState {
             return false;
         }
         let row = sqlx::query_scalar::<_, bool>(
-            "SELECT is_partner_active = 1 FROM twitch_partners_all_state WHERE twitch_user_id = $1 ORDER BY is_partner_active DESC LIMIT 1",
+            "SELECT is_partner_enrolled = 1 FROM twitch_partners_all_state WHERE twitch_user_id = $1 ORDER BY is_partner_enrolled DESC LIMIT 1",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -3418,8 +3418,15 @@ print(f.encrypt(payload.encode()).decode(), end='')
             state
                 .is_partner_active("inactive_info_gate", "901004")
                 .await,
-            "Inaktivitaet ist nur Anzeigezustand"
+            "Inaktivitaet sperrt das Dashboard nicht"
         );
+        let bot_active: i32 = sqlx::query_scalar(
+            "SELECT is_partner_active FROM twitch_partners_all_state WHERE twitch_user_id = '901004'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(bot_active, 0, "Inaktivitaetsflag pausiert den Bot im Kanal");
 
         sqlx::query(
             "DELETE FROM twitch_partners
