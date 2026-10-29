@@ -897,8 +897,8 @@ impl UploadWorker {
         )
         .await;
         for item in waiting {
-            match self.resolve_upload(&item.platform, item.clip_db_id, cache).await {
-                Ok(_) => {
+            match self.resolve_waiting(&item, cache).await {
+                Ok(()) => {
                     match sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'pending', last_error = NULL WHERE id = $1 AND status = 'waiting_connection'")
                         .bind(item.id).execute(&self.task.pool).await {
                         Ok(result) if result.rows_affected() == 1 => {
@@ -917,6 +917,21 @@ impl UploadWorker {
                 }
             }
         }
+    }
+
+    async fn resolve_waiting(
+        &self,
+        item: &UploadQueueItem,
+        cache: &mut HashMap<(String, i32), Option<Arc<dyn PlatformUploader>>>,
+    ) -> Result<(), crate::capabilities::UploadWaitReason> {
+        self.resolve_upload(&item.platform, item.clip_db_id, cache)
+            .await?;
+        if item.platform == "tiktok" {
+            self.resolve_tiktok_uploader(item)
+                .await
+                .map_err(|_| crate::capabilities::UploadWaitReason::ConnectionIncomplete)?;
+        }
+        Ok(())
     }
 
     async fn resolve_tiktok_uploader(
