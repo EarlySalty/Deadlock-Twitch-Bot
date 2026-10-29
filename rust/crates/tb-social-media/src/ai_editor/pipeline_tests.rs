@@ -3655,7 +3655,7 @@ fn autonomous_cut_into_the_analysis_highlight_stays_rejected() {
 
 #[test]
 fn rejected_revision_plan_yields_an_answer() {
-    use super::super::revision::rejected_proposal;
+    use super::super::revision::{rejected_proposal, REJECTED_IMPACT};
     let root = tempfile::tempdir().expect("package root");
     let runtime = runtime(root.path());
     let mut too_short = publishable_fixture();
@@ -3675,7 +3675,11 @@ fn rejected_revision_plan_yields_an_answer() {
     assert!(proposal
         .summary
         .ends_with("Die bisherige Fassung bleibt unverändert."));
+    assert_eq!(proposal.impact, REJECTED_IMPACT);
     assert!(!proposal.requires_confirmation);
+    let tight = rejected_proposal(&failure.answer(), 12);
+    assert!(!tight.impact.trim().is_empty());
+    assert!(tight.impact.len() <= 12 && tight.summary.len() <= 12);
 }
 
 #[test]

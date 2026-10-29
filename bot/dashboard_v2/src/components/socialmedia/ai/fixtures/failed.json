@@ -1,0 +1,47 @@
+{
+  "id": 1127,
+  "clip_db_id": 501,
+  "status": "failed",
+  "stage": "planning",
+  "created_at": "2026-10-27T18:00:00Z",
+  "updated_at": "2026-10-27T18:02:00Z",
+  "completed_at": "2026-10-27T18:04:00Z",
+  "provider": "anthropic",
+  "model": "model-under-test",
+  "original_duration_ms": 24000,
+  "output_duration_ms": null,
+  "processing_ms": 41000,
+  "provider_latency_ms": 9800,
+  "rendering_ms": null,
+  "input_tokens": 18250,
+  "output_tokens": 2140,
+  "estimated_provider_cost_usd": 0.0912,
+  "measured_provider_cost_usd": null,
+  "cost_basis": "usage_priced_estimate",
+  "highlights": [
+    {
+      "start_ms": 4000,
+      "end_ms": 16000,
+      "description": "Doppelter Abschuss am Mittelturm"
+    }
+  ],
+  "decisions": [],
+  "uncertainty": [],
+  "review_reasons": [],
+  "original_url": null,
+  "versions": [],
+  "failure_code": "planning_failed",
+  "failure_message": "Der Schnitt konnte nicht geplant werden.",
+  "can_retry": true,
+  "root_job_id": 1101,
+  "parent_version_id": 2201,
+  "selected_version_id": 2201,
+  "revision_proposal": {
+    "summary": "Der KI-Dienst ist derzeit nicht verfügbar. Die bisherige Fassung bleibt unverändert.",
+    "impact": "Es entsteht keine neue Fassung, dein Video bleibt wie es war.",
+    "reanalyze": false,
+    "requires_confirmation": false,
+    "estimated_provider_cost_usd": 0.0
+  },
+  "publishing_in_autopilot": false
+}

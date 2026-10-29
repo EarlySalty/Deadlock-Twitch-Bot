@@ -617,6 +617,8 @@ pub(super) fn revision_summary(
 }
 
 const UNCHANGED_VERSION: &str = "Die bisherige Fassung bleibt unverändert.";
+pub(super) const REJECTED_IMPACT: &str =
+    "Es entsteht keine neue Fassung, dein Video bleibt wie es war.";
 
 pub(super) fn rejected_proposal(reason: &str, max_bytes: usize) -> RevisionProposal {
     let full = format!("{reason} {UNCHANGED_VERSION}");
@@ -627,7 +629,7 @@ pub(super) fn rejected_proposal(reason: &str, max_bytes: usize) -> RevisionPropo
     };
     RevisionProposal {
         summary,
-        impact: String::new(),
+        impact: truncate_to(REJECTED_IMPACT, max_bytes),
         reanalyze: false,
         requires_confirmation: false,
         estimated_provider_cost_usd: Some(0.0),

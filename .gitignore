@@ -69,3 +69,4 @@ bot/dashboard_v2/dist-preview/
 
 # Local PostgreSQL test configuration; never production credentials.
 rust/test-database.json
+!bot/dashboard_v2/src/components/socialmedia/ai/fixtures/*.json

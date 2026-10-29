@@ -1339,3 +1339,7 @@ pub async fn recover_stale_jobs(
     .await?;
     Ok(changed.rows_affected())
 }
+
+#[cfg(test)]
+#[path = "store_contract_tests.rs"]
+mod contract_tests;
