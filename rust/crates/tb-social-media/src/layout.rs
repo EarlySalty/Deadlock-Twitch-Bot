@@ -384,6 +384,27 @@ pub fn fill_layout() -> StreamerLayout {
     layout
 }
 
+pub const FIT_MODE: &str = "fit";
+
+pub fn fill_layout_zoomed(zoom_percent: u8) -> StreamerLayout {
+    let zoom = i64::from(zoom_percent.min(100));
+    if zoom == 100 {
+        return fill_layout();
+    }
+    let mut layout = fill_layout();
+    let full = layout.source.width;
+    let narrow = layout.source.height * TARGET_WIDTH / TARGET_HEIGHT;
+    let width = (narrow + (full - narrow) * (100 - zoom) / 100).clamp(narrow, full) / 2 * 2;
+    layout.game_crop = LayoutBox {
+        x: (full - width) / 2,
+        y: 0,
+        w: width,
+        h: layout.source.height,
+    };
+    layout.mode = FIT_MODE.to_string();
+    layout
+}
+
 fn no_layout_fallback() -> StreamerLayout {
     let mut layout = default_streamer_layout();
     layout.cam_enabled = false;

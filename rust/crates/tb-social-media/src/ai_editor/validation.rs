@@ -1,5 +1,5 @@
 use super::model::{EditPlan, Highlight, KeptInterval, PlanLimits};
-use crate::subtitles::{build_branded_ass, segment_subtitles, SubtitleSegment};
+use crate::subtitles::{segment_subtitles, SubtitleSegment};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
@@ -381,6 +381,22 @@ pub fn build_subtitle_ass(
     login: &str,
     cam_height: i64,
 ) -> String {
+    build_credited_subtitle_ass(
+        plan,
+        subtitles,
+        title,
+        &crate::subtitles::ChannelCredit::handle(login),
+        cam_height,
+    )
+}
+
+fn build_credited_subtitle_ass(
+    plan: &ValidatedPlan,
+    subtitles: &[MappedSubtitle],
+    title: &str,
+    credit: &crate::subtitles::ChannelCredit,
+    cam_height: i64,
+) -> String {
     let cues: Vec<_> = subtitles
         .iter()
         .filter(|item| !item.partial)
@@ -393,10 +409,10 @@ pub fn build_subtitle_ass(
                 })
         })
         .collect();
-    build_branded_ass(
+    crate::subtitles::build_credited_ass(
         &cues,
         title,
-        login,
+        credit,
         cam_height,
         plan.output_duration_ms() as f64 / 1000.0,
     )
@@ -406,14 +422,14 @@ pub(super) fn build_scaled_subtitle_ass(
     plan: &ValidatedPlan,
     subtitles: &[MappedSubtitle],
     title: &str,
-    login: &str,
+    credit: &crate::subtitles::ChannelCredit,
     cam_height: i64,
     scale_percent: u16,
 ) -> Result<String, super::AiEditorError> {
     if !(60..=140).contains(&scale_percent) {
         return Err(super::AiEditorError::Plan);
     }
-    let ass = build_subtitle_ass(plan, subtitles, title, login, cam_height);
+    let ass = build_credited_subtitle_ass(plan, subtitles, title, credit, cam_height);
     if scale_percent == 100 {
         return Ok(ass);
     }
@@ -784,9 +800,25 @@ mod tests {
             language: Some("de".into()),
         }];
         let mapped = rebase_subtitles(&plan, &source, &limits()).expect("rebase");
-        let normal = build_scaled_subtitle_ass(&plan, &mapped, "", "", 600, 100).expect("ass");
+        let normal = build_scaled_subtitle_ass(
+            &plan,
+            &mapped,
+            "",
+            &crate::subtitles::ChannelCredit::handle(""),
+            600,
+            100,
+        )
+        .expect("ass");
         assert!(subtitle_bounds_reasons(&normal, plan.output_duration_ms()).is_empty());
-        let wide = build_scaled_subtitle_ass(&plan, &mapped, "", "", 600, 140).expect("ass");
+        let wide = build_scaled_subtitle_ass(
+            &plan,
+            &mapped,
+            "",
+            &crate::subtitles::ChannelCredit::handle(""),
+            600,
+            140,
+        )
+        .expect("ass");
         assert_eq!(
             subtitle_bounds_reasons(&wide, plan.output_duration_ms()).len(),
             1

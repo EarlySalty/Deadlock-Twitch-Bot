@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::layout::{LayoutBox, StreamerLayout, FILL_MODE, TARGET_HEIGHT, TARGET_WIDTH};
+use crate::layout::{LayoutBox, StreamerLayout, FILL_MODE, FIT_MODE, TARGET_HEIGHT, TARGET_WIDTH};
 
 pub(crate) const VIDEO_PRESET: &str = "veryfast";
 pub(crate) const VIDEO_CRF: &str = "18";
@@ -172,6 +172,9 @@ pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bo
     if mode == FILL_MODE {
         return build_fill_filter(layout);
     }
+    if mode == FIT_MODE {
+        return build_fit_filter(layout);
+    }
     if mode == "blur_pad" || !cam_enabled {
         return build_fallback_filter();
     }
@@ -284,6 +287,28 @@ pub fn build_fill_filter(layout: &StreamerLayout) -> String {
         "[0:v]crop=iw*{gw}/{sw}:ih*{gh}/{sh}:iw*{gx}/{sw}:ih*{gy}/{sh},\
          scale={tw}:{th}:force_original_aspect_ratio=increase,\
          crop={tw}:{th},setsar=1[vout]",
+        gw = g.w,
+        gh = g.h,
+        gx = g.x,
+        gy = g.y,
+        tw = TARGET_WIDTH,
+        th = TARGET_HEIGHT,
+    )
+}
+
+pub fn build_fit_filter(layout: &StreamerLayout) -> String {
+    let g = &layout.game_crop;
+    let sw = layout.source.width.max(1);
+    let sh = layout.source.height.max(1);
+    format!(
+        "[0:v]setsar=1,split=2[bg][fg];\
+         [bg]scale={bw}:{bh}:force_original_aspect_ratio=increase,\
+         crop={bw}:{bh},boxblur=5:1,scale={tw}:{th}[blur];\
+         [fg]crop=iw*{gw}/{sw}:ih*{gh}/{sh}:iw*{gx}/{sw}:ih*{gy}/{sh},\
+         scale={tw}:{th}:force_original_aspect_ratio=decrease,setsar=1[front];\
+         [blur][front]overlay=(W-w)/2:(H-h)/2[vout]",
+        bw = TARGET_WIDTH / 4,
+        bh = TARGET_HEIGHT / 4,
         gw = g.w,
         gh = g.h,
         gx = g.x,

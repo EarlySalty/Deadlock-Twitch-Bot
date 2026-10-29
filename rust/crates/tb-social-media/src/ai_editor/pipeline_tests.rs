@@ -206,6 +206,8 @@ async fn prepared(
         overlay_title: Default::default(),
         subtitles_enabled: true,
         frame: Default::default(),
+        zoom_percent: 100,
+        channel_credit: Default::default(),
         plan: super::super::EditPlan {
             schema_version: 1,
             source_duration_ms: frozen.media.duration_ms,
@@ -2138,12 +2140,24 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
     let (frozen, _) = preparing(&checkpoints, &runtime).expect("snapshot");
     let (base, validated) = planning(&checkpoints, &frozen, &runtime).expect("base plan");
     let mapped = subtitles(&checkpoints, &validated, &runtime).expect("real speech cues");
-    let ordinary =
-        super::super::validation::build_scaled_subtitle_ass(&validated, &mapped, "", "", 0, 100)
-            .expect("ordinary ASS");
-    let larger =
-        super::super::validation::build_scaled_subtitle_ass(&validated, &mapped, "", "", 0, 140)
-            .expect("scaled ASS");
+    let ordinary = super::super::validation::build_scaled_subtitle_ass(
+        &validated,
+        &mapped,
+        "",
+        &crate::subtitles::ChannelCredit::handle(""),
+        0,
+        100,
+    )
+    .expect("ordinary ASS");
+    let larger = super::super::validation::build_scaled_subtitle_ass(
+        &validated,
+        &mapped,
+        "",
+        &crate::subtitles::ChannelCredit::handle(""),
+        0,
+        140,
+    )
+    .expect("scaled ASS");
     let style_size = |ass: &str| {
         ass.lines()
             .find(|line| line.starts_with("Style: Default,"))
@@ -2167,7 +2181,12 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
     );
     assert_eq!(mapped[0].language.as_deref(), Some("de"));
     assert!(super::super::validation::build_scaled_subtitle_ass(
-        &validated, &mapped, "", "", 0, 141
+        &validated,
+        &mapped,
+        "",
+        &crate::subtitles::ChannelCredit::handle(""),
+        0,
+        141
     )
     .is_err());
     let mut distinct = base.plan.clone();
@@ -2182,6 +2201,8 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
             overlay_title: Default::default(),
             subtitles_enabled: true,
             frame: Default::default(),
+            zoom_percent: 100,
+            channel_credit: Default::default(),
         });
     assert!(validate_variants(&plan, &json!({"multi_output_enabled":false}), &runtime).is_err());
     validate_variants(&plan, &frozen.publication, &runtime).expect("opt-in");
@@ -2341,6 +2362,8 @@ async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or
             overlay_title: Default::default(),
             subtitles_enabled: true,
             frame: Default::default(),
+            zoom_percent: 100,
+            channel_credit: Default::default(),
         });
     if let Some(StageCheckpoint::Planning { edit_plan, .. }) =
         checkpoints.get_mut(&AiStage::Planning)
@@ -3540,7 +3563,7 @@ fn disabled_captions_render_without_speech_burn_in() {
             &validated,
             burned_subtitles(planning, &mapped),
             &planning.overlay_title.resolve(title),
-            "luckymakkydead",
+            &planning.channel_credit.render("luckymakkydead"),
             0,
             planning.subtitle_scale_percent,
         )

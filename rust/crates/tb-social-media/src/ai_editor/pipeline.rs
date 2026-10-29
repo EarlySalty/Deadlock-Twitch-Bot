@@ -999,8 +999,12 @@ async fn plan_edit(
     if base.is_none() {
         let frame = publication_frame(&frozen.publication);
         result.frame = frame;
+        result.zoom_percent = super::stage_contract::ZOOM_MAX_PERCENT;
+        result.channel_credit = super::stage_contract::ChannelCredit::default();
         for variant in &mut result.variants {
             variant.frame = frame;
+            variant.zoom_percent = super::stage_contract::ZOOM_MAX_PERCENT;
+            variant.channel_credit = super::stage_contract::ChannelCredit::default();
         }
     }
     if let Some(base) = &base {
@@ -1086,13 +1090,14 @@ fn publication_frame(publication: &Value) -> FrameFormat {
 fn render_layout(
     stored: Option<&Value>,
     frame: FrameFormat,
+    zoom_percent: u8,
 ) -> Result<Option<StreamerLayout>, AiEditorError> {
     match frame {
         FrameFormat::Layout => stored
             .map(|value| StreamerLayout::from_stored_value(value, None, None))
             .transpose()
             .map_err(|_| AiEditorError::Source),
-        FrameFormat::Fill => Ok(Some(crate::layout::fill_layout())),
+        FrameFormat::Fill => Ok(Some(crate::layout::fill_layout_zoomed(zoom_percent))),
         FrameFormat::Full => Ok(None),
     }
 }
@@ -1743,7 +1748,7 @@ async fn render_one(
         )
         .await
         .map_err(|error| render_failure(ctx.identity, "prepare_intervals", &error))?;
-        let layout = render_layout(frozen.layout.as_ref(), result.frame)?;
+        let layout = render_layout(frozen.layout.as_ref(), result.frame, result.zoom_percent)?;
         let mapped = subtitles(ctx.checkpoints, &validated, runtime)?;
         let cam_height = layout
             .as_ref()
@@ -1754,7 +1759,7 @@ async fn render_one(
             &validated,
             burned_subtitles(result, &mapped),
             &result.overlay_title.resolve(&frozen.source.title),
-            &frozen.source.login,
+            &result.channel_credit.render(&frozen.source.login),
             cam_height,
             result.subtitle_scale_percent,
         )?;
@@ -1915,7 +1920,11 @@ async fn validate_one(
                 .into(),
         );
     }
-    let layout = render_layout(frozen.layout.as_ref(), planning.frame)?;
+    let layout = render_layout(
+        frozen.layout.as_ref(),
+        planning.frame,
+        planning.zoom_percent,
+    )?;
     let cam_height = layout
         .as_ref()
         .filter(|layout| layout.cam_enabled)
@@ -1925,7 +1934,7 @@ async fn validate_one(
         &validated,
         burned_subtitles(planning, &mapped),
         &planning.overlay_title.resolve(&frozen.source.title),
-        &frozen.source.login,
+        &planning.channel_credit.render(&frozen.source.login),
         cam_height,
         planning.subtitle_scale_percent,
     )?;

@@ -186,10 +186,67 @@ fn hook_lines(title: &str) -> String {
         .join("\\N")
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreditAnchor {
+    BottomLeft,
+    BottomRight,
+    TopLeft,
+    TopCenter,
+    TopRight,
+}
+
+impl CreditAnchor {
+    fn placement(self) -> (u8, i64, i64) {
+        match self {
+            Self::BottomLeft => (7, 48, 1420),
+            Self::BottomRight => (9, 1032, 1420),
+            Self::TopLeft => (7, 48, 120),
+            Self::TopCenter => (8, 540, 120),
+            Self::TopRight => (9, 1032, 120),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelCredit {
+    pub text: String,
+    pub position: CreditAnchor,
+}
+
+impl ChannelCredit {
+    pub fn handle(login: &str) -> Self {
+        let handle = login.trim().trim_start_matches('@');
+        Self {
+            text: if handle.is_empty() {
+                String::new()
+            } else {
+                format!("@{handle}")
+            },
+            position: CreditAnchor::BottomLeft,
+        }
+    }
+}
+
 pub fn build_branded_ass(
     cues: &[Cue],
     title: &str,
     login: &str,
+    cam_height: i64,
+    duration: f64,
+) -> String {
+    build_credited_ass(
+        cues,
+        title,
+        &ChannelCredit::handle(login),
+        cam_height,
+        duration,
+    )
+}
+
+pub fn build_credited_ass(
+    cues: &[Cue],
+    title: &str,
+    credit: &ChannelCredit,
     cam_height: i64,
     duration: f64,
 ) -> String {
@@ -206,10 +263,11 @@ pub fn build_branded_ass(
     ));
     out.push_str("[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
     let end = ass_time(duration.max(0.01));
-    if !login.trim().is_empty() {
+    if !credit.text.trim().is_empty() {
+        let (align, x, y) = credit.position.placement();
         out.push_str(&format!(
-            "Dialogue: 1,0:00:00.00,{end},Channel,,0,0,0,,{{\\pos(48,1420)}}@{}\n",
-            ass_escape(login.trim().trim_start_matches('@'))
+            "Dialogue: 1,0:00:00.00,{end},Channel,,0,0,0,,{{\\an{align}\\pos({x},{y})}}{}\n",
+            ass_escape(credit.text.trim())
         ));
     }
     if !title.trim().is_empty() {

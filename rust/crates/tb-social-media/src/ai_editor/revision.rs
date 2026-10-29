@@ -9,7 +9,7 @@ use crate::{
 
 use super::{
     pipeline,
-    stage_contract::Planning,
+    stage_contract::{ChannelCredit, CreditLabel, CreditPosition, Planning},
     store::{self, AiJobView, AiStage},
     AiEditorError, EditorRuntime,
 };
@@ -495,6 +495,8 @@ fn output_identity(planning: &Planning, clip_title: &str) -> Value {
         "subtitles": planning.subtitles_enabled.then_some(planning.subtitle_scale_percent),
         "overlay": planning.overlay_title.resolve(clip_title),
         "frame": planning.frame,
+        "zoom": effective_zoom(planning.frame, planning.zoom_percent),
+        "credit": planning.channel_credit,
         "platforms": planning.platforms,
         "variants": planning.variants.iter().map(|variant| json!({
             "cut": cut(&variant.plan),
@@ -502,9 +504,15 @@ fn output_identity(planning: &Planning, clip_title: &str) -> Value {
             "subtitles": variant.subtitles_enabled.then_some(variant.subtitle_scale_percent),
             "overlay": variant.overlay_title.resolve(clip_title),
             "frame": variant.frame,
+            "zoom": effective_zoom(variant.frame, variant.zoom_percent),
+            "credit": variant.channel_credit,
             "platforms": variant.platforms,
         })).collect::<Vec<_>>(),
     })
+}
+
+fn effective_zoom(frame: FrameFormat, zoom_percent: u8) -> Option<u8> {
+    (frame == FrameFormat::Fill).then_some(zoom_percent)
 }
 
 pub(super) const REVISION_INSTRUCTION: &str = "Interpret feedback as a bounded edit of saved analysis. Set reanalyze=true only if new visual understanding is necessary and not yet authorized. Mark substantial changes for confirmation. The video shows exactly two kinds of text and each has its own control. Speech captions are the burned-in lines of the real speech in the lower part of the picture during the whole video: subtitles_enabled switches them on or off and subtitle_scale_percent only changes their size. The hook title is the large text at the very start of the video, previous_overlay_text shows what the previous version displayed: overlay_title controls it (mode clip_title shows clip_title, custom shows text, none shows no title). Map the feedback like this. Untertitel, Untertitel entfernen, subtitle, subtitles, caption, captions or the spoken words mean the speech captions: set subtitles_enabled=false to remove them or change subtitle_scale_percent to resize them. Titel, title, hook title, Überschrift or the big text at the start mean overlay_title. Kein Text, ohne Text, alle Texte entfernen, no text, remove every text or remove all text mean both: set subtitles_enabled=false and overlay_title.mode=none; the small channel name stays as source credit and cannot be removed, so say that in impact. Ambiguous wording about subtitles or captions always targets the speech captions and never the title; change the title only when the feedback names the title or all text. Keep every element the feedback does not mention exactly as in previous. kept_intervals and hook control the cut and the teaser. A cut the feedback asks for, such as starting later, ending earlier, making the video shorter or cutting after a moment, takes precedence over the analysis highlights: apply it to kept_intervals even when it removes part of a highlight. Start and end requests refer to the first and last kept interval of previous. The output length is the kept intervals plus the hook, so for a shorter video also shorten or drop the hook, and keep the hook inside the kept footage. Caption wording cannot change because it is the real speech; preserve real speech and its language and original audio. Keep summary to a short note. Use impact to explain in German in one or two plain sentences what the change means or what could not be done and why; never claim an edit your plan does not contain. If nothing requested can be done, return the previous plan unchanged; no new version is produced then. Explain unsupported creative, custom crop or speech-rewriting requests honestly; never fabricate commands or cost estimates. Return a complete main plan and no extra variants for ordinary revisions. previous.plan leaves out review_reasons and lists observed_highlights only by time; write each observation from the analysis.highlights entry that overlaps it.";
@@ -530,6 +538,12 @@ fn compact_previous(base: &Planning) -> Value {
         plan.insert("observed_highlights".into(), Value::Array(highlights));
     }
     let mut previous = json!({"plan": plan, "platforms": base.platforms, "subtitle_scale_percent": base.subtitle_scale_percent, "overlay_title": base.overlay_title, "subtitles_enabled": base.subtitles_enabled, "frame": base.frame});
+    if let Some(zoom) = effective_zoom(base.frame, base.zoom_percent).filter(|zoom| *zoom < 100) {
+        previous["zoom_percent"] = json!(zoom);
+    }
+    if base.channel_credit != ChannelCredit::default() {
+        previous["channel_credit"] = json!(base.channel_credit);
+    }
     if !base.variants.is_empty() {
         previous["variants"] = json!(base.variants);
     }
@@ -566,6 +580,8 @@ pub(super) fn plan_changes(base: &Planning, next: &Planning, clip_title: &str) -
             frame_label(next.frame)
         ));
     }
+    changes.extend(zoom_change(base, next));
+    changes.extend(credit_changes(base.channel_credit, next.channel_credit));
     let old = output_identity(base, clip_title);
     let new = output_identity(next, clip_title);
     if old["cut"] != new["cut"] {
@@ -586,6 +602,44 @@ pub(super) fn plan_changes(base: &Planning, next: &Planning, clip_title: &str) -
         changes.push("Zusätzliche Fassungen geändert".to_owned());
     }
     changes
+}
+
+fn zoom_change(base: &Planning, next: &Planning) -> Option<String> {
+    let after = effective_zoom(next.frame, next.zoom_percent)?;
+    match effective_zoom(base.frame, base.zoom_percent) {
+        Some(before) if before != after => {
+            Some(format!("Zoom von {before} % auf {after} % geändert"))
+        }
+        None if after < 100 => Some(format!("Zoom auf {after} % gesetzt")),
+        _ => None,
+    }
+}
+
+fn credit_changes(base: ChannelCredit, next: ChannelCredit) -> Vec<String> {
+    let mut changes = Vec::new();
+    if base.position != next.position {
+        changes.extend([format!(
+            "Kanalname nach {} verschoben",
+            credit_position_label(next.position)
+        )]);
+    }
+    if base.label != next.label {
+        changes.extend([match next.label {
+            CreditLabel::Handle => "Kanalname als @Name eingeblendet".to_owned(),
+            CreditLabel::Twitch => "Kanalname als „Twitch: @Name“ eingeblendet".to_owned(),
+        }]);
+    }
+    changes
+}
+
+fn credit_position_label(position: CreditPosition) -> &'static str {
+    match position {
+        CreditPosition::BottomLeft => "unten links",
+        CreditPosition::BottomRight => "unten rechts",
+        CreditPosition::TopLeft => "oben links",
+        CreditPosition::TopCenter => "oben mittig",
+        CreditPosition::TopRight => "oben rechts",
+    }
 }
 
 fn frame_label(frame: FrameFormat) -> &'static str {

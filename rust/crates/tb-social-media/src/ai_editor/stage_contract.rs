@@ -89,9 +89,72 @@ pub(super) struct Planning {
     pub subtitles_enabled: bool,
     #[serde(default)]
     pub frame: FrameFormat,
+    #[serde(default = "default_zoom_percent")]
+    pub zoom_percent: u8,
+    #[serde(default)]
+    pub channel_credit: ChannelCredit,
 }
 
-const FRAME_DESCRIPTION: &str = "Picture of the vertical 9:16 video. layout: the streamer's saved layout. fill: the game picture zoomed to fill the whole frame, without facecam. full: the complete 16:9 picture centered on a blurred background. For a revision keep previous.frame unless the feedback asks for another format: 9:16, Hochformat, zoom in or no blurred bars mean fill; 16:9, ganzes Bild or zoom out mean full; mit Facecam or mein Layout mean layout.";
+const FRAME_DESCRIPTION: &str = "Picture of the vertical 9:16 video. The output is always 1080x1920 (9:16); other aspect ratios such as 10:16 or 4:5 are not possible, so keep previous.frame for them and say in impact that only 9:16 is possible. layout: the streamer's saved layout. fill: the game picture zoomed into the vertical frame without facecam, zoom_percent sets how far. full: the complete 16:9 picture centered on a blurred background. For a revision keep previous.frame unless the feedback asks for another format: 9:16, Hochformat, zoom in or no blurred bars mean fill with zoom_percent 100; 16:9, ganzes Bild or the whole picture mean full; mit Facecam or mein Layout mean layout. A gradual zoom such as a little more out, etwas weiter raus, a bit less zoom or show more of the sides means fill with a lower zoom_percent than before, never full.";
+
+const ZOOM_DESCRIPTION: &str = "Only used when frame is fill. 100 fills the whole 9:16 frame and cuts the sides of the game picture. Lower values zoom out step by step and show more of the sides with blurred bars above and below; 0 equals the complete picture. A little more out lowers the previous value by about 20, much more out by about 40; a little more in raises it by about 20. Keep previous.zoom_percent (100 when absent) unless the feedback asks for zoom. Use 100 for a new edit.";
+
+const CREDIT_DESCRIPTION: &str = "The small channel name burned in as source credit for the whole video. It cannot be removed, only moved or relabelled. position places it: bottom_left (default), bottom_right, top_left, top_center or top_right. label handle shows @channel, label twitch shows Twitch: @channel. A request to remove it and show it elsewhere means moving it; say in impact that it stays as source credit. Keep previous.channel_credit (bottom_left and handle when absent) unless the feedback asks to move or relabel the channel name.";
+
+pub(super) const ZOOM_MIN_PERCENT: u8 = 0;
+pub(super) const ZOOM_MAX_PERCENT: u8 = 100;
+
+fn default_zoom_percent() -> u8 {
+    ZOOM_MAX_PERCENT
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CreditPosition {
+    #[default]
+    BottomLeft,
+    BottomRight,
+    TopLeft,
+    TopCenter,
+    TopRight,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CreditLabel {
+    #[default]
+    Handle,
+    Twitch,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ChannelCredit {
+    pub position: CreditPosition,
+    pub label: CreditLabel,
+}
+
+impl ChannelCredit {
+    pub fn render(self, login: &str) -> crate::subtitles::ChannelCredit {
+        let handle = login.trim().trim_start_matches('@');
+        let text = if handle.is_empty() {
+            String::new()
+        } else {
+            match self.label {
+                CreditLabel::Handle => format!("@{handle}"),
+                CreditLabel::Twitch => format!("Twitch: @{handle}"),
+            }
+        };
+        let position = match self.position {
+            CreditPosition::BottomLeft => crate::subtitles::CreditAnchor::BottomLeft,
+            CreditPosition::BottomRight => crate::subtitles::CreditAnchor::BottomRight,
+            CreditPosition::TopLeft => crate::subtitles::CreditAnchor::TopLeft,
+            CreditPosition::TopCenter => crate::subtitles::CreditAnchor::TopCenter,
+            CreditPosition::TopRight => crate::subtitles::CreditAnchor::TopRight,
+        };
+        crate::subtitles::ChannelCredit { text, position }
+    }
+}
 
 pub(super) const OVERLAY_TITLE_MAX_CHARS: usize = 54;
 
@@ -155,6 +218,10 @@ pub(super) struct VariantPlan {
     pub subtitles_enabled: bool,
     #[serde(default)]
     pub frame: FrameFormat,
+    #[serde(default = "default_zoom_percent")]
+    pub zoom_percent: u8,
+    #[serde(default)]
+    pub channel_credit: ChannelCredit,
 }
 
 impl VariantPlan {
@@ -168,6 +235,8 @@ impl VariantPlan {
             overlay_title: self.overlay_title.clone(),
             subtitles_enabled: self.subtitles_enabled,
             frame: self.frame,
+            zoom_percent: self.zoom_percent,
+            channel_credit: self.channel_credit,
         }
     }
 }
@@ -237,11 +306,13 @@ pub(super) fn planning_schema(
         "text": { "type": ["string", "null"], "maxLength": OVERLAY_TITLE_MAX_CHARS },
     }));
     let frame = json!({ "type": "string", "enum": ["layout", "fill", "full"], "description": FRAME_DESCRIPTION });
+    let zoom = json!({ "type": "integer", "minimum": ZOOM_MIN_PERCENT, "maximum": ZOOM_MAX_PERCENT, "description": ZOOM_DESCRIPTION });
+    let credit = json!({ "type": "object", "additionalProperties": false, "description": CREDIT_DESCRIPTION, "required": ["position", "label"], "properties": { "position": { "type": "string", "enum": ["bottom_left", "bottom_right", "top_left", "top_center", "top_right"] }, "label": { "type": "string", "enum": ["handle", "twitch"] } } });
     let variant = object(
-        json!({"plan":plan.clone(),"platforms":object(json!({"youtube":copy.clone(),"tiktok":copy.clone(),"instagram":copy.clone()})),"subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140},"subtitles_enabled":{"type":"boolean"},"frame":frame.clone(),"overlay_title":overlay.clone()}),
+        json!({"plan":plan.clone(),"platforms":object(json!({"youtube":copy.clone(),"tiktok":copy.clone(),"instagram":copy.clone()})),"subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140},"subtitles_enabled":{"type":"boolean"},"frame":frame.clone(),"zoom_percent":zoom.clone(),"channel_credit":credit.clone(),"overlay_title":overlay.clone()}),
     );
     object(
-        json!({ "plan": plan, "platforms": object(json!({ "youtube": copy.clone(), "tiktok": copy.clone(), "instagram": copy })), "subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140}, "subtitles_enabled":{"type":"boolean"}, "frame": frame, "overlay_title": overlay, "variants":array(variant,2) }),
+        json!({ "plan": plan, "platforms": object(json!({ "youtube": copy.clone(), "tiktok": copy.clone(), "instagram": copy })), "subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140}, "subtitles_enabled":{"type":"boolean"}, "frame": frame, "zoom_percent": zoom, "channel_credit": credit, "overlay_title": overlay, "variants":array(variant,2) }),
     )
 }
 
@@ -361,6 +432,12 @@ impl Planning {
             return Err(PlanRejection::new(
                 "subtitle_scale_percent outside 60..=140",
                 "Die Untertitelgröße muss zwischen 60 und 140 % liegen.",
+            ));
+        }
+        if self.zoom_percent > ZOOM_MAX_PERCENT {
+            return Err(PlanRejection::new(
+                "zoom_percent outside 0..=100",
+                "Der Zoom muss zwischen 0 und 100 % liegen.",
             ));
         }
         if self.variants.len() > 2 {
