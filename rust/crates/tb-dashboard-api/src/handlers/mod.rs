@@ -56,6 +56,7 @@ pub mod command_name_settings;
 pub mod community_hints;
 pub mod dashboard_assistent;
 pub mod demo;
+pub mod demo_dates;
 pub mod demo_login;
 pub mod discord_link;
 pub mod engagement_mode;

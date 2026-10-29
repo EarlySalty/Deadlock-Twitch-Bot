@@ -9,7 +9,7 @@ interface BrowserMockupProps {
 export function BrowserMockup({
   children,
   className = "",
-  url = "deutsche-deadlock-community.de/demo/twitch/demo",
+  url = "deutsche-deadlock-community.de/twitch/rundgang",
 }: BrowserMockupProps) {
   return (
     <div
