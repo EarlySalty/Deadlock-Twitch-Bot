@@ -153,7 +153,8 @@ impl TrackedStore {
                    MIN(NULLIF(sess.started_at::text, '')::timestamptz) AS first_stream_at,
                    (SELECT MAX(NULLIF(p.partnered_at, '')::timestamptz)
                       FROM twitch_partners p
-                     WHERE LOWER(p.twitch_login) = LOWER(s.twitch_login)
+                     WHERE (p.twitch_user_id = s.twitch_user_id
+                            OR LOWER(p.twitch_login) = LOWER(s.twitch_login))
                        AND p.status = 'active') AS partnered_at,
                    COUNT(DISTINCT (NULLIF(sess.started_at::text, '')::timestamptz AT TIME ZONE 'Europe/Berlin')::date)
                        FILTER (WHERE COALESCE(sess.had_deadlock_in_session, false)
@@ -163,7 +164,7 @@ impl TrackedStore {
                 ON LOWER(sess.streamer_login) = LOWER(s.twitch_login)
              WHERE s.is_partner = 1
                AND s.is_partner_active = 1
-             GROUP BY s.twitch_login, s.archived_at, s.operational_state
+             GROUP BY s.twitch_login, s.twitch_user_id, s.archived_at, s.operational_state
             "#,
         )
         .bind(since)
