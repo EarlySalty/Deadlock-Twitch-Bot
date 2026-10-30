@@ -101,7 +101,7 @@ function ConsentToggle({ granted, onDecide, pending, failed }: { granted: boolea
   );
 }
 
-export function SocialMediaRecording({ active }: { active: boolean }) {
+export function SocialMediaRecording({ active, consentDeferred }: { active: boolean; consentDeferred: boolean }) {
   const enabled = active && recordingAvailable();
   const { data: auth } = useAuthStatus();
   const queryClient = useQueryClient();
@@ -127,6 +127,7 @@ export function SocialMediaRecording({ active }: { active: boolean }) {
   if (!enabled || !consent.data?.eligible) return null;
   const onDecide = (decision: RecordingDecision) => decide.mutate(decision);
   if (shouldAskForConsent(consent.data, true)) {
+    if (consentDeferred) return null;
     return <ConsentCard onDecide={onDecide} pending={decide.isPending} failed={decide.isError} />;
   }
   return <ConsentToggle granted={consent.data.decision === 'granted'} onDecide={onDecide} pending={decide.isPending} failed={decide.isError} />;

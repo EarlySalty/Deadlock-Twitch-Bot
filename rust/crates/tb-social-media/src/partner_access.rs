@@ -29,6 +29,40 @@ pub async fn is_partner_id_granted(pool: &PgPool, twitch_user_id: &str) -> bool 
     .unwrap_or(false)
 }
 
+pub async fn ensure_open_beta_access(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    twitch_login: &str,
+) -> Result<bool, sqlx::Error> {
+    if !is_twitch_id(twitch_user_id) {
+        return Ok(false);
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO social_media_partner_access (streamer_login, granted, granted_by, granted_at, twitch_user_id)
+         VALUES ($1, TRUE, 'open_beta', CURRENT_TIMESTAMP, $2)
+         ON CONFLICT (twitch_user_id) DO NOTHING",
+    )
+    .bind(twitch_login)
+    .bind(twitch_user_id)
+    .execute(&mut *tx)
+    .await?;
+    let granted: bool = sqlx::query_scalar(
+        "SELECT granted FROM social_media_partner_access WHERE twitch_user_id = $1",
+    )
+    .bind(twitch_user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if granted {
+        sqlx::query("DELETE FROM social_media_access_requests WHERE twitch_user_id = $1")
+            .bind(twitch_user_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(granted)
+}
+
 /// Liste aller Streamer mit Freigabestatus (alphabetisch nach Login).
 pub async fn list_partner_access(pool: &PgPool) -> Result<Vec<PartnerAccessEntry>, sqlx::Error> {
     sqlx::query_as::<_, PartnerAccessEntry>(
@@ -401,4 +435,26 @@ mod tests {
         assert!(is_partner_id_granted(&pool, "11").await);
         assert!(!is_partner_id_granted(&pool, "legacy").await);
     }
+
+    #[tokio::test]
+    async fn open_beta_grants_new_partner_but_keeps_explicit_revoke() {
+        let Some(pool) = make_pool("t_sm_open_beta").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO social_media_access_requests (twitch_user_id, twitch_login) VALUES ('77', 'neu')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(ensure_open_beta_access(&pool, "77", "neu").await.unwrap());
+        assert!(is_partner_id_granted(&pool, "77").await);
+        assert!(!has_access_request(&pool, "77").await.unwrap());
+
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, twitch_user_id, granted) VALUES ('gesperrt', '88', FALSE)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(!ensure_open_beta_access(&pool, "88", "gesperrt").await.unwrap());
+        assert!(!is_partner_id_granted(&pool, "88").await);
+    }
+
 }

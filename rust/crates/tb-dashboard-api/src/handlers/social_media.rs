@@ -56,7 +56,7 @@ use tb_social_media::layout::{
 };
 use tb_social_media::oauth::{OAuthError, OAuthManager};
 use tb_social_media::partner_access::{
-    has_access_request, is_partner_id_granted, list_access_requests, list_partner_access,
+    ensure_open_beta_access, has_access_request, is_partner_id_granted, list_access_requests, list_partner_access,
     remove_access_request, request_access, set_partner_access,
 };
 use tb_social_media::posting_plan::{
@@ -677,7 +677,13 @@ pub async fn my_access_handler(auth: DashboardAuthLevel, State(pool): State<PgPo
             ..
         } => {
             let login = twitch_login.to_lowercase();
-            let allowed = is_partner_id_granted(&pool, twitch_user_id).await;
+            let allowed = match ensure_open_beta_access(&pool, twitch_user_id, &login).await {
+                Ok(allowed) => allowed,
+                Err(e) => {
+                    tracing::error!(error = %e, twitch_user_id, "open beta access failed");
+                    is_partner_id_granted(&pool, twitch_user_id).await
+                }
+            };
             let requested = !allowed
                 && has_access_request(&pool, twitch_user_id)
                     .await
