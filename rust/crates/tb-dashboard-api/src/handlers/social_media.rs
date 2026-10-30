@@ -56,8 +56,8 @@ use tb_social_media::layout::{
 };
 use tb_social_media::oauth::{OAuthError, OAuthManager};
 use tb_social_media::partner_access::{
-    ensure_open_beta_access, has_access_request, is_partner_id_granted, list_access_requests, list_partner_access,
-    remove_access_request, request_access, set_partner_access,
+    ensure_open_beta_access, has_access_request, is_partner_id_granted, list_access_requests,
+    list_partner_access, reject_access_request, request_access, set_partner_access,
 };
 use tb_social_media::posting_plan::{
     berechne_vorrat, ensure_streamer_rows, load_categories, load_platform_schedules,
@@ -4170,7 +4170,7 @@ pub async fn access_request_delete_handler(
     if let Err(e) = require_admin(&auth) {
         return e;
     }
-    match remove_access_request(&pool, &twitch_user_id).await {
+    match reject_access_request(&pool, &twitch_user_id).await {
         Ok(true) => Json(json!({ "ok": true })).into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, Json(json!({ "error": "not_found" }))).into_response(),
         Err(e) => access_db_error("reject", e),

@@ -180,17 +180,26 @@ pub async fn list_access_requests(pool: &PgPool) -> Result<Vec<AccessRequest>, s
     .await
 }
 
-pub async fn remove_access_request(
+pub async fn reject_access_request(
     pool: &PgPool,
     twitch_user_id: &str,
 ) -> Result<bool, sqlx::Error> {
     if !is_twitch_id(twitch_user_id) {
         return Ok(false);
     }
-    let result = sqlx::query("DELETE FROM social_media_access_requests WHERE twitch_user_id = $1")
-        .bind(twitch_user_id)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query(
+        "WITH removed AS (
+             DELETE FROM social_media_access_requests WHERE twitch_user_id = $1
+             RETURNING twitch_user_id, twitch_login
+         )
+         INSERT INTO social_media_partner_access (streamer_login, granted, granted_by, granted_at, twitch_user_id)
+         SELECT twitch_login, FALSE, 'access_request_rejected', CURRENT_TIMESTAMP, twitch_user_id FROM removed
+         ON CONFLICT (twitch_user_id)
+         DO UPDATE SET granted = FALSE, granted_by = EXCLUDED.granted_by, granted_at = EXCLUDED.granted_at",
+    )
+    .bind(twitch_user_id)
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -352,9 +361,10 @@ mod tests {
             .unwrap();
         assert!(!has_access_request(&pool, "42").await.unwrap());
 
-        assert!(remove_access_request(&pool, "7").await.unwrap());
-        assert!(!remove_access_request(&pool, "7").await.unwrap());
+        assert!(reject_access_request(&pool, "7").await.unwrap());
+        assert!(!reject_access_request(&pool, "7").await.unwrap());
         assert!(list_access_requests(&pool).await.unwrap().is_empty());
+        assert!(!ensure_open_beta_access(&pool, "7", "other").await.unwrap());
     }
     #[tokio::test]
     async fn grant_and_revoke_keep_selected_id_after_login_reassignment() {
@@ -453,8 +463,9 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert!(!ensure_open_beta_access(&pool, "88", "gesperrt").await.unwrap());
+        assert!(!ensure_open_beta_access(&pool, "88", "gesperrt")
+            .await
+            .unwrap());
         assert!(!is_partner_id_granted(&pool, "88").await);
     }
-
 }
