@@ -28,8 +28,8 @@ const TASKS: Array<{ key: ModerationKey; label: string; desc: string }> = [
   },
   {
     key: 'sus_invite_enabled',
-    label: 'Verdächtige Discord-Einladungen bremsen',
-    desc: 'Fremde Discord-Einladungen von ganz neuen Zuschauern werden kurz ausgebremst, damit niemand in eine Falle gelockt wird.',
+    label: 'Fremde Discord-Einladungen stoppen',
+    desc: 'Postet jemand, der in deinem Kanal noch neu ist, eine fremde Discord-Einladung, gibt es automatisch 10 Minuten Timeout. Neu heißt: unter 14 Tage, unter 3 Streams und unter 40 Nachrichten in deinem Kanal, egal wie aktiv die Person anderswo ist. Mods sind ausgenommen.',
   },
 ];
 
