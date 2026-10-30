@@ -81,6 +81,7 @@ export function SocialMediaManager() {
     runtimeConfig: dashboardRuntimeConfig,
   });
   const isDemoMode = isDemoShell;
+  const showBetaBanner = betaBanner.open && !isAdminView && !isDemoMode && Boolean(access?.allowed);
 
   useEffect(() => {
     if (!isAdminView || loadingStreamers || hasAutoSetStreamer.current) return;
@@ -217,8 +218,8 @@ export function SocialMediaManager() {
         {!loadingStreamers && streamers.length === 0 && authStatus?.isAdmin && (
           <div className="mt-4 text-xs text-text-secondary">{t('Keine Streamer gefunden.')}</div>
         )}
-        <SocialMediaRecording active={!isAdminView && !isDemoMode && Boolean(access?.allowed)} consentDeferred={betaBanner.open} />
-        {betaBanner.open && (isAdminView || access?.allowed) && <SocialMediaBetaBanner onDismiss={betaBanner.dismiss} />}
+        <SocialMediaRecording active={!isAdminView && !isDemoMode && Boolean(access?.allowed)} consentDeferred={showBetaBanner} />
+        {showBetaBanner && <SocialMediaBetaBanner onDismiss={betaBanner.dismiss} />}
     </div>
   );
 }

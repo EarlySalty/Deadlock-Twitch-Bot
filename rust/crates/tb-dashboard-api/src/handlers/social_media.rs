@@ -665,7 +665,8 @@ async fn auto_posting_guard(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<
 /// `GET /social-media/api/access/me` — was die eigene Session darf.
 ///
 /// Das Frontend entscheidet damit zwischen Vollansicht, Eigenkanal-Ansicht und
-/// dem Hinweis „noch nicht freigeschaltet".
+/// dem Hinweis „noch nicht freigeschaltet". Der erste Aufruf eines aktiven
+/// Partners legt die Open-Beta-Freigabe an, explizite Sperren bleiben bestehen.
 pub async fn my_access_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>) -> Response {
     match &auth {
         DashboardAuthLevel::Admin { .. } => {
