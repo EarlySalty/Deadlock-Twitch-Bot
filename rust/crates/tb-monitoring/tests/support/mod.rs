@@ -101,7 +101,8 @@ pub async fn create_schema(pool: &PgPool) {
             twitch_login TEXT NOT NULL, status TEXT NOT NULL,
             raid_bot_enabled INTEGER DEFAULT 0,
             admin_archived_at TEXT,
-            inactivity_flagged_at TEXT
+            inactivity_flagged_at TEXT,
+            partnered_at TEXT
         )",
         "CREATE TABLE twitch_stream_sessions (
             id BIGSERIAL PRIMARY KEY,

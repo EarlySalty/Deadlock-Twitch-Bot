@@ -1310,3 +1310,42 @@ async fn archive_candidates_markiert_unter_vier_deadlock_tagen_in_60_tagen() {
         .unwrap();
     assert_eq!(candidates, vec!["variety".to_string()]);
 }
+
+#[tokio::test]
+async fn archive_candidates_zaehlt_60_tage_ab_partnerbeitritt() {
+    let pool = pool_or_skip!("t4c_archive_grace_from_join");
+    let now = Utc::now();
+    let since = now - Duration::days(60);
+    sqlx::query(
+        "INSERT INTO twitch_streamers_partner_state
+            (twitch_login, twitch_user_id, is_partner_active, is_partner, operational_state)
+         VALUES ('frischer', '431', 1, 1, 'active'),
+                ('schweiger', '432', 1, 1, 'active')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, partnered_at)
+         VALUES ('431', 'frischer', 'active', $1), ('432', 'schweiger', 'active', $2)",
+    )
+    .bind((now - Duration::days(7)).to_rfc3339())
+    .bind((now - Duration::days(61)).to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, game_name, had_deadlock_in_session)
+         VALUES ('frischer', $1, $1, 'Just Chatting', false)",
+    )
+    .bind((now - Duration::days(70)).to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let candidates = TrackedStore::new(pool)
+        .archive_candidates("Deadlock", since, 4)
+        .await
+        .unwrap();
+    assert_eq!(candidates, vec!["schweiger".to_string()]);
+}

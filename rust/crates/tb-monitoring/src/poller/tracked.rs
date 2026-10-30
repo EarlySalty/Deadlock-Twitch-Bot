@@ -33,12 +33,16 @@ struct ArchiveCandidateRow {
     archived_at: Option<String>,
     operational_state: Option<String>,
     first_stream_at: Option<DateTime<Utc>>,
+    partnered_at: Option<DateTime<Utc>>,
     deadlock_days: i64,
 }
 
 impl ArchiveCandidateRow {
     fn inactive_since(&self, since: DateTime<Utc>, min_days: i64) -> bool {
-        self.first_stream_at.is_some_and(|first| first < since) && self.deadlock_days < min_days
+        self.partnered_at
+            .or(self.first_stream_at)
+            .is_some_and(|start| start < since)
+            && self.deadlock_days < min_days
     }
 }
 
@@ -147,6 +151,10 @@ impl TrackedStore {
                    s.archived_at::text AS archived_at,
                    s.operational_state,
                    MIN(NULLIF(sess.started_at::text, '')::timestamptz) AS first_stream_at,
+                   (SELECT MAX(NULLIF(p.partnered_at, '')::timestamptz)
+                      FROM twitch_partners p
+                     WHERE LOWER(p.twitch_login) = LOWER(s.twitch_login)
+                       AND p.status = 'active') AS partnered_at,
                    COUNT(DISTINCT (NULLIF(sess.started_at::text, '')::timestamptz AT TIME ZONE 'Europe/Berlin')::date)
                        FILTER (WHERE COALESCE(sess.had_deadlock_in_session, false)
                                  AND NULLIF(sess.started_at::text, '')::timestamptz >= $1) AS deadlock_days
