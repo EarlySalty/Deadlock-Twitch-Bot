@@ -739,17 +739,14 @@ pub fn build_offline_components(context: OfflineComponentsContext<'_>) -> Value 
             fmt_duration(started_at, ended_at)
         )));
     }
-    children.push(v2_separator());
     if let Some(url) = context
         .preview_image_url
         .map(str::trim)
         .filter(|u| !u.is_empty())
     {
+        children.push(v2_separator());
         children.push(v2_media_gallery(url));
     }
-    children.push(v2_text_display(
-        "-# Die Aufzeichnung gibt's über den Button — solange Twitch sie hält.",
-    ));
     Value::Array(vec![v2_container(
         TWITCH_OFFLINE_COMPONENT_ACCENT,
         children,
@@ -1121,10 +1118,7 @@ mod tests {
         assert_eq!(children[2]["type"], 14);
         assert_eq!(children[3]["type"], 12);
         assert_eq!(children[3]["items"][0]["media"]["url"], "https://vod/p.jpg");
-        assert_eq!(
-            children[4]["content"],
-            "-# Die Aufzeichnung gibt's über den Button — solange Twitch sie hält."
-        );
+        assert_eq!(children.len(), 4);
     }
 
     #[test]
