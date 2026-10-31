@@ -1,4 +1,4 @@
-import { landingText } from "@/lib/landingLocale";
+import { isEnglishLanding, landingText } from "@/lib/landingLocale";
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bot, Loader2, Send } from "lucide-react";
@@ -46,7 +46,10 @@ export function BotQuestionBox() {
       const res = await fetch(ASK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q }),
+        body: JSON.stringify({
+          question: q,
+          language: isEnglishLanding() ? "en" : "de",
+        }),
         signal: controller.signal,
       });
 

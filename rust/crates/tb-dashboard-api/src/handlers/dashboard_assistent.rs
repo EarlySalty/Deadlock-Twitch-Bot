@@ -1,5 +1,5 @@
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
@@ -11,10 +11,12 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use tb_knowledge::{assemble_grounding, Namespace};
-use tb_llm::{Message, Request};
+use tb_llm::brain_route::{self, ConversationTask, PROVIDER};
+use tb_llm::Message;
 
 use crate::auth::level::DashboardAuthLevel;
 
+use super::brain_conversation;
 use super::internal_home::{
     access_state_block, ban_count_block, kpis_recent_block, last_stream_summary, oauth_block,
     raid_events_block, AccessState, KpisData, OauthData,
@@ -23,18 +25,16 @@ use super::moderation_settings::{self, ModerationSettings};
 use super::platform_token::PlatformTokenConfig;
 use super::scam_guard_settings::{self, ScamGuardSettings};
 use super::self_explainer::{
-    knowledge_base, mono_now, output_unusable, parse_history, retrieval_query, split_message,
-    RateLimiter,
+    knowledge_base, mono_now, parse_history, retrieval_query, split_message, RateLimiter,
 };
 use super::uplink;
 
 const HARD_MAX_QUESTION: usize = 1000;
 const MAX_QUESTION_LEN: usize = 500;
 const SPLIT_LIMIT: usize = 400;
-const ANSWER_TOKEN_CEILING: i64 = 768;
-const MODEL_TIMEOUT_SEC: u64 = 110;
 const CARD_TIMEOUT_SEC: u64 = 10;
-const USE_CASE: &str = "dashboard_assistent";
+const SEITE_UNBEKANNT: &str = "unbekannt";
+const KEIN_WISSEN: &str = "Keine passenden Einträge.";
 
 const RATE_MINUTE_WINDOW: f64 = 60.0;
 const RATE_MINUTE_MAX: usize = 20;
@@ -201,8 +201,14 @@ fn karte_letzter_stream(letzter: &Value) -> Option<String> {
         return None;
     }
     let datum = letzter.get("date").and_then(Value::as_str).unwrap_or("");
-    let avg = letzter.get("avg_viewers").and_then(Value::as_f64).unwrap_or(0.0);
-    let peak = letzter.get("peak_viewers").and_then(Value::as_i64).unwrap_or(0);
+    let avg = letzter
+        .get("avg_viewers")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let peak = letzter
+        .get("peak_viewers")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     let follower = letzter
         .get("follower_delta")
         .and_then(Value::as_i64)
@@ -240,7 +246,10 @@ fn karte_raids(raids: &[Value]) -> Option<String> {
             .get("target_login")
             .and_then(Value::as_str)
             .unwrap_or("");
-        let zuschauer = raid.get("viewer_count").and_then(Value::as_i64).unwrap_or(0);
+        let zuschauer = raid
+            .get("viewer_count")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
         if ziel.is_empty() {
             zeilen.push(format!("{datum}: Raid mit {zuschauer} Zuschauern"));
         } else {
@@ -251,9 +260,7 @@ fn karte_raids(raids: &[Value]) -> Option<String> {
 }
 
 fn karte_ban_zaehler(anzahl: i64) -> String {
-    format!(
-        "### Entfernte Spam- und Scam-Konten der letzten 30 Tage\nAnzahl: {anzahl}"
-    )
+    format!("### Entfernte Spam- und Scam-Konten der letzten 30 Tage\nAnzahl: {anzahl}")
 }
 
 fn karte_schutzschalter(settings: &ModerationSettings) -> String {
@@ -306,47 +313,36 @@ fn karte_rechte(oauth: &OauthData) -> String {
     )
 }
 
-fn sprachregel(language: &str) -> &'static str {
-    if language == "en" {
-        "Answer in natural English."
-    } else {
-        "Antworte auf natürlichem Deutsch mit echten Umlauten und ohne Gedankenstriche."
-    }
+struct AssistentEingabe<'a> {
+    name: &'a str,
+    page: &'a str,
+    question: &'a str,
+    history: &'a [Message],
+    facts: &'a str,
+    karten: &'a str,
+    language: &'a str,
 }
 
-fn baue_system_prompt(
-    name: &str,
-    language: &str,
-    page: &str,
-    facts: &str,
-    karten: &str,
-) -> String {
-    let seite = if page.trim().is_empty() {
-        "unbekannt"
+fn assistent_task(eingabe: AssistentEingabe<'_>) -> ConversationTask {
+    let page = if eingabe.page.trim().is_empty() {
+        SEITE_UNBEKANNT
     } else {
-        page
+        eingabe.page
     };
-    format!(
-        "Du bist der freundliche Hilfe-Assistent der Deutschen Deadlock Community im Streamer-Dashboard. Du hilfst {name} beim Bot, beim Partnernetz und beim eigenen Kanal. Du duzt {name} und bleibst warm, ehrlich und knapp.
-
-{sprachregel}
-
-Aktuelle Seite im Dashboard: {seite}
-
-Regeln:
-- Antworte nur mit Fakten aus den Abschnitten \"## Wissen\" und \"## Deine Daten\". Erfinde nichts dazu, keine Zahlen, keine Rechte, keine Termine.
-- Fehlt eine Information in beiden Abschnitten, sag das ehrlich und verweise auf den Community-Discord, statt zu raten.
-- Die Daten unter \"## Deine Daten\" gehören {name}. Sprich nie über andere Kanäle und gib nie Daten anderer Streamer heraus. Fragen nach fremden Kanälen lehnst du freundlich ab.
-- Du änderst keine Einstellungen und löst keine Aktionen aus. Beschreibe nur, wo {name} das im Dashboard selbst macht.
-- Fasse dich kurz, höchstens sechs Sätze, keine Aufzählung mit mehr als fünf Punkten.
-
-## Wissen
-{facts}
-
-## Deine Daten
-{karten}",
-        sprachregel = sprachregel(language)
-    )
+    let knowledge = if eingabe.facts.trim().is_empty() {
+        KEIN_WISSEN
+    } else {
+        eingabe.facts
+    };
+    ConversationTask::TwitchDashboardAssistant {
+        streamer_name: eingabe.name.to_string(),
+        page: page.to_string(),
+        question: eingabe.question.to_string(),
+        history: brain_conversation::bounded_dialog(eingabe.history),
+        knowledge: brain_conversation::bounded_document(knowledge),
+        streamer_data: brain_conversation::bounded_document(eingabe.karten),
+        language: brain_conversation::reply_language(&json!({ "language": eingabe.language })),
+    }
 }
 
 fn fehler_text(language: &str) -> &'static str {
@@ -373,12 +369,30 @@ fn karten_nicht_verfuegbar(language: &str) -> String {
     }
 }
 
-fn baue_antwort(answer: &str, parts: &[String], sources: &[String], grounded: bool, page: &str) -> Value {
+fn baue_antwort(
+    answer: &str,
+    parts: &[String],
+    sources: &[String],
+    grounded: bool,
+    page: &str,
+) -> Value {
     json!({
+        "status": "answered",
         "answer": answer,
         "parts": parts,
         "sources": sources,
         "grounded": grounded,
+        "page": page,
+    })
+}
+
+fn stille_antwort(page: &str) -> Value {
+    json!({
+        "status": "silent",
+        "answer": "",
+        "parts": [],
+        "sources": [],
+        "grounded": false,
         "page": page,
     })
 }
@@ -443,7 +457,11 @@ pub async fn ask(
     let value: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(_) => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_json" }))).into_response()
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid_json" })),
+            )
+                .into_response()
         }
     };
 
@@ -570,6 +588,9 @@ pub async fn ask(
             );
         }
     }
+    if sichere_karten.is_empty() {
+        sichere_karten.push(karten_nicht_verfuegbar(&language));
+    }
     let karten_text = sichere_karten.join("\n\n");
 
     let retrieval = retrieval_query(&history, &q_clean);
@@ -577,62 +598,23 @@ pub async fn ask(
     let grounding = assemble_grounding(&hits);
     let grounded = !grounding.facts.trim().is_empty();
 
-    let prompt = baue_system_prompt(
-        &display_name,
-        &language,
-        &page,
-        &grounding.facts,
-        &karten_text,
-    );
+    let task = assistent_task(AssistentEingabe {
+        name: &display_name,
+        page: &page,
+        question: &q_clean,
+        history: &history,
+        facts: &grounding.facts,
+        karten: &karten_text,
+        language: &language,
+    });
+    let gestartet = Instant::now();
+    let antwort = brain_route::converse(&user_id, task).await;
+    let latency_ms = i64::try_from(gestartet.elapsed().as_millis()).ok();
 
-    let mut messages = history.clone();
-    messages.push(Message::user(q_clean.clone()));
-
-    let antwort = tb_llm::complete(
-        USE_CASE,
-        Request::history(messages)
-            .system(prompt)
-            .max_tokens(ANSWER_TOKEN_CEILING)
-            .temperature(0.2)
-            .timeout(Duration::from_secs(MODEL_TIMEOUT_SEC))
-            .total_deadline(Duration::from_secs(MODEL_TIMEOUT_SEC))
-            .strip_think()
-            .accept(|text| !output_unusable(text))
-            .ledger_purpose("dashboard-assistent"),
-    )
-    .await;
-
-    let (text, provider, model, latency_ms) = match antwort {
-        Ok(response) => {
-            let text = response.text.trim().to_string();
-            if text.is_empty() {
-                spawne_log(
-                    &pool,
-                    baue_log_eintrag(
-                        &user_id,
-                        &page,
-                        &language,
-                        &q_clean,
-                        "[fehler: model_unavailable]",
-                        grounded,
-                        (None, None, None),
-                    ),
-                );
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": "model_unavailable", "message": fehler_text(&language) })),
-                )
-                    .into_response();
-            }
-            (
-                text,
-                Some(response.provider),
-                Some(response.model),
-                Some(response.latency_ms),
-            )
-        }
+    let text = match antwort {
+        Ok(reply) => brain_route::answered_text(reply),
         Err(e) => {
-            tracing::warn!(error = %e, "dashboard-assistent: Modellaufruf fehlgeschlagen");
+            tracing::warn!(error = %e, "dashboard-assistent: Brain-Aufruf fehlgeschlagen");
             spawne_log(
                 &pool,
                 baue_log_eintrag(
@@ -640,17 +622,33 @@ pub async fn ask(
                     &page,
                     &language,
                     &q_clean,
-                    "[fehler: model_unavailable]",
+                    "[fehler: brain_unavailable]",
                     grounded,
                     (None, None, None),
                 ),
             );
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": "model_unavailable", "message": fehler_text(&language) })),
+                Json(json!({ "error": "brain_unavailable", "message": fehler_text(&language) })),
             )
                 .into_response();
         }
+    };
+    let (provider, model) = (Some(PROVIDER.to_string()), None);
+    let Some(text) = text else {
+        spawne_log(
+            &pool,
+            baue_log_eintrag(
+                &user_id,
+                &page,
+                &language,
+                &q_clean,
+                "[keine Antwort]",
+                false,
+                (provider, model, latency_ms),
+            ),
+        );
+        return Json(stille_antwort(&page)).into_response();
     };
 
     let parts = split_message(&text, SPLIT_LIMIT);
@@ -668,7 +666,14 @@ pub async fn ask(
         ),
     );
 
-    Json(baue_antwort(&text, &parts, &grounding.sources, grounded, &page)).into_response()
+    Json(baue_antwort(
+        &text,
+        &parts,
+        &grounding.sources,
+        grounded,
+        &page,
+    ))
+    .into_response()
 }
 
 #[cfg(test)]
@@ -723,7 +728,9 @@ mod tests {
     #[test]
     fn geheimnis_filter_verwirft_lange_zufallskette() {
         let kette = "x".repeat(40);
-        assert!(!karten_sind_frei_von_geheimnissen(&format!("Wert: {kette}")));
+        assert!(!karten_sind_frei_von_geheimnissen(&format!(
+            "Wert: {kette}"
+        )));
     }
 
     #[test]
@@ -738,7 +745,10 @@ mod tests {
         for i in 0..(RATE_DAY_MAX - 2) {
             assert!(tag.allow(uid, 1000.0 + i as f64), "Tages-Treffer {i} frei");
         }
-        assert!(!tag.allow(uid, 5000.0), "Tageslimit nach genau max erreicht");
+        assert!(
+            !tag.allow(uid, 5000.0),
+            "Tageslimit nach genau max erreicht"
+        );
     }
 
     #[test]
@@ -770,22 +780,23 @@ mod tests {
     }
 
     #[test]
-    fn prompt_enthaelt_name_sprache_und_seite() {
-        let prompt = baue_system_prompt(
-            "NaniStreamer",
-            "de",
-            "uplink",
-            "## Auto-Raid\nRaidet weiter.",
-            "### Partner- und Bot-Status\nPartnerstatus: aktiver Partner",
-        );
-        assert!(prompt.contains("NaniStreamer"));
-        assert!(prompt.contains("Aktuelle Seite im Dashboard: uplink"));
-        assert!(prompt.contains("echten Umlauten"));
-        assert!(prompt.contains("Auto-Raid"));
-        assert!(prompt.contains("aktiver Partner"));
-
-        let en = baue_system_prompt("Foo", "en", "home", "facts", "karten");
-        assert!(en.contains("Answer in natural English."));
+    fn aufgabe_traegt_nur_strukturierte_eingaben() {
+        let task = assistent_task(AssistentEingabe {
+            name: "NaniStreamer",
+            page: "",
+            question: "Wie liefen meine Streams?",
+            history: &[],
+            facts: "",
+            karten: "### Partner- und Bot-Status",
+            language: "en",
+        });
+        let wire = serde_json::to_value(&task).unwrap();
+        assert_eq!(wire["capability"], "twitch_dashboard_assistant");
+        assert_eq!(wire["streamer_name"], "NaniStreamer");
+        assert_eq!(wire["page"], SEITE_UNBEKANNT);
+        assert_eq!(wire["knowledge"], KEIN_WISSEN);
+        assert_eq!(wire["streamer_data"], "### Partner- und Bot-Status");
+        assert_eq!(wire["language"], "en");
     }
 
     #[test]
@@ -806,7 +817,10 @@ mod tests {
     fn rate_limiter_blockt_nach_zwanzig() {
         let rl = RateLimiter::new(RATE_MINUTE_WINDOW, RATE_MINUTE_MAX);
         for i in 0..RATE_MINUTE_MAX {
-            assert!(rl.allow("42", i as f64 * 0.1), "Treffer {i} im Fenster erlaubt");
+            assert!(
+                rl.allow("42", i as f64 * 0.1),
+                "Treffer {i} im Fenster erlaubt"
+            );
         }
         assert!(!rl.allow("42", 2.5), "Treffer 21 im Fenster blockt");
         assert!(rl.allow("99", 2.5), "anderer Streamer unabhängig");
@@ -951,7 +965,10 @@ mod tests {
 
         let uplink = karte_uplink(
             Some("live"),
-            &[("twitch".to_string(), "verbunden"), ("kick".to_string(), "getrennt")],
+            &[
+                ("twitch".to_string(), "verbunden"),
+                ("kick".to_string(), "getrennt"),
+            ],
         )
         .expect("Uplink-Karte");
         assert!(uplink.contains("Livestatus: live"));

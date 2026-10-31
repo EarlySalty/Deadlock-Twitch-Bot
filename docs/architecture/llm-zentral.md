@@ -47,18 +47,23 @@ Die Use-Case-Namen trennen Logs und Ledger-Zwecke, nicht Anbieter oder Modelle.
 Die vorhandene Einwilligung für externe Social-Media-Anreicherung bleibt ein
 Pflicht-Gate; ohne Einwilligung wird nicht auf ein lokales Modell ausgewichen.
 
-## Self-Explainer
+## Self-Explainer, Dashboard-Assistent und Analyse-Chat
 
-Der öffentliche Self-Explainer nutzt den Use-Case
-`dashboard_self_explainer` direkt über `tb_llm::complete`. Er erhält die letzten
-acht Gesprächsbeiträge, damit Folgeaussagen wie „das hat mich abgehalten“ auf
-die vorher besprochenen Berechtigungen bezogen werden können.
+Diese drei Oberflächen laufen nicht über `tb_llm::complete`. Sie rufen
+`tb_llm::brain_route::converse` mit den Capabilities `twitch_self_explainer`,
+`twitch_dashboard_assistant` und `twitch_analysis_chat` auf und senden nur
+strukturierte Eingaben: Frage, Verlauf, Wissensausschnitte, Datenkarten oder
+Analysepayload. Prompts und Wortlaut liegen im Deadlock Brain.
 
-Das Modell hat bis zu 110 Sekunden. Der Handler antwortet spätestens nach 115
-Sekunden und liefert bei einem Modellfehler oder einer Zeitüberschreitung für
-dokumentierte Berechtigungsthemen eine grounded Ersatzantwort. Browser brechen
-erst nach 125 Sekunden ab. Datenbank- und Discord-Protokollierung laufen danach
-und blockieren die sichtbare Antwort nicht.
+`Silent` kommt als HTTP 200 mit `status: "silent"` an und wird in der Oberfläche
+als neutraler Hinweis gezeigt. Lokal erzeugte Ersatzantworten gibt es nicht.
+Brain-Fehler bleiben Fehler. Eine stille Antwort im Analyse-Chat verbraucht
+keine Rückfrage.
+
+Der öffentliche Self-Explainer hat keinen eigenen Kanal und läuft deshalb unter
+`twitch.bot_user_id`. Die Antwortfrist kommt aus
+`dashboard.options.brain_client.timeout_ms`. Datenbank- und Discord-Protokollierung
+laufen nachgelagert und blockieren die sichtbare Antwort nicht.
 
 ## Bewusst getrennt
 

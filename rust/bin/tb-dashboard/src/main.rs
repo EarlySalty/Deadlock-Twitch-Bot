@@ -48,6 +48,19 @@ fn install_title_ai_brain_route(
     }
 }
 
+fn install_conversation_brain_route(
+    options: &tb_config::dashboard_options::BrainClientOptions,
+    token: Option<&str>,
+) {
+    if let Err(error) = tb_llm::brain_route::install_conversation(
+        options.endpoint.as_deref(),
+        token,
+        options.timeout_ms.map(std::time::Duration::from_millis),
+    ) {
+        tracing::error!(fehler = ?error, "Brain-Route für Gespräche konnte nicht installiert werden");
+    }
+}
+
 fn optional_env_bool(name: &str, default: bool) -> bool {
     match std::env::var(name) {
         Ok(value) => {
@@ -433,6 +446,10 @@ async fn main() {
         &config.dashboard.options.brain_client,
         title_brain_token.as_deref(),
     );
+    install_conversation_brain_route(
+        &config.dashboard.options.brain_client,
+        title_brain_token.as_deref(),
+    );
 
     let pause_loop_helix = pause_loop_helix_client_from_env();
     let private_vod_paths = tb_vod_archive::private_range::PrivateRangePaths {
@@ -475,9 +492,8 @@ async fn main() {
         });
     }
     let brain_runtime =
-        tb_dashboard_api::handlers::self_explainer::SelfExplainerBrainRuntime::from_config(
-            &config.dashboard.options.brain_client,
-            title_brain_token.as_deref(),
+        tb_dashboard_api::handlers::self_explainer::SelfExplainerBrainRuntime::for_broadcaster(
+            &config.twitch.bot_user_id,
         );
     let mut app = tb_dashboard_api::build_router_with_analysis_writer(
         pool.clone(),

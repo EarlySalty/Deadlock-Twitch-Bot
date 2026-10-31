@@ -36,7 +36,8 @@ export async function fetchAIHistory(
 export async function fetchAIChat(
   streamer: string,
   analysisId: number,
-  message: string
+  message: string,
+  language: string
 ): Promise<AIChatResponse> {
   const response = await fetch(
     buildApiUrl('/ai/chat'),
@@ -50,6 +51,7 @@ export async function fetchAIChat(
         streamer,
         analysis_id: analysisId,
         message,
+        language,
       }),
     })
   );

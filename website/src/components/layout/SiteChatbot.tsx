@@ -1,4 +1,4 @@
-import { landingText } from "@/lib/landingLocale";
+import { isEnglishLanding, landingText } from "@/lib/landingLocale";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Bot, Loader2, MessageCircle, Send, X } from "lucide-react";
@@ -107,7 +107,11 @@ export function SiteChatbot({
       const response = await fetch(ASK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: text, history }),
+        body: JSON.stringify({
+          question: text,
+          history,
+          language: isEnglishLanding() ? "en" : "de",
+        }),
         signal: controller.signal,
       });
 

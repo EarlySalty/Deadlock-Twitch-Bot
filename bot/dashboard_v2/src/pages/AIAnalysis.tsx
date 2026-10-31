@@ -184,8 +184,10 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
     setChatMessages(prev => [...prev, userMessage]);
 
     try {
-      const response = await fetchAIChat(streamer, result.id, outgoingMessage);
-      setResult(prev => prev ? ({ ...prev, followUpsRemaining: response.followUpsRemaining }) : prev);
+      const response = await fetchAIChat(streamer, result.id, outgoingMessage, locale.toLowerCase().startsWith('en') ? 'en' : 'de');
+      if (response.status !== 'silent') {
+        setResult(prev => prev ? ({ ...prev, followUpsRemaining: response.followUpsRemaining }) : prev);
+      }
       setRateLimitReset(response.rateLimitReset ?? null);
       setChatMessages(prev => [
         ...prev,
