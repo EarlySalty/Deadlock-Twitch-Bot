@@ -83,7 +83,7 @@ jobs:
 
   test:
     name: "cargo test (workspace)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     services:
       postgres:
@@ -116,13 +116,17 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
 
-      - name: Ensure PostgreSQL 16 binaries for embedded test servers
+      - name: Install PostgreSQL 16 with TimescaleDB and ffmpeg for embedded test servers
         run: |
-          if [ ! -x /usr/lib/postgresql/16/bin/postgres ]; then
-            sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends postgresql-16
-          fi
+          curl -sSL https://packagecloud.io/timescale/timescaledb/gpgkey \
+            | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/timescaledb.gpg
+          echo "deb https://packagecloud.io/timescale/timescaledb/ubuntu/ $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/timescaledb.list
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-16 timescaledb-2-postgresql-16 ffmpeg
           /usr/lib/postgresql/16/bin/postgres --version
+          ffmpeg -version | head -n 1
+          test -f /usr/lib/postgresql/16/lib/timescaledb.so
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
