@@ -13,10 +13,6 @@ use tb_config::dashboard_options::{BrainClientMode, BrainClientOptions};
 use tb_config::operations::BrainChatOptions;
 use tb_knowledge::brain::{BrainAdapterError, BrainKnowledgeAdapter, KnowledgeReply};
 
-const UNUSABLE_REPLY: &str =
-    "Die Antwort kann ich hier nicht sicher wiedergeben. Frag bitte im Discord nach.";
-const UNAVAILABLE_REPLY: &str =
-    "Ich kann gerade keine Antwort abrufen. Versuch es bitte später noch einmal.";
 const COACHING_TARGET: &str = "https://deutsche-deadlock-community.de/coaching";
 
 #[async_trait]
@@ -428,7 +424,11 @@ impl BrainChatPort for BrainChatService {
                 self.backend_state(BackendState::Available);
                 match safe_chat_answer(&text) {
                     Some(text) => (text, "Answered"),
-                    None => (UNUSABLE_REPLY.to_string(), "Fehler"),
+                    None => {
+                        tracing::info!(reason = "unusable_answer", "Brain-Chat schweigt");
+                        self.finish(id, "", "Fehler", false, started).await;
+                        return true;
+                    }
                 }
             }
             Ok(KnowledgeReply::NoEvidence) => {
@@ -450,7 +450,8 @@ impl BrainChatPort for BrainChatService {
                         "Brain-Chat-Frage abgelehnt",
                     );
                 }
-                (UNAVAILABLE_REPLY.to_string(), "Fehler")
+                self.finish(id, "", "Fehler", false, started).await;
+                return true;
             }
         };
         if !self.finish(id, &text, status, true, started).await {
@@ -788,7 +789,7 @@ mod tests {
                 "Answered",
                 "Sent",
             ),
-            (1, ResponseTemplate::new(503), "Fehler", "Sent"),
+            (1, ResponseTemplate::new(503), "Fehler", "Fehler"),
         ] {
             event.message_id = format!("message-{index}");
             event.chatter_user_id = (1186925760_u64 + index).to_string();
@@ -843,8 +844,7 @@ mod tests {
             server.verify().await;
         }
         let sends = chat.sends.lock().unwrap();
-        assert_eq!(sends.len(), 2);
-        assert_eq!(sends[1].2, UNAVAILABLE_REPLY);
+        assert_eq!(sends.len(), 1, "Ausfall sendet keinen Ersatztext");
     }
 
     #[tokio::test]
@@ -938,7 +938,7 @@ mod tests {
             ..question
         };
         let unusable_id = log.begin(&unusable).await.unwrap().unwrap();
-        log.finish(unusable_id, UNUSABLE_REPLY, "Fehler", 10, true)
+        log.finish(unusable_id, "Nicht sicher.", "Fehler", 10, true)
             .await
             .unwrap();
         log.delivery(unusable_id, true, 20).await.unwrap();
@@ -1356,7 +1356,7 @@ mod tests {
             assert!(service.maybe_respond(&event(index)).await);
         }
         let sends = chat.sends.lock().unwrap().clone();
-        assert_eq!(sends.len(), 4);
+        assert_eq!(sends.len(), 1, "nur belastbare Antworten gehen raus");
         assert_eq!(
             sends[0],
             (
@@ -1365,10 +1365,6 @@ mod tests {
                 "Vier Fähigkeiten. ＠everyone".into()
             )
         );
-        assert_eq!(sends[1].2, UNUSABLE_REPLY);
-        assert_eq!(sends[2].2, UNUSABLE_REPLY);
-        assert_eq!(sends[3].1, "message-5");
-        assert_eq!(sends[3].2, UNAVAILABLE_REPLY);
         let records = log.results.lock().unwrap().clone();
         assert_eq!(
             records.iter().map(|row| row.1.as_str()).collect::<Vec<_>>(),
@@ -1383,7 +1379,7 @@ mod tests {
         );
         assert!(records[3..5].iter().all(|row| row.0.is_empty()));
         assert!(records.iter().all(|row| row.2 >= 0));
-        assert_eq!(log.deliveries.lock().unwrap().len(), 4);
+        assert_eq!(log.deliveries.lock().unwrap().len(), 1);
         assert!(log.deliveries.lock().unwrap().iter().all(|row| row.0));
         assert_eq!(log.questions.lock().unwrap().len(), 6);
         assert!(matches!(
@@ -1423,15 +1419,10 @@ mod tests {
         assert!(service.maybe_respond(&event(0)).await);
         assert!(service.maybe_respond(&event(1)).await);
         let sends = chat.sends.lock().unwrap();
-        assert_eq!(sends.len(), 1);
-        assert_eq!(
-            sends[0],
-            ("200".into(), "message-0".into(), UNAVAILABLE_REPLY.into())
-        );
+        assert!(sends.is_empty(), "Ausfall sendet keinen Ersatztext");
         assert_eq!(log.results.lock().unwrap()[0].1, "Fehler");
         assert_eq!(log.questions.lock().unwrap().len(), 1);
-        assert_eq!(log.deliveries.lock().unwrap().len(), 1);
-        assert!(log.deliveries.lock().unwrap()[0].0);
+        assert!(log.deliveries.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1485,12 +1476,10 @@ mod tests {
         tokio::time::resume();
         {
             let sends = chat.sends.lock().unwrap();
-            assert_eq!(sends.len(), 1);
-            assert_eq!(sends[0].2, UNAVAILABLE_REPLY);
+            assert!(sends.is_empty(), "Ausfall sendet keinen Ersatztext");
         }
         assert_eq!(log.results.lock().unwrap()[0].1, "Fehler");
-        assert_eq!(log.deliveries.lock().unwrap().len(), 1);
-        assert!(log.deliveries.lock().unwrap()[0].0);
+        assert!(log.deliveries.lock().unwrap().is_empty());
         server.verify().await;
     }
 

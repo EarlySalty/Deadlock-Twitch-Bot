@@ -141,7 +141,7 @@ mod test_postgres;
 pub mod streamer_voice;
 
 #[cfg(test)]
+mod test_brain;
+#[cfg(test)]
 #[path = "../../../test-support/schema_sql.rs"]
 mod test_sql;
-#[cfg(test)]
-mod test_brain;
