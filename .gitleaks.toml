@@ -84,3 +84,14 @@ paths = ['''website/src/components/partner-clean/Trustpilot\.tsx''']
 regexTarget = "line"
 regexes = ['''data-token="[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"''']
 condition = "AND"
+
+[[allowlists]]
+description = "Testfixtures und Demo-Chiffrate, keine echten Secrets."
+targetRules = ["generic-api-key"]
+paths = [
+  '''src/auth\.rs''',
+  '''src/transcode/encoder\.rs''',
+  '''rust/crates/tb-dashboard-api/src/handlers/ad_manager\.rs''',
+  '''rust/crates/tb-dashboard-api/src/obs/ws\.rs''',
+  '''website/src/components/partner-clean/Security\.tsx''',
+]

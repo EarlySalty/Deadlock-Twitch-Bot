@@ -1,27 +1,7 @@
-name: "Maximum Security & Quality Analysis"
+name: "Security extended"
 
 queries:
   - uses: security-extended
-
-packs:
-  javascript-typescript:
-    - codeql/javascript-queries
-  go:
-    - codeql/go-queries
-  java-kotlin:
-    - codeql/java-queries
-  csharp:
-    - codeql/csharp-queries
-  ruby:
-    - codeql/ruby-queries
-  rust:
-    - codeql/rust-queries
-  python:
-    - codeql/python-queries
-  c-cpp:
-    - codeql/cpp-queries
-  swift:
-    - codeql/swift-queries
 
 paths-ignore:
   - '**/node_modules/**'
@@ -30,3 +10,5 @@ paths-ignore:
   - '**/dist/**'
   - '**/build/**'
   - '**/__pycache__/**'
+  - '**/graphify-out/**'
+  - '.tasks/**'

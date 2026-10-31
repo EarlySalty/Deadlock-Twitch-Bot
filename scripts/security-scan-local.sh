@@ -151,19 +151,6 @@ if need gitleaks; then
   else
     printf 'title = "local"\n[extend]\nuseDefault = true\n' > "$gitleaks_cfg"
   fi
-  cat >> "$gitleaks_cfg" <<'EOF'
-
-[[allowlists]]
-description = "Testfixtures und Demo-Chiffrate, keine echten Secrets."
-paths = [
-  '''src/auth\.rs''',
-  '''src/transcode/encoder\.rs''',
-  '''rust/crates/tb-dashboard-api/src/handlers/ad_manager\.rs''',
-  '''rust/crates/tb-dashboard-api/src/obs/ws\.rs''',
-  '''website/src/components/partner-clean/Security\.tsx''',
-]
-targetRules = ["generic-api-key"]
-EOF
   gitleaks_args=(detect --source "$SCAN_DIR" --no-git --no-banner --redact --exit-code 1 --config "$gitleaks_cfg")
   if quiet gitleaks "${gitleaks_args[@]}"; then
     pass "gitleaks"

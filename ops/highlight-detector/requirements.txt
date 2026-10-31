@@ -9,3 +9,4 @@ pytest==9.0.3
 Pillow==13.0.0
 idna==3.15
 Pygments==2.20.0
+certifi==2026.10.18

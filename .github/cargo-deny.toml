@@ -2,3 +2,8 @@
 ignore = [
   { id = "RUSTSEC-2026-0381", reason = "webpki-roots 0.26.11 via sqlx-core 0.8 is a semver shim re-exporting the patched webpki-roots 1.0.10" },
 ]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-org = { github = ["EarlySalty"] }
