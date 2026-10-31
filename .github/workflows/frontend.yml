@@ -7,7 +7,6 @@ on:
       - "website/**"
       - "bot/admin_dashboard/**"
       - "bot/dashboard_v2/**"
-      - ".nvmrc"
       - ".github/workflows/frontend.yml"
   pull_request:
     branches: [main]
@@ -15,7 +14,6 @@ on:
       - "website/**"
       - "bot/admin_dashboard/**"
       - "bot/dashboard_v2/**"
-      - ".nvmrc"
       - ".github/workflows/frontend.yml"
   workflow_dispatch:
 
@@ -53,7 +51,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version-file: .nvmrc
+          node-version: "22"
           cache: npm
           cache-dependency-path: ${{ matrix.dir }}/package-lock.json
       - name: Install dependencies
