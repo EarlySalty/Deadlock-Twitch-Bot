@@ -13,8 +13,6 @@
 //! löst die URL erneut auf; fehlt sie dann, wird das Fenster verbraucht.
 
 use std::collections::HashMap;
-#[cfg(not(test))]
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -25,9 +23,11 @@ use serde_json::Value;
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 use tb_engagement::llm_chat::EngagementLlmClient;
+use tb_llm::brain_route::{ConversationPort, ConversationTask, InstalledConversation};
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
+use crate::brain_wording;
 use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
 use crate::types::{ChatMessageEvent, SendOutcome};
 
@@ -35,45 +35,6 @@ const INVITE_QUESTION_CHANNEL_COOLDOWN: Duration = Duration::from_secs(120);
 const INVITE_QUESTION_USER_COOLDOWN: Duration = Duration::from_secs(3600);
 const INVITE_QUESTION_JUDGED_COOLDOWN: Duration = Duration::from_secs(30);
 const PENDING_CONFIRMATION_WINDOW: Duration = Duration::from_secs(120);
-const GO_REPLIES: [&str; 4] = [
-    "@{chatter} Deadlock-Zugang gesucht? Im Discord bei frag-die-community kurz nach einem Invite fragen und am besten direkt den Steam-Freundescode dazupacken :) {invite}",
-    "@{chatter} Für den Deadlock-Invite einmal zu frag-die-community im Discord und den Steam-Freundescode dazupacken, dann weiß jeder direkt Bescheid :) {invite}",
-    "@{chatter} Den Deadlock-Invite klären wir im Discord: frag-die-community öffnen, Steam-Freundescode dazu und los :) {invite}",
-    "@{chatter} Spiel-Invite fehlt noch? Im Discord bei frag-die-community den Steam-Freundescode dazulassen, dann kann dir jemand direkt helfen :) {invite}",
-];
-const CONFIRM_REPLIES: [&str; 4] = [
-    "@{chatter} Meinst du einen Invite fürs Spiel? Ein kurzes ja reicht, dann schick ich dir direkt den Weg.",
-    "@{chatter} Geht es um Deadlock-Zugang? Sag kurz ja, dann bekommst du direkt den Weg.",
-    "@{chatter} Suchst du wirklich den Spiel-Invite? Dann einmal ja und ich schick dir den Weg.",
-    "@{chatter} Fehlt dir der Zugang zu Deadlock? Wenn ja, sag kurz ja, dann geht es direkt weiter.",
-];
-#[cfg(not(test))]
-static GO_REPLY_INDEX: AtomicUsize = AtomicUsize::new(0);
-#[cfg(not(test))]
-static CONFIRM_REPLY_INDEX: AtomicUsize = AtomicUsize::new(0);
-
-fn next_go_reply() -> &'static str {
-    #[cfg(test)]
-    {
-        GO_REPLIES[0]
-    }
-    #[cfg(not(test))]
-    {
-        GO_REPLIES[GO_REPLY_INDEX.fetch_add(1, Ordering::Relaxed) % GO_REPLIES.len()]
-    }
-}
-
-fn next_confirm_reply() -> &'static str {
-    #[cfg(test)]
-    {
-        CONFIRM_REPLIES[0]
-    }
-    #[cfg(not(test))]
-    {
-        CONFIRM_REPLIES[CONFIRM_REPLY_INDEX.fetch_add(1, Ordering::Relaxed) % CONFIRM_REPLIES.len()]
-    }
-}
-
 const INVITE_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein vorsichtiger deutschsprachiger Twitch-Chat-Moderator für einen Deadlock-Stream.
 
 Beurteile, ob der Chatter Zugang zum Spiel Deadlock braucht: Einladung, Invite, Beta-Key, Early Access oder wie man mitspielen kann. Das zählt auch ohne Fragezeichen — eine Aussage wie "man bekommt ja keinen Zugang" oder "ohne Invite kommt man nicht rein" ist ebenso ein Zugangsbedarf wie eine direkte Frage.
@@ -658,6 +619,7 @@ pub struct InviteQuestionResponder {
     promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
     invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
     clock: Arc<dyn InviteQuestionClock>,
+    conversation: Arc<dyn ConversationPort>,
     channel_cooldowns: Mutex<HashMap<String, Instant>>,
     user_cooldowns: Mutex<HashMap<(String, String), (Instant, CooldownKind)>>,
     pending_confirmations: Mutex<HashMap<(String, String), Instant>>,
@@ -670,6 +632,11 @@ enum CooldownKind {
 }
 
 impl InviteQuestionResponder {
+    pub fn with_conversation(mut self, conversation: Arc<dyn ConversationPort>) -> Self {
+        self.conversation = conversation;
+        self
+    }
+
     pub fn new(
         api: Arc<dyn ChatApi>,
         invite_url: Arc<dyn InviteQuestionInviteUrlPort>,
@@ -706,6 +673,7 @@ impl InviteQuestionResponder {
             promo_block_check,
             invite_reply_notifier,
             clock,
+            conversation: Arc::new(InstalledConversation),
             channel_cooldowns: Mutex::new(HashMap::new()),
             user_cooldowns: Mutex::new(HashMap::new()),
             pending_confirmations: Mutex::new(HashMap::new()),
@@ -730,7 +698,12 @@ impl InviteQuestionResponder {
                     return false;
                 };
                 if !self
-                    .send_go(event, &decision.chatter_login, invite_url)
+                    .send_go(
+                        event,
+                        &decision.chatter_login,
+                        &decision.channel_login,
+                        invite_url,
+                    )
                     .await
                 {
                     return false;
@@ -740,8 +713,17 @@ impl InviteQuestionResponder {
                 true
             }
             InviteQuestionAction::AskConfirmation => {
+                let Some(invite_url) = decision.invite_url.as_deref() else {
+                    return false;
+                };
                 if !self
-                    .send_confirmation_question(event, &decision.chatter_login)
+                    .phrase_and_send(
+                        event,
+                        &decision.chatter_login,
+                        &decision.channel_login,
+                        invite_url,
+                        true,
+                    )
                     .await
                 {
                     return false;
@@ -931,7 +913,10 @@ impl InviteQuestionResponder {
             chatter_login,
             raw.to_string(),
         );
-        if action == InviteQuestionAction::SendGo {
+        if matches!(
+            action,
+            InviteQuestionAction::SendGo | InviteQuestionAction::AskConfirmation
+        ) {
             decision.invite_url = Some(invite_url);
         }
         decision
@@ -1144,20 +1129,41 @@ impl InviteQuestionResponder {
         }
     }
 
-    async fn send_confirmation_question(
+    async fn send_go(
         &self,
         event: &ChatMessageEvent,
         chatter_login: &str,
+        channel_login: &str,
+        invite: &str,
     ) -> bool {
-        let msg = next_confirm_reply().replace("{chatter}", chatter_login);
-        self.send(event, &msg).await
+        let is_newcomer = self.is_newcomer(channel_login, chatter_login).await;
+        self.phrase_and_send(event, chatter_login, channel_login, invite, is_newcomer)
+            .await
     }
 
-    async fn send_go(&self, event: &ChatMessageEvent, chatter_login: &str, invite: &str) -> bool {
-        let msg = next_go_reply()
-            .replace("{chatter}", chatter_login)
-            .replace("{invite}", invite);
-        self.send(event, &msg).await
+    async fn phrase_and_send(
+        &self,
+        event: &ChatMessageEvent,
+        chatter_login: &str,
+        channel_login: &str,
+        invite: &str,
+        is_newcomer: bool,
+    ) -> bool {
+        let task = ConversationTask::TwitchInviteReply {
+            stream: brain_wording::stream_context(channel_login, true),
+            author: chatter_login.to_string(),
+            message: event.text().to_string(),
+            recent_messages: Vec::new(),
+            is_newcomer,
+            invite_url: Some(invite.to_string()),
+        };
+        let phrased =
+            brain_wording::phrase(self.conversation.as_ref(), &event.broadcaster_user_id, task)
+                .await;
+        match phrased {
+            Some(message) => self.send(event, &message).await,
+            None => false,
+        }
     }
 
     async fn send(&self, event: &ChatMessageEvent, message: &str) -> bool {
@@ -1596,7 +1602,8 @@ mod tests {
             clock.clone(),
             promo_block_check,
             invite_reply_notifier,
-        );
+        )
+        .with_conversation(Arc::new(crate::test_brain::EchoBrain));
         (invite, clock)
     }
 
@@ -1605,13 +1612,11 @@ mod tests {
     }
 
     fn expected_go_with_invite(chatter: &str, invite: &str) -> String {
-        GO_REPLIES[0]
-            .replace("{chatter}", chatter)
-            .replace("{invite}", invite)
+        crate::test_brain::echo_text(chatter, invite)
     }
 
     fn expected_confirm(chatter: &str) -> String {
-        CONFIRM_REPLIES[0].replace("{chatter}", chatter)
+        crate::test_brain::echo_text(chatter, "https://discord.gg/test")
     }
 
     async fn decide_action(
@@ -2191,28 +2196,6 @@ mod tests {
         assert_eq!(api.messages(), vec![expected_confirm("viewer")]);
         assert!(invite.pending_confirmations.lock().unwrap().is_empty());
         assert_eq!(notifier.calls(), vec!["streamer"]);
-    }
-
-    #[test]
-    fn go_text_unter_twitch_limit() {
-        let chatter = "abcdefghijklmnopqrstuvwxy";
-        let invite = "https://discord.gg/abcdefghijklmnopqrstu";
-        assert_eq!(chatter.len(), 25);
-        assert_eq!(invite.len(), 40);
-
-        for template in GO_REPLIES {
-            let rendered = template
-                .replace("{chatter}", chatter)
-                .replace("{invite}", invite);
-            assert!(rendered.len() < 500);
-            assert_eq!(template.matches("{chatter}").count(), 1);
-            assert_eq!(template.matches("{invite}").count(), 1);
-        }
-        for template in CONFIRM_REPLIES {
-            let rendered = template.replace("{chatter}", chatter);
-            assert!(rendered.len() < 500);
-            assert_eq!(template.matches("{chatter}").count(), 1);
-        }
     }
 
     #[tokio::test]

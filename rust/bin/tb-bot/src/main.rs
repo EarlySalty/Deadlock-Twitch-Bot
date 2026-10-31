@@ -70,6 +70,19 @@ fn install_title_ai_brain_route(
     }
 }
 
+fn install_conversation_brain_route(
+    options: &tb_config::dashboard_options::BrainClientOptions,
+    token: Option<&str>,
+) {
+    if let Err(error) = tb_llm::brain_route::install_conversation(
+        options.endpoint.as_deref(),
+        token,
+        options.timeout_ms.map(std::time::Duration::from_millis),
+    ) {
+        tracing::error!(fehler = ?error, "Brain-Route für Chat-Antworten konnte nicht installiert werden");
+    }
+}
+
 /// Sucht das yt-dlp-Binary: `YT_DLP_PATH`, dann das Repo-venv im Arbeitsverzeichnis,
 /// dann `~/.local/bin/yt-dlp`, sonst der blanke Name für die PATH-Suche.
 ///
@@ -600,6 +613,10 @@ async fn main() {
     )
     .expect("Verbrauchserfassung initialisieren");
     install_title_ai_brain_route(
+        &config.bot.brain_client,
+        Some(settings.internal_api.token.as_str()),
+    );
+    install_conversation_brain_route(
         &config.bot.brain_client,
         Some(settings.internal_api.token.as_str()),
     );

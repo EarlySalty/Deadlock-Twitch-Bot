@@ -2006,6 +2006,27 @@ impl ChatHooks {
         let Some((slug, tip_text)) = pick else {
             return;
         };
+        let task = tb_llm::brain_route::ConversationTask::TwitchTip {
+            slug: slug.clone(),
+            source_text: tip_text,
+            language: tb_llm::brain_route::ReplyLanguage::De,
+        };
+        let phrased = match tb_llm::brain_route::converse(twitch_user_id, task).await {
+            Ok(reply) => tb_llm::brain_route::answered_text(reply),
+            Err(error) => {
+                tracing::warn!(
+                    code = error.code(),
+                    %twitch_user_id,
+                    %login,
+                    %slug,
+                    "go-live-tipp: Brain nicht verfügbar"
+                );
+                None
+            }
+        };
+        let Some(tip_text) = phrased else {
+            return;
+        };
 
         match self.api.send_message(twitch_user_id, &tip_text).await {
             Ok(SendOutcome::Sent) => {

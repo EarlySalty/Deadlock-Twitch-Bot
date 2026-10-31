@@ -1,8 +1,6 @@
 //! LFG-Mitspieler-Pitch: billiger Regex-Vorfilter vor dem KI-Judge.
 
 use std::collections::HashMap;
-#[cfg(not(test))]
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -11,9 +9,11 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use tb_engagement::llm_chat::EngagementLlmClient;
+use tb_llm::brain_route::{ConversationPort, ConversationTask, InstalledConversation};
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
+use crate::brain_wording;
 use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
 use crate::invite_question::InviteQuestionInviteUrlPort;
 use crate::types::{ChatMessageEvent, SendOutcome};
@@ -22,28 +22,6 @@ use crate::zuschauer_register::{GateOutcome, ZuschauerRegister};
 const LFG_PITCH_CHANNEL_COOLDOWN: Duration = Duration::from_secs(120);
 const LFG_PITCH_USER_COOLDOWN: Duration = Duration::from_secs(6 * 60 * 60);
 const LFG_PITCH_JUDGE_COOLDOWN: Duration = Duration::from_secs(30);
-
-pub const LFG_PITCH_REPLIES: [&str; 4] = [
-    "@{chatter} Klar! Im Discord findest du Mitspieler für Deadlock und die passenden Sprachkanäle dazu :) {invite}",
-    "@{chatter} Für die nächste Deadlock-Runde fehlt dir noch jemand? Im Discord findest du Mitspieler :) {invite}",
-    "@{chatter} Gemeinsam spielt sich's besser. Im Discord kannst du dich direkt für eine Deadlock-Runde verabreden :) {invite}",
-    "@{chatter} Im Discord sind Leute für gemeinsame Deadlock-Runden unterwegs. Schau rein, wenn du mitspielen magst :) {invite}",
-];
-pub const LFG_PITCH_REPLY: &str = LFG_PITCH_REPLIES[0];
-#[cfg(not(test))]
-static LFG_PITCH_REPLY_INDEX: AtomicUsize = AtomicUsize::new(0);
-
-fn next_lfg_pitch_reply() -> &'static str {
-    #[cfg(test)]
-    {
-        LFG_PITCH_REPLIES[0]
-    }
-    #[cfg(not(test))]
-    {
-        LFG_PITCH_REPLIES
-            [LFG_PITCH_REPLY_INDEX.fetch_add(1, Ordering::Relaxed) % LFG_PITCH_REPLIES.len()]
-    }
-}
 
 const LFG_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein vorsichtiger deutschsprachiger Twitch-Chat-Moderator für einen Deadlock-Stream.
 
@@ -500,6 +478,7 @@ pub struct LfgPitchResponder {
     recent_chat: Option<Arc<dyn RecentChatPort>>,
     zuschauer_register: Option<Arc<dyn LfgRegisterGate>>,
     invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
+    conversation: Arc<dyn ConversationPort>,
     channel_cooldowns: Mutex<HashMap<String, Instant>>,
     user_cooldowns: Mutex<HashMap<(String, String), Instant>>,
     judge_cooldowns: Mutex<HashMap<(String, String), Instant>>,
@@ -548,10 +527,16 @@ impl LfgPitchResponder {
             recent_chat,
             zuschauer_register: None,
             invite_reply_notifier,
+            conversation: Arc::new(InstalledConversation),
             channel_cooldowns: Mutex::new(HashMap::new()),
             user_cooldowns: Mutex::new(HashMap::new()),
             judge_cooldowns: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn with_conversation(mut self, conversation: Arc<dyn ConversationPort>) -> Self {
+        self.conversation = conversation;
+        self
     }
 
     pub fn set_zuschauer_register(mut self, register: Arc<ZuschauerRegister>) -> Self {
@@ -860,10 +845,27 @@ impl LfgPitchResponder {
     }
 
     async fn send_go(&self, event: &ChatMessageEvent, chatter_login: &str, invite: &str) -> bool {
-        let message = next_lfg_pitch_reply()
-            .replace("{chatter}", chatter_login)
-            .replace("{invite}", invite);
-        self.send(event, &message).await
+        let recent_chat = match &self.recent_chat {
+            Some(port) => {
+                port.recent_chat(&event.broadcaster_user_login, &event.message_id)
+                    .await
+            }
+            None => Vec::new(),
+        };
+        let task = ConversationTask::TwitchLfgReply {
+            stream: brain_wording::stream_context(&event.broadcaster_user_login, true),
+            author: chatter_login.to_string(),
+            message: event.text().to_string(),
+            recent_messages: brain_wording::chat_lines(&recent_chat),
+            invite_url: Some(invite.to_string()),
+        };
+        let phrased =
+            brain_wording::phrase(self.conversation.as_ref(), &event.broadcaster_user_id, task)
+                .await;
+        match phrased {
+            Some(message) => self.send(event, &message).await,
+            None => false,
+        }
     }
 
     async fn send(&self, event: &ChatMessageEvent, message: &str) -> bool {
@@ -908,18 +910,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
     use tb_engagement::llm_chat::EngagementLlmClient;
-
-    #[test]
-    fn alle_lfg_antworten_enthalten_genau_einen_link_und_bleiben_kurz() {
-        for template in LFG_PITCH_REPLIES {
-            assert_eq!(template.matches("{chatter}").count(), 1);
-            assert_eq!(template.matches("{invite}").count(), 1);
-            let message = template
-                .replace("{chatter}", "abcdefghijklmnopqrstuvwxy")
-                .replace("{invite}", "https://discord.gg/abcdefghijklmnopqrstu");
-            assert!(message.len() < 500);
-        }
-    }
 
     #[test]
     fn parse_lfg_verdict_liefert_yes_mit_confidence() {
@@ -1281,7 +1271,8 @@ mod tests {
             })),
             None,
             Some(notifier_trait),
-        );
+        )
+        .with_conversation(Arc::new(crate::test_brain::EchoBrain));
         responder.zuschauer_register = Some(Arc::new(FakeRegisterGate {
             outcome: FakeGateOutcome::Pass,
         }));

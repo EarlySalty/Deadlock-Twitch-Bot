@@ -23,6 +23,7 @@
 //! [`global_ban_sweep`] (Offline-Sweep-Executor).
 
 pub mod api;
+mod brain_wording;
 pub mod catalog;
 pub mod channel_classifier;
 pub mod channel_policy;
@@ -96,7 +97,6 @@ pub use invite_question::{
 };
 pub use lfg_pitch::{
     LfgJudge, LfgJudgeInput, LfgPitchResponder, LfgVerdict, LfgVerdictKind, LlmLfgJudge,
-    LFG_PITCH_REPLY,
 };
 pub use lurker_policy::{
     is_passive_lurker_channel, should_attempt_runtime_heal, PASSIVE_LURKER_DETAIL,
@@ -144,3 +144,5 @@ pub mod streamer_voice;
 #[cfg(test)]
 #[path = "../../../test-support/schema_sql.rs"]
 mod test_sql;
+#[cfg(test)]
+mod test_brain;

@@ -2929,14 +2929,17 @@ mod tests {
                 Arc::clone(&api_trait),
                 pool.clone(),
             )),
-            invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
-                invite_api_trait,
-                Arc::new(StaticInviteUrl),
-                Arc::new(NewcomerInviteStore),
-                Arc::new(AlwaysYesInviteJudge),
-                None,
-                None,
-            )),
+            invite_question: Arc::new(
+                crate::invite_question::InviteQuestionResponder::new(
+                    invite_api_trait,
+                    Arc::new(StaticInviteUrl),
+                    Arc::new(NewcomerInviteStore),
+                    Arc::new(AlwaysYesInviteJudge),
+                    None,
+                    None,
+                )
+                .with_conversation(Arc::new(crate::test_brain::EchoBrain)),
+            ),
             streamer_voice: None,
             lfg_pitch: Arc::new(
                 crate::lfg_pitch::LfgPitchResponder::new(
@@ -2948,6 +2951,7 @@ mod tests {
                     None,
                     None,
                 )
+                .with_conversation(Arc::new(crate::test_brain::EchoBrain))
                 .set_test_register_pass(),
             ),
             promos: Arc::new(PromoEngine::new(

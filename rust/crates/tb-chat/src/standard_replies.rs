@@ -1,8 +1,8 @@
-//! Zwei feste Chat-Antworten ohne KI: Begrüßung erwidern und die
+//! Zwei Chat-Antworten mit festen Auslösern: Begrüßung erwidern und die
 //! Release-Datum-Frage beantworten.
 //!
-//! Beide sind bewusst dumm und deterministisch — reine Regex-Treffer, feste
-//! Texte, Cooldowns. Der teure Weg (Judge, Invite-Rückfrage) liegt in
+//! Auslöser und Cooldowns bleiben reine Regex- und Zeitlogik, den Wortlaut
+//! formuliert das Brain. Nur `Answered` geht in den Chat. Der teure Weg (Judge, Invite-Rückfrage) liegt in
 //! [`crate::invite_question`] und bleibt davon unberührt.
 //!
 //! # Vertrag
@@ -26,6 +26,10 @@ use std::time::{Duration, Instant};
 
 use regex::Regex;
 use sqlx::PgPool;
+use tb_llm::brain_route::{
+    answered_text, ConversationPort, ConversationTask, InstalledConversation, StandardReplyKind,
+    StreamContext,
+};
 use tracing::{info, warn};
 
 use crate::api::ChatApi;
@@ -40,11 +44,6 @@ const RELEASE_COOLDOWN: Duration = Duration::from_secs(300);
 /// existiert: der Bot grüßt auch im Offline-Chat zurück, und ohne Session gibt
 /// es keinen Streamstart, gegen den sich der letzte Gruß messen ließe.
 const GREETING_OFFLINE_WINDOW_HOURS: i32 = 6;
-
-// Rückgruß, keine Begrüßung: der Bot weiß nicht, ob jemand neu ist — "willkommen
-// im Chat" an einen Stammgast liest sich falsch.
-const GREETING_REPLY: &str = "@{chatter} Hey, schön dass du da bist! 💜";
-const RELEASE_REPLY: &str = "@{chatter} Ein offizielles Release-Datum gibt es leider noch nicht, das Warten nervt uns auch. Wenn du trotzdem schon reinschauen magst: tipp !invite, dann zeige ich dir den Weg zu einer Einladung.";
 
 /// Grußformeln — die Nachricht darf praktisch nur daraus bestehen.
 fn greeting_re() -> &'static Regex {
@@ -124,6 +123,7 @@ pub fn classify_standard_reply(content: &str, is_deadlock_live: bool) -> Option<
 }
 
 pub struct StandardReplies {
+    conversation: Arc<dyn ConversationPort>,
     api: Arc<dyn ChatApi>,
     pool: PgPool,
     cooldowns: Mutex<HashMap<(String, StandardReply), Instant>>,
@@ -134,8 +134,14 @@ impl StandardReplies {
         Self {
             api,
             pool,
+            conversation: Arc::new(InstalledConversation),
             cooldowns: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn with_conversation(mut self, conversation: Arc<dyn ConversationPort>) -> Self {
+        self.conversation = conversation;
+        self
     }
 
     /// Kanal-Schalter für den Rückgruß (Dashboard → Verwaltung). Fehlende Zeile
@@ -277,11 +283,13 @@ impl StandardReplies {
             return false;
         };
 
-        let template = match kind {
-            StandardReply::Greeting => GREETING_REPLY,
-            StandardReply::ReleaseDate => RELEASE_REPLY,
+        let Some(message) = self
+            .phrase(event, channel_login, kind, is_deadlock_live)
+            .await
+        else {
+            self.release(channel_login, kind, previous);
+            return false;
         };
-        let message = template.replace("{chatter}", &event.chatter_user_login);
 
         // Nur eine wirklich zugestellte Nachricht zaehlt: sonst wuerde ein
         // stiller Twitch-Drop (Timeout, Kanaleinstellung) den Cooldown setzen
@@ -312,6 +320,36 @@ impl StandardReplies {
                 false
             }
         }
+    }
+
+    async fn phrase(
+        &self,
+        event: &ChatMessageEvent,
+        channel_login: &str,
+        kind: StandardReply,
+        is_deadlock_live: bool,
+    ) -> Option<String> {
+        let reply = match kind {
+            StandardReply::Greeting => StandardReplyKind::Greeting,
+            StandardReply::ReleaseDate => StandardReplyKind::ReleaseDate,
+        };
+        let task = ConversationTask::TwitchStandardReply {
+            stream: StreamContext {
+                streamer_login: channel_login.to_string(),
+                game: None,
+                title: None,
+                deadlock_live: is_deadlock_live,
+            },
+            reply,
+            author: event.chatter_user_login.clone(),
+            message: event.text().to_string(),
+        };
+        let reply = self
+            .conversation
+            .converse(&event.broadcaster_user_id, task)
+            .await
+            .ok()?;
+        answered_text(reply)
     }
 
     /// Belegt den Cooldown, wenn er frei ist. Rückgabe ist der vorherige
@@ -519,16 +557,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn release_antwort_nennt_den_invite_befehl() {
+    async fn release_antwort_kommt_vom_brain() {
         let api = MockApi::new();
-        let replies = StandardReplies::new(api.clone(), offline_pool());
+        let replies = StandardReplies::new(api.clone(), offline_pool())
+            .with_conversation(crate::test_brain::answering("Noch kein Datum."));
 
         assert!(
             replies
                 .maybe_respond(&event("wann kommt das spiel raus"), "ch1", true)
                 .await
         );
-        assert!(api.messages()[0].contains("!invite"));
+        assert_eq!(api.messages()[0], "Noch kein Datum.");
     }
 
     #[tokio::test]
@@ -575,7 +614,8 @@ mod tests {
             }
         }
 
-        let replies = StandardReplies::new(Arc::new(DroppingApi), offline_pool());
+        let replies = StandardReplies::new(Arc::new(DroppingApi), offline_pool())
+            .with_conversation(crate::test_brain::answering("Moin!"));
         assert!(!replies.maybe_respond(&event("hallo"), "ch1", false).await);
         // Kein Cooldown gesetzt: der naechste Versuch darf es erneut probieren.
         assert!(!replies.maybe_respond(&event("moin"), "ch1", false).await);
@@ -631,7 +671,8 @@ mod tests {
         let api = Arc::new(SlowApi {
             sent: Mutex::new(vec![]),
         });
-        let replies = StandardReplies::new(api.clone(), offline_pool());
+        let replies = StandardReplies::new(api.clone(), offline_pool())
+            .with_conversation(crate::test_brain::answering("Moin!"));
 
         let erstes = event("hallo");
         let zweites = event("moin");
@@ -645,6 +686,22 @@ mod tests {
             "Begrüßung bleibt ohne ausdrückliche Aktivierung aus"
         );
         assert!(api.sent.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn schweigen_sendet_nichts_und_gibt_den_cooldown_frei() {
+        let api = MockApi::new();
+        let silent = StandardReplies::new(api.clone(), offline_pool())
+            .with_conversation(crate::test_brain::silent());
+        let frage = event("wann kommt das spiel raus");
+        assert!(!silent.maybe_respond(&frage, "ch1", true).await);
+        assert!(api.messages().is_empty());
+
+        let failing = StandardReplies::new(api.clone(), offline_pool())
+            .with_conversation(crate::test_brain::failing());
+        assert!(!failing.maybe_respond(&frage, "ch1", true).await);
+        assert!(api.messages().is_empty());
+        assert!(silent.reserve("ch1", StandardReply::ReleaseDate).is_some());
     }
 
     #[tokio::test]
@@ -738,7 +795,8 @@ mod tests {
         set_greeting_flag(&pool, 0).await;
 
         let api = MockApi::new();
-        let replies = StandardReplies::new(api.clone(), pool.clone());
+        let replies = StandardReplies::new(api.clone(), pool.clone())
+            .with_conversation(crate::test_brain::answering("Moin!"));
         assert!(!replies.maybe_respond(&event("hallo"), "ch1", false).await);
         assert!(api.messages().is_empty());
 
@@ -756,7 +814,8 @@ mod tests {
         };
 
         let api = MockApi::new();
-        let replies = StandardReplies::new(api.clone(), pool);
+        let replies = StandardReplies::new(api.clone(), pool)
+            .with_conversation(crate::test_brain::answering("Moin!"));
         assert!(!replies.maybe_respond(&event("hallo"), "ch1", false).await);
         assert!(api.messages().is_empty());
     }
@@ -771,10 +830,12 @@ mod tests {
         open_session(&pool).await;
 
         let api = MockApi::new();
-        let replies = StandardReplies::new(api.clone(), pool.clone());
+        let replies = StandardReplies::new(api.clone(), pool.clone())
+            .with_conversation(crate::test_brain::answering("Moin!"));
         assert!(replies.maybe_respond(&event("hallo"), "ch1", false).await);
 
-        let nach_neustart = StandardReplies::new(api.clone(), pool);
+        let nach_neustart = StandardReplies::new(api.clone(), pool)
+            .with_conversation(crate::test_brain::answering("Moin!"));
         assert!(
             !nach_neustart
                 .maybe_respond(&event("moin"), "ch1", false)
@@ -800,7 +861,8 @@ mod tests {
         .unwrap();
 
         let api = MockApi::new();
-        let replies = StandardReplies::new(api.clone(), pool);
+        let replies = StandardReplies::new(api.clone(), pool)
+            .with_conversation(crate::test_brain::answering("Moin!"));
         assert!(!replies.maybe_respond(&event("hallo"), "ch1", false).await);
         assert!(
             replies
@@ -828,7 +890,8 @@ mod tests {
         .unwrap();
 
         let api = MockApi::new();
-        let replies = StandardReplies::new(api.clone(), pool);
+        let replies = StandardReplies::new(api.clone(), pool)
+            .with_conversation(crate::test_brain::answering("Moin!"));
         assert!(replies.maybe_respond(&event("hallo"), "ch1", false).await);
         assert_eq!(api.messages().len(), 1);
     }
@@ -841,12 +904,13 @@ mod tests {
         set_greeting_flag(&pool, 0).await;
 
         let api = MockApi::new();
-        let replies = StandardReplies::new(api.clone(), pool);
+        let replies = StandardReplies::new(api.clone(), pool)
+            .with_conversation(crate::test_brain::answering("Noch kein Datum."));
         assert!(
             replies
                 .maybe_respond(&event("wann kommt das spiel raus"), "ch1", true)
                 .await
         );
-        assert!(api.messages()[0].contains("!invite"));
+        assert_eq!(api.messages()[0], "Noch kein Datum.");
     }
 }

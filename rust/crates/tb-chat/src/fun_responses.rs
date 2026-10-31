@@ -9,7 +9,7 @@
 //! - Reagiert auf "danke / thanks / thx / merci / ty" (bot.py Z. 865).
 //! - URLs ("http") in der Nachricht deaktivieren den Trigger (bot.py Z. 866).
 //! - Cooldown: 90 Sekunden pro Kanal (bot.py Z. 867 `_cooldown_ok(... 90.0)`).
-//! - Antworten: zufällig aus zwei festen Strings (bot.py Z. 869–872).
+//! - Den Wortlaut formuliert das Brain; ohne `Answered` geht nichts in den Chat.
 //! - Kein Response wenn `raw.starts_with(prefix)` (Command-Prefix; bot.py Z. 856).
 //!   Rust-Seite: Präfix ist immer `!` — wir lehnen Nachrichten ab die mit `!` beginnen.
 //! - `_fun_thanks_reply_enabled` Flag: bot.py Z. 190 = false (default), wird zur
@@ -19,19 +19,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use tb_llm::brain_route::{
+    answered_text, ConversationPort, ConversationTask, InstalledConversation, StandardReplyKind,
+    StreamContext,
+};
+
 use crate::api::ChatApi;
 use crate::types::ChatMessageEvent;
-
-// ---------------------------------------------------------------------------
-// Konstanten — exakt aus bot/chat/bot.py Z. 869–872
-// ---------------------------------------------------------------------------
-
-/// Antwort-Texte für den Danke-Trigger (bot.py Z. 869–872).
-/// Zufällig gewählt via Modulo-Index.
-const THANKS_REPLIES: &[&str] = &[
-    "Danke, ich wusste ja, dass ich gut bin. WiltedRose",
-    "Ach hör auf, sonst werd ich noch rot. WiltedRose",
-];
 
 /// Trigger-Wörter für den Danke-Check (bot.py Z. 865).
 const THANKS_TRIGGERS: &[&str] = &["danke", "thanks", "thx", "merci", "ty"];
@@ -59,8 +53,7 @@ pub struct FunResponses {
     /// Cooldown-Tracker: channel_login → letzter Aufruf-Zeitpunkt.
     /// Entspricht `_fun_reply_cd` (bot.py Z. 188).
     cooldowns: Mutex<HashMap<String, Instant>>,
-    /// Seed für Pseudo-Zufallsauswahl (monoton hochgezählt, kein rand-Crate nötig).
-    counter: Mutex<usize>,
+    conversation: Arc<dyn ConversationPort>,
 }
 
 impl FunResponses {
@@ -74,8 +67,13 @@ impl FunResponses {
             api,
             enabled,
             cooldowns: Mutex::new(HashMap::new()),
-            counter: Mutex::new(0),
+            conversation: Arc::new(InstalledConversation),
         }
+    }
+
+    pub fn with_conversation(mut self, conversation: Arc<dyn ConversationPort>) -> Self {
+        self.conversation = conversation;
+        self
     }
 
     /// Prüft ob eine Danke-Antwort ausgelöst werden soll und sendet sie ggf.
@@ -115,11 +113,13 @@ impl FunResponses {
             return;
         }
 
-        let reply = self.pick_reply();
+        let Some(reply) = self.phrase_thanks(event, channel_login).await else {
+            return;
+        };
         // Fehler beim Senden werden weiter ignoriert (bot.py Z. 874), aber nicht verschluckt.
         if let Err(error) = self
             .api
-            .send_message(&event.broadcaster_user_id, reply)
+            .send_message(&event.broadcaster_user_id, &reply)
             .await
         {
             tracing::warn!(
@@ -143,12 +143,24 @@ impl FunResponses {
         true
     }
 
-    /// Wählt deterministisch-abwechselnd eine Antwort (bot.py Z. 868 `random.choice`).
-    fn pick_reply(&self) -> &'static str {
-        let mut ctr = self.counter.lock().expect("FunResponses counter lock");
-        let idx = *ctr % THANKS_REPLIES.len();
-        *ctr = ctr.wrapping_add(1);
-        THANKS_REPLIES[idx]
+    async fn phrase_thanks(&self, event: &ChatMessageEvent, channel_login: &str) -> Option<String> {
+        let task = ConversationTask::TwitchStandardReply {
+            stream: StreamContext {
+                streamer_login: channel_login.to_string(),
+                game: None,
+                title: None,
+                deadlock_live: true,
+            },
+            reply: StandardReplyKind::Thanks,
+            author: event.chatter_user_login.clone(),
+            message: event.text().to_string(),
+        };
+        let reply = self
+            .conversation
+            .converse(&event.broadcaster_user_id, task)
+            .await
+            .ok()?;
+        answered_text(reply)
     }
 }
 
@@ -248,7 +260,8 @@ mod tests {
     #[tokio::test]
     async fn danke_trigger_sendet_antwort() {
         let api = MockApi::new();
-        let fun = FunResponses::new(api.clone(), true);
+        let fun = FunResponses::new(api.clone(), true)
+            .with_conversation(crate::test_brain::answering("Gern geschehen!"));
         fun.maybe_respond(&make_event("danke fürs zuschauen"), "ch1")
             .await;
         assert_eq!(api.messages().len(), 1);
@@ -265,7 +278,8 @@ mod tests {
     #[tokio::test]
     async fn url_in_nachricht_unterdrückt_antwort() {
         let api = MockApi::new();
-        let fun = FunResponses::new(api.clone(), true);
+        let fun = FunResponses::new(api.clone(), true)
+            .with_conversation(crate::test_brain::answering("Gern geschehen!"));
         fun.maybe_respond(&make_event("danke https://example.com"), "ch1")
             .await;
         assert!(api.messages().is_empty());
@@ -274,7 +288,8 @@ mod tests {
     #[tokio::test]
     async fn command_prefix_unterdrückt_antwort() {
         let api = MockApi::new();
-        let fun = FunResponses::new(api.clone(), true);
+        let fun = FunResponses::new(api.clone(), true)
+            .with_conversation(crate::test_brain::answering("Gern geschehen!"));
         fun.maybe_respond(&make_event("!danke"), "ch1").await;
         assert!(api.messages().is_empty());
     }
@@ -282,7 +297,8 @@ mod tests {
     #[tokio::test]
     async fn kein_trigger_sendet_nichts() {
         let api = MockApi::new();
-        let fun = FunResponses::new(api.clone(), true);
+        let fun = FunResponses::new(api.clone(), true)
+            .with_conversation(crate::test_brain::answering("Gern geschehen!"));
         fun.maybe_respond(&make_event("schöner stream heute"), "ch1")
             .await;
         assert!(api.messages().is_empty());
@@ -291,7 +307,8 @@ mod tests {
     #[tokio::test]
     async fn cooldown_verhindert_zweiten_send() {
         let api = MockApi::new();
-        let fun = FunResponses::new(api.clone(), true);
+        let fun = FunResponses::new(api.clone(), true)
+            .with_conversation(crate::test_brain::answering("Gern geschehen!"));
         fun.maybe_respond(&make_event("danke"), "ch1").await;
         fun.maybe_respond(&make_event("thanks"), "ch1").await;
         // Cooldown läuft noch → nur 1 Nachricht
@@ -301,7 +318,8 @@ mod tests {
     #[tokio::test]
     async fn cooldown_unterschiedliche_kanäle_unabhängig() {
         let api = MockApi::new();
-        let fun = FunResponses::new(api.clone(), true);
+        let fun = FunResponses::new(api.clone(), true)
+            .with_conversation(crate::test_brain::answering("Gern geschehen!"));
         fun.maybe_respond(&make_event("danke"), "ch1").await;
         fun.maybe_respond(&make_event("danke"), "ch2").await;
         // Zwei verschiedene Kanäle → je ein Send
@@ -312,7 +330,8 @@ mod tests {
     async fn alle_trigger_wörter_matchen() {
         for trigger in &["danke", "thanks", "thx", "merci", "ty"] {
             let api = MockApi::new();
-            let fun = FunResponses::new(api.clone(), true);
+            let fun = FunResponses::new(api.clone(), true)
+                .with_conversation(crate::test_brain::answering("Gern geschehen!"));
             fun.maybe_respond(&make_event(&format!("hey {trigger}")), "ch_x")
                 .await;
             assert!(
@@ -323,15 +342,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reply_texte_sind_aus_konstante() {
+    async fn schweigendes_brain_sendet_nichts() {
         let api = MockApi::new();
-        let fun = FunResponses::new(api.clone(), true);
+        let fun =
+            FunResponses::new(api.clone(), true).with_conversation(crate::test_brain::silent());
         fun.maybe_respond(&make_event("danke"), "ch1").await;
-        let msgs = api.messages();
-        let text = &msgs[0].1;
-        assert!(
-            THANKS_REPLIES.contains(&text.as_str()),
-            "Antwort '{text}' ist nicht in THANKS_REPLIES"
-        );
+        assert!(api.messages().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fehlendes_brain_sendet_keinen_ersatztext() {
+        let api = MockApi::new();
+        let fun =
+            FunResponses::new(api.clone(), true).with_conversation(crate::test_brain::failing());
+        fun.maybe_respond(&make_event("danke"), "ch1").await;
+        assert!(api.messages().is_empty());
     }
 }

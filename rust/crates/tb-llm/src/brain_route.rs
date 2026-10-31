@@ -404,9 +404,9 @@ fn validated_conversation(
     body: &BotTaskRequest,
     response: BotTaskResponse,
 ) -> Result<GeneratedConversation, Attempt> {
-    response.validate_for(body).map_err(|error| {
-        Attempt::Transport(TransportError::InvalidResponse(error.to_string()))
-    })?;
+    response
+        .validate_for(body)
+        .map_err(|error| Attempt::Transport(TransportError::InvalidResponse(error.to_string())))?;
     match response.result {
         BotTaskResult::Conversation {
             reply,
