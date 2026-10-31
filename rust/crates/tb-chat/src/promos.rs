@@ -52,9 +52,9 @@ use crate::api::ChatApi;
 use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
 use crate::lfg_pitch::RecentChatPort;
 use crate::promo_pitch::{
-    community_value_filter_reject, finalize_occasion_reply, pitch_filter_reject,
-    pitch_injection_reject, ChannelPromoContext, PartnerPitchContext, PartnerPitchGen, PitchJudge,
-    PitchJudgeInput, PitchTextGen, PITCH_MIN_CONFIDENCE,
+    addressed_to, community_value_filter_reject, pitch_filter_reject, pitch_injection_reject,
+    ChannelPromoContext, PartnerPitchContext, PartnerPitchGen, PitchJudge, PitchJudgeInput,
+    PitchTextGen,
 };
 use crate::suppression_guard::SuppressionGuardChatApi;
 use crate::types::ChatMessageEvent;
@@ -660,9 +660,9 @@ impl PromoEngine {
             timer_settings: Mutex::new((None, PromoTimerSettings::default())),
             invite_resolver: Arc::new(StaticInviteResolver),
             partner_check: Arc::new(AlwaysPartner),
-            pitch_judge: Arc::new(crate::promo_pitch::FireworksPitchJudge),
-            pitch_text_gen: Arc::new(crate::promo_pitch::FireworksPitchTextGen),
-            partner_pitch_gen: Arc::new(crate::promo_pitch::FireworksPartnerPitchGen),
+            pitch_judge: Arc::new(crate::promo_pitch::BrainPitch::installed()),
+            pitch_text_gen: Arc::new(crate::promo_pitch::BrainPitch::installed()),
+            partner_pitch_gen: Arc::new(crate::promo_pitch::BrainPitch::installed()),
             pitch_review_sink: None,
             pitch_judge_last: DashMap::new(),
             pitch_judge_channel: DashMap::new(),
@@ -983,12 +983,14 @@ impl PromoEngine {
             && self.pitch_channel_limit_ok(&login).await
             && self.pitch_judge_throttle_reserve(&login, &target_user_id)
         {
-            let beispiele = crate::pitch_beispiele::lade_block(
+            let beispiele = crate::pitch_beispiele::lade_liste(
                 &self.pool,
                 crate::pitch_beispiele::PitchPfad::Anlass,
             )
             .await;
             let input = PitchJudgeInput {
+                broadcaster_id: channel_id.clone(),
+                streamer_login: login.clone(),
                 trigger_text: text.to_string(),
                 game: game.clone(),
                 title: title.clone(),
@@ -996,20 +998,16 @@ impl PromoEngine {
                 target_login: target_login.clone(),
                 beispiele,
             };
-            self.pitch_judge.decide(input).await.and_then(|resp| {
-                if resp.ernst_gemeint && resp.confidence >= PITCH_MIN_CONFIDENCE {
-                    resp.occasion.map(|occ| (occ, resp.reply))
-                } else {
-                    None
-                }
-            })
+            self.pitch_judge
+                .decide(input)
+                .await
+                .and_then(|resp| resp.occasion.map(|occ| (occ, resp.reply)))
         } else {
             None
         };
-        let Some((occasion, reply)) = occasion else {
+        let Some((occasion, resp_reply)) = occasion else {
             return;
         };
-        let resp_reply = finalize_occasion_reply(occasion, &reply);
 
         if let Some(reason) = pitch_filter_reject(&resp_reply) {
             self.log_anlass_reject(
@@ -1056,7 +1054,7 @@ impl PromoEngine {
             return;
         }
 
-        let out_text = format!("@{target_login} {}", resp_reply);
+        let out_text = addressed_to(&target_login, &resp_reply);
 
         let Some(log_id) = self
             .insert_pitch_log_pending(PitchLogEntry {
@@ -1137,12 +1135,14 @@ impl PromoEngine {
 
         let (game, title) = self.load_live_context(login).await;
         let recent = self.load_recent_channel_messages(login, 8).await;
-        let beispiele = crate::pitch_beispiele::lade_block(
+        let beispiele = crate::pitch_beispiele::lade_liste(
             &self.pool,
             crate::pitch_beispiele::PitchPfad::Partner,
         )
         .await;
         let ctx = PartnerPitchContext {
+            broadcaster_id: channel_id.to_string(),
+            streamer_login: login.to_string(),
             target_login: target_login.to_string(),
             target_messages: vec![trigger.to_string()],
             game,
@@ -1199,7 +1199,7 @@ impl PromoEngine {
             return;
         }
 
-        let out_text = format!("@{target_login} {reply}");
+        let out_text = addressed_to(target_login, &reply);
 
         let Some(log_id) = self
             .insert_pitch_log_pending(PitchLogEntry {
@@ -1885,6 +1885,7 @@ impl PromoEngine {
         let Some((text, color)) = self
             .build_promo_text(
                 login,
+                channel_id,
                 &invite,
                 self.invite_resolver.community_promotions(login).await,
             )
@@ -1996,6 +1997,7 @@ impl PromoEngine {
     async fn build_promo_text(
         &self,
         login: &str,
+        channel_id: &str,
         invite: &str,
         community_scope: bool,
     ) -> Option<(String, String)> {
@@ -2054,12 +2056,14 @@ impl PromoEngine {
         }
 
         let (game, title) = self.load_live_context(login).await;
-        let beispiele = crate::pitch_beispiele::lade_block(
+        let beispiele = crate::pitch_beispiele::lade_liste(
             &self.pool,
             crate::pitch_beispiele::PitchPfad::Periodic,
         )
         .await;
         let ctx = ChannelPromoContext {
+            broadcaster_id: channel_id.to_string(),
+            streamer_login: login.to_string(),
             game,
             title,
             recent_chat: self.load_recent_channel_messages(login, 8).await,
@@ -4234,7 +4238,12 @@ mod db_tests {
             "Server-local promotion".into(),
         ))));
         let (text, _) = engine
-            .build_promo_text("foreign", "https://discord.gg/foreign", false)
+            .build_promo_text(
+                "foreign",
+                "broadcaster-id",
+                "https://discord.gg/foreign",
+                false,
+            )
             .await
             .unwrap();
         assert!(text.contains("Server-local promotion"));
@@ -4448,8 +4457,6 @@ mod db_tests {
         crate::promo_pitch::PitchResponse {
             occasion,
             reply: reply.to_string(),
-            ernst_gemeint: true,
-            confidence: 0.9,
         }
     }
 
@@ -4847,7 +4854,12 @@ mod db_tests {
         sqlx::query("INSERT INTO twitch_promo_pitch_log(channel_login,pfad,sent_at) SELECT 'community-renamed','periodic',now() FROM generate_series(1,6)")
             .execute(&pool).await.unwrap();
         let active_event = engine
-            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE, true)
+            .build_promo_text(
+                "community-renamed",
+                "broadcaster-id",
+                DEFAULT_PROMO_DISCORD_INVITE,
+                true,
+            )
             .await
             .unwrap();
         assert!(active_event.0.starts_with("Unser bestehender Hinweis"));
@@ -4857,7 +4869,12 @@ mod db_tests {
             .await
             .unwrap();
         let expired_event = engine
-            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE, true)
+            .build_promo_text(
+                "community-renamed",
+                "broadcaster-id",
+                DEFAULT_PROMO_DISCORD_INVITE,
+                true,
+            )
             .await
             .unwrap();
         assert_eq!(expired_event.0, format!("Scrim ohne Gegnerteam? Bei uns kannst du gezielt andere Teams suchen, statt einzelne Leute per DM abzuklappern. {}", DEFAULT_PROMO_DISCORD_INVITE));
@@ -4871,7 +4888,12 @@ mod db_tests {
         config = save(&pool, &config).await.unwrap().unwrap();
         assert!(
             engine
-                .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE, true)
+                .build_promo_text(
+                    "community-renamed",
+                    "broadcaster-id",
+                    DEFAULT_PROMO_DISCORD_INVITE,
+                    true
+                )
                 .await
                 .is_none(),
             "Keine versteckten Standardtexte bei deaktivierter Rotation"
@@ -4883,13 +4905,23 @@ mod db_tests {
         });
         config = save(&pool, &config).await.unwrap().unwrap();
         assert!(engine
-            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE, true)
+            .build_promo_text(
+                "community-renamed",
+                "broadcaster-id",
+                DEFAULT_PROMO_DISCORD_INVITE,
+                true
+            )
             .await
             .is_none());
         config.entries.last_mut().unwrap().enabled = true;
         config = save(&pool, &config).await.unwrap().unwrap();
         let selected = engine
-            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE, true)
+            .build_promo_text(
+                "community-renamed",
+                "broadcaster-id",
+                DEFAULT_PROMO_DISCORD_INVITE,
+                true,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -4920,14 +4952,24 @@ mod db_tests {
             .unwrap();
         assert!(
             engine
-                .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE, true)
+                .build_promo_text(
+                    "community-renamed",
+                    "broadcaster-id",
+                    DEFAULT_PROMO_DISCORD_INVITE,
+                    true
+                )
                 .await
                 .is_none(),
             "Kanalpause sperrt auch das globale Event"
         );
         assert!(
             engine
-                .build_promo_text("other", DEFAULT_PROMO_DISCORD_INVITE, true)
+                .build_promo_text(
+                    "other",
+                    "broadcaster-id",
+                    DEFAULT_PROMO_DISCORD_INVITE,
+                    true
+                )
                 .await
                 .unwrap()
                 .0
@@ -5936,9 +5978,10 @@ mod db_tests {
         seed_partner_channel(&pool, "c-cryonix", "cryonixkanal").await;
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(
-            crate::promo_pitch::parse_pitch_response(
-                r#"{"occasion":"new_player","reply":"der erste tag hat es in sich. andere deadlock-spieler helfen bei uns im discord mit deinen anfängerfragen, damit du dich nicht allein durchbeißen musst.","ernst_gemeint":true,"confidence":0.95}"#,
-            ),
+            Some(crate::promo_pitch::PitchResponse {
+                occasion: Some(crate::promo_pitch::PitchOccasion::NewPlayer),
+                reply: "der erste tag hat es in sich. andere deadlock-spieler helfen bei uns im discord mit deinen anfängerfragen, damit du dich nicht allein durchbeißen musst.".to_string(),
+            }),
         ));
         let engine =
             PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
@@ -5981,11 +6024,7 @@ mod db_tests {
         assert_eq!(sent, ("new_player".to_string(), "u-cryonix".to_string()));
 
         seed_partner_channel(&pool, "c-negativ", "negativkanal").await;
-        let negative = Arc::new(MockPitchJudge::new(
-            crate::promo_pitch::parse_pitch_response(
-                r#"{"occasion":"new_player","reply":"andere spieler helfen bei deinen anfängerfragen","ernst_gemeint":false,"confidence":0.95}"#,
-            ),
-        ));
+        let negative = Arc::new(MockPitchJudge::new(None));
         let engine =
             PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
                 .set_pitch_judge(negative.clone())
@@ -6100,40 +6139,6 @@ mod db_tests {
         .await
         .unwrap();
         assert_eq!(reason.as_deref(), Some("meta_pitch"));
-    }
-
-    #[tokio::test]
-    async fn niedrige_pitch_confidence_sendet_nichts() {
-        let pool = pool_or_skip!("promo_personal_confidence");
-        seed_partner_channel(&pool, "c-conf", "confkanal").await;
-        let api = Arc::new(super::tests::MockApi::default());
-        let judge = Arc::new(MockPitchJudge::new(Some(
-            crate::promo_pitch::PitchResponse {
-                occasion: Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
-                reply: "im discord findest du mitspieler für gemeinsame runden".to_string(),
-                confidence: 0.45,
-                ernst_gemeint: true,
-            },
-        )));
-        let engine =
-            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-                .set_pitch_judge(judge)
-                .set_zuschauer_register(test_register(pool.clone()));
-
-        let event = pitch_event(
-            "c-conf",
-            "confkanal",
-            "u-conf",
-            "Conf",
-            "deadlock sieht interessanter aus als ich dachte",
-        );
-        engine.on_message_pitch(&event).await;
-
-        assert_eq!(
-            api.message_count().await,
-            0,
-            "unsicherer Pitch soll schweigen"
-        );
     }
 
     #[tokio::test]

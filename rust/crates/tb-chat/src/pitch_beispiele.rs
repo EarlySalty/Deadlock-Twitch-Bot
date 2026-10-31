@@ -2,7 +2,6 @@ use sqlx::PgPool;
 
 const MIN_LEARNED_GUT: usize = 4;
 const MAX_GUT: i64 = 8;
-const MAX_SCHLECHT: i64 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PitchPfad {
@@ -129,12 +128,6 @@ fn start_beispiele(pfad: PitchPfad) -> Vec<Beispiel> {
         .collect()
 }
 
-pub async fn lade_gelernte(pool: &PgPool, pfad: PitchPfad) -> (Vec<Beispiel>, Vec<Beispiel>) {
-    let gut = lade_bewertete(pool, pfad, "gut", MAX_GUT).await;
-    let schlecht = lade_bewertete(pool, pfad, "schlecht", MAX_SCHLECHT).await;
-    (gut, schlecht)
-}
-
 async fn lade_bewertete(
     pool: &PgPool,
     pfad: PitchPfad,
@@ -166,39 +159,31 @@ async fn lade_bewertete(
         .collect()
 }
 
-pub fn baue_block(start: &[Beispiel], gut: &[Beispiel], schlecht: &[Beispiel]) -> String {
-    let gute: Vec<&Beispiel> = if gut.len() >= MIN_LEARNED_GUT {
-        gut.iter().take(MAX_GUT as usize).collect()
+pub fn waehle_beispiele(start: &[Beispiel], gut: &[Beispiel]) -> Vec<String> {
+    let quelle = if gut.len() >= MIN_LEARNED_GUT {
+        gut
     } else {
-        start.iter().take(MAX_GUT as usize).collect()
+        start
     };
-
-    let mut zeilen =
-        vec!["Gute Antworten (Ton und Länge nachahmen, Inhalt nicht wiederholen):".to_string()];
-    for beispiel in gute {
-        zeilen.push(render_zeile(beispiel));
-    }
-    if !schlecht.is_empty() {
-        zeilen.push("So nicht (wurde als schlecht bewertet):".to_string());
-        for beispiel in schlecht.iter().take(MAX_SCHLECHT as usize) {
-            zeilen.push(render_zeile(beispiel));
-        }
-    }
-    zeilen.join("\n")
+    quelle
+        .iter()
+        .take(MAX_GUT as usize)
+        .map(render_zeile)
+        .collect()
 }
 
 fn render_zeile(beispiel: &Beispiel) -> String {
     match beispiel.ausloeser.as_deref().map(str::trim) {
         Some(ausloeser) if !ausloeser.is_empty() => {
-            format!("- {} -> {}", ausloeser, beispiel.antwort.trim())
+            format!("{} -> {}", ausloeser, beispiel.antwort.trim())
         }
-        _ => format!("- {}", beispiel.antwort.trim()),
+        _ => beispiel.antwort.trim().to_string(),
     }
 }
 
-pub async fn lade_block(pool: &PgPool, pfad: PitchPfad) -> String {
-    let (gut, schlecht) = lade_gelernte(pool, pfad).await;
-    baue_block(&start_beispiele(pfad), &gut, &schlecht)
+pub async fn lade_liste(pool: &PgPool, pfad: PitchPfad) -> Vec<String> {
+    let gut = lade_bewertete(pool, pfad, "gut", MAX_GUT).await;
+    waehle_beispiele(&start_beispiele(pfad), &gut)
 }
 
 #[cfg(test)]
@@ -226,33 +211,18 @@ mod tests {
     fn unter_vier_gelernten_bleiben_startbeispiele() {
         let start = start_beispiele(PitchPfad::Anlass);
         let gut: Vec<Beispiel> = (0..3).map(lernbeispiel).collect();
-        let block = baue_block(&start, &gut, &[]);
-        assert!(block.contains(&start[0].antwort));
-        assert!(!block.contains("gelernte antwort"));
+        let liste = waehle_beispiele(&start, &gut).join("\n");
+        assert!(liste.contains(&start[0].antwort));
+        assert!(!liste.contains("gelernte antwort"));
     }
 
     #[test]
     fn ab_vier_gelernten_ersetzen_sie_start() {
         let start = start_beispiele(PitchPfad::Anlass);
         let gut: Vec<Beispiel> = (0..4).map(lernbeispiel).collect();
-        let block = baue_block(&start, &gut, &[]);
-        assert!(block.contains("gelernte antwort nummer 0"));
-        assert!(!block.contains(&start[0].antwort));
-    }
-
-    #[test]
-    fn schlecht_wird_gedeckelt_und_angezeigt() {
-        let start = start_beispiele(PitchPfad::Partner);
-        let schlecht: Vec<Beispiel> = (0..5)
-            .map(|n| Beispiel {
-                ausloeser: None,
-                antwort: format!("schlechte antwort {n}"),
-            })
-            .collect();
-        let block = baue_block(&start, &[], &schlecht);
-        assert!(block.contains("So nicht"));
-        assert!(block.contains("schlechte antwort 0"));
-        assert!(!block.contains("schlechte antwort 3"));
+        let liste = waehle_beispiele(&start, &gut).join("\n");
+        assert!(liste.contains("gelernte antwort nummer 0"));
+        assert!(!liste.contains(&start[0].antwort));
     }
 }
 
@@ -332,17 +302,13 @@ mod db_tests {
         for n in 0..3 {
             insert_gut(&pool, &format!("gute gelernte antwort {n}")).await;
         }
-        let (gut, schlecht) = lade_gelernte(&pool, PitchPfad::Anlass).await;
-        assert_eq!(gut.len(), 3);
-        let block = baue_block(&start, &gut, &schlecht);
-        assert!(block.contains(&start[0].antwort));
-        assert!(!block.contains("gute gelernte antwort"));
+        let liste = lade_liste(&pool, PitchPfad::Anlass).await.join("\n");
+        assert!(liste.contains(&start[0].antwort));
+        assert!(!liste.contains("gute gelernte antwort"));
 
         insert_gut(&pool, "gute gelernte antwort 3").await;
-        let (gut, schlecht) = lade_gelernte(&pool, PitchPfad::Anlass).await;
-        assert_eq!(gut.len(), 4);
-        let block = baue_block(&start, &gut, &schlecht);
-        assert!(block.contains("gute gelernte antwort"));
-        assert!(!block.contains(&start[0].antwort));
+        let liste = lade_liste(&pool, PitchPfad::Anlass).await.join("\n");
+        assert!(liste.contains("gute gelernte antwort"));
+        assert!(!liste.contains(&start[0].antwort));
     }
 }

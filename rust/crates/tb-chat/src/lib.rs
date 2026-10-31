@@ -113,9 +113,8 @@ pub use pipeline::{
     SCAM_PITCH_TIMEOUT_REASON,
 };
 pub use promo_pitch::{
-    build_channel_promo_text, build_targeted_pitch_text, parse_pitch_response, pitch_filter_reject,
-    ChannelPromoContext, FireworksPitchJudge, FireworksPitchTextGen, PitchJudge, PitchJudgeInput,
-    PitchOccasion, PitchRejectReason, PitchResponse, PitchTextGen, TargetedPitchContext,
+    pitch_filter_reject, BrainPitch, ChannelPromoContext, PitchJudge, PitchJudgeInput,
+    PitchOccasion, PitchRejectReason, PitchResponse, PitchTextGen,
 };
 pub use promos::{
     lurker_tax_title_matches, LurkerRewardChecker, NoopSuppressionCheck, PartnerChannelCheck,
