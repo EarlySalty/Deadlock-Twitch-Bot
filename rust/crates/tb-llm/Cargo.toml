@@ -16,6 +16,7 @@ required-features = ["local-eval"]
 [dependencies]
 async-trait = { workspace = true }
 brain-client = { workspace = true }
+brain-contracts = { workspace = true }
 uuid = { workspace = true }
 tb-observability = { workspace = true }
 fireworks-model-selection = { path = "../fireworks-model-selection" }

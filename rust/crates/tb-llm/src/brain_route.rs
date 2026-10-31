@@ -8,6 +8,12 @@ pub use brain_client::{
     BotCapability, BotIdentity, BotTask, BotTaskRequest, BotTaskResponse, BotTaskResult,
     TaskFailure, TaskUsage, TwitchTitlePurpose, BOT_TASK_VERSION,
 };
+pub use brain_contracts::bot_tasks::{
+    BotReply, ChatLine, ChatPersona, ConversationTask, DialogRole, DialogTurn, PitchOccasion,
+    PromoPitchRequest, ReplyLanguage, ReplySignal, SilentReason, StandardReplyKind, StreamContext,
+    MAX_CHAT_LINES, MAX_CHAT_LINE_CHARS, MAX_DIALOG_CHARS, MAX_DIALOG_TURNS, MAX_DOCUMENT_CHARS,
+    MAX_LABEL_CHARS, MAX_LIST_ITEMS, MAX_LIST_ITEM_CHARS, MAX_TASK_TEXT_CHARS,
+};
 
 use crate::hub::{
     strip_think, transport_error, Ledger, LlmError, LlmFailure, Request, Response, DEFAULT_TIMEOUT,
@@ -17,6 +23,7 @@ use crate::ledger::Completion;
 
 pub const PROVIDER: &str = "brain";
 pub const TITLE_AI_USE_CASE: &str = "title_ai";
+pub const CONVERSATION_USE_CASE: &str = "brain_conversation";
 pub const MAX_TITLE_TOKENS: u32 = 1500;
 const UNKNOWN_MODEL: &str = "unknown";
 const PROVIDER_RATE_LIMITED: &str = "provider_rate_limited";
@@ -126,6 +133,7 @@ impl AttemptLedger for PostgresLedger {
 pub struct BrainRoute {
     transport: Result<Arc<dyn BrainTaskTransport>, String>,
     ledger: Arc<dyn AttemptLedger>,
+    conversation_deadline: Duration,
 }
 
 impl BrainRoute {
@@ -133,6 +141,7 @@ impl BrainRoute {
         Self {
             transport: Ok(transport),
             ledger: Arc::new(PostgresLedger),
+            conversation_deadline: DEFAULT_TIMEOUT,
         }
     }
 
@@ -140,6 +149,7 @@ impl BrainRoute {
         Self {
             transport: Err(reason.into()),
             ledger: Arc::new(PostgresLedger),
+            conversation_deadline: DEFAULT_TIMEOUT,
         }
     }
 
@@ -151,7 +161,50 @@ impl BrainRoute {
         Self {
             transport: Ok(transport),
             ledger,
+            conversation_deadline: DEFAULT_TIMEOUT,
         }
+    }
+
+    fn with_conversation_deadline(mut self, deadline: Duration) -> Self {
+        self.conversation_deadline = deadline;
+        self
+    }
+
+    pub async fn converse(
+        &self,
+        broadcaster_id: &str,
+        task: ConversationTask,
+    ) -> Result<BotReply, LlmError> {
+        let transport = self
+            .transport
+            .as_ref()
+            .map_err(|reason| LlmError::Unavailable(reason.clone()))?;
+        let broadcaster_id = checked_broadcaster(broadcaster_id)?;
+        let capability = task.capability();
+        let ende = Instant::now() + self.conversation_deadline;
+        let id = tokio::time::timeout(
+            self.conversation_deadline,
+            self.ledger.begin(capability.as_str()),
+        )
+        .await
+        .map_err(|_| LlmError::Timeout("Verbrauchsstart überschreitet Aufruffrist".into()))??;
+        let body = BotTaskRequest {
+            contract_version: BOT_TASK_VERSION.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            identity: BotIdentity::Twitch { broadcaster_id },
+            task: BotTask::Conversation(task),
+        };
+        let started = Instant::now();
+        let outcome = conversation_attempt(transport.as_ref(), &body, ende).await;
+        self.ledger
+            .finish(
+                conversation_completion(id, &body.request_id, &outcome, started),
+                ende,
+            )
+            .await;
+        outcome
+            .map(|generated| generated.reply)
+            .map_err(|error| error.llm_error())
     }
 
     pub(crate) async fn complete(
@@ -321,6 +374,57 @@ async fn attempt(
     validated_answer(body, response)
 }
 
+struct GeneratedConversation {
+    reply: BotReply,
+    model: Option<String>,
+    usage: TaskUsage,
+}
+
+async fn conversation_attempt(
+    transport: &dyn BrainTaskTransport,
+    body: &BotTaskRequest,
+    ende: Instant,
+) -> Result<GeneratedConversation, Attempt> {
+    let timeout = || {
+        Attempt::Transport(TransportError::Timeout(
+            "Brain antwortete nicht innerhalb der Aufruffrist".into(),
+        ))
+    };
+    let response = tokio::time::timeout(
+        ende.saturating_duration_since(Instant::now()),
+        transport.task(body),
+    )
+    .await
+    .map_err(|_| timeout())?
+    .map_err(Attempt::Transport)?;
+    validated_conversation(body, response)
+}
+
+fn validated_conversation(
+    body: &BotTaskRequest,
+    response: BotTaskResponse,
+) -> Result<GeneratedConversation, Attempt> {
+    response.validate_for(body).map_err(|error| {
+        Attempt::Transport(TransportError::InvalidResponse(error.to_string()))
+    })?;
+    match response.result {
+        BotTaskResult::Conversation {
+            reply,
+            model,
+            usage,
+            ..
+        } => Ok(GeneratedConversation {
+            reply,
+            model,
+            usage,
+        }),
+        BotTaskResult::Failed { failure, .. } => Err(Attempt::Failed(failure)),
+        _ => Err(Attempt::Transport(TransportError::InvalidResponse(
+            "Brain-Antwort passt nicht zur Gesprächsaufgabe".into(),
+        ))),
+    }
+}
+
 fn validated_answer(body: &BotTaskRequest, response: BotTaskResponse) -> Result<Answer, Attempt> {
     let invalid = |detail: &str| Attempt::Transport(TransportError::InvalidResponse(detail.into()));
     if response.contract_version != BOT_TASK_VERSION {
@@ -341,7 +445,9 @@ fn validated_answer(body: &BotTaskRequest, response: BotTaskResponse) -> Result<
             failure,
         } => Err(Attempt::Failed(failure)),
         BotTaskResult::Failed { .. } => Err(invalid("Brain-Fehler betrifft eine andere Aufgabe")),
-        BotTaskResult::DiscordAnswer { .. } | BotTaskResult::CapabilityStatus { .. } => {
+        BotTaskResult::DiscordAnswer { .. }
+        | BotTaskResult::CapabilityStatus { .. }
+        | BotTaskResult::Conversation { .. } => {
             Err(invalid("Brain-Antwort passt nicht zur Titelaufgabe"))
         }
     }
@@ -385,40 +491,75 @@ fn completion(
     outcome: &Result<Answer, Attempt>,
     started: Instant,
 ) -> Completion {
-    let latency_ms = started.elapsed().as_millis() as i64;
     match outcome {
-        Ok(answer) => {
-            let tokens_in = known_tokens(answer.usage.input_tokens);
-            let tokens_out = known_tokens(answer.usage.output_tokens);
-            Completion {
-                id,
-                tokens_in,
-                tokens_out,
-                total: tokens_in
-                    .zip(tokens_out)
-                    .map(|(input, output)| input.saturating_add(output)),
-                request_id: Some(request_id.to_string()),
-                success: true,
-                error_code: None,
-                http_status: Some(200),
-                latency_ms,
-                model: Some(answer.model.clone()),
-                social_accounting: None,
-            }
-        }
-        Err(error) => Completion {
+        Ok(answer) => succeeded(
             id,
-            tokens_in: None,
-            tokens_out: None,
-            total: None,
-            request_id: Some(request_id.to_string()),
-            success: false,
-            error_code: Some(error.llm_error().code().to_string()),
-            http_status: error.http_status(),
-            latency_ms,
-            model: None,
-            social_accounting: None,
-        },
+            request_id,
+            Some(answer.model.clone()),
+            answer.usage,
+            started,
+        ),
+        Err(error) => failed(id, request_id, error, started),
+    }
+}
+
+fn conversation_completion(
+    id: i64,
+    request_id: &str,
+    outcome: &Result<GeneratedConversation, Attempt>,
+    started: Instant,
+) -> Completion {
+    match outcome {
+        Ok(generated) => succeeded(
+            id,
+            request_id,
+            generated.model.clone(),
+            generated.usage,
+            started,
+        ),
+        Err(error) => failed(id, request_id, error, started),
+    }
+}
+
+fn succeeded(
+    id: i64,
+    request_id: &str,
+    model: Option<String>,
+    usage: TaskUsage,
+    started: Instant,
+) -> Completion {
+    let tokens_in = known_tokens(usage.input_tokens);
+    let tokens_out = known_tokens(usage.output_tokens);
+    Completion {
+        id,
+        tokens_in,
+        tokens_out,
+        total: tokens_in
+            .zip(tokens_out)
+            .map(|(input, output)| input.saturating_add(output)),
+        request_id: Some(request_id.to_string()),
+        success: true,
+        error_code: None,
+        http_status: Some(200),
+        latency_ms: started.elapsed().as_millis() as i64,
+        model,
+        social_accounting: None,
+    }
+}
+
+fn failed(id: i64, request_id: &str, error: &Attempt, started: Instant) -> Completion {
+    Completion {
+        id,
+        tokens_in: None,
+        tokens_out: None,
+        total: None,
+        request_id: Some(request_id.to_string()),
+        success: false,
+        error_code: Some(error.llm_error().code().to_string()),
+        http_status: error.http_status(),
+        latency_ms: started.elapsed().as_millis() as i64,
+        model: None,
+        social_accounting: None,
     }
 }
 
@@ -426,6 +567,10 @@ fn verified_broadcaster(request: &Request) -> Result<String, LlmError> {
     let id = request.twitch_broadcaster.as_deref().ok_or_else(|| {
         LlmError::Unavailable("Brain-Aufgabe ohne geprüfte Twitch-Kanal-ID".into())
     })?;
+    checked_broadcaster(id)
+}
+
+fn checked_broadcaster(id: &str) -> Result<String, LlmError> {
     let valid = !id.is_empty()
         && id.len() <= 20
         && !id.starts_with('0')
@@ -506,7 +651,7 @@ fn routes() -> &'static Routes {
 }
 
 pub fn install(use_case: &'static str, route: BrainRoute) -> Result<(), BrainRouteError> {
-    if use_case != TITLE_AI_USE_CASE {
+    if use_case != TITLE_AI_USE_CASE && use_case != CONVERSATION_USE_CASE {
         return Err(BrainRouteError::UnsupportedUseCase);
     }
     let mut routes = routes()
@@ -524,23 +669,95 @@ pub fn install_title_ai(
     token: Option<&str>,
     timeout: Option<Duration>,
 ) -> Result<(), BrainRouteError> {
+    install(
+        TITLE_AI_USE_CASE,
+        configured_route(TITLE_AI_USE_CASE, endpoint, token, timeout),
+    )
+}
+
+pub fn install_conversation(
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    timeout: Option<Duration>,
+) -> Result<(), BrainRouteError> {
+    let route = configured_route(CONVERSATION_USE_CASE, endpoint, token, timeout)
+        .with_conversation_deadline(timeout.unwrap_or(DEFAULT_TIMEOUT));
+    install(CONVERSATION_USE_CASE, route)
+}
+
+fn configured_route(
+    use_case: &'static str,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    timeout: Option<Duration>,
+) -> BrainRoute {
     let transport = match (endpoint, token) {
         (Some(endpoint), Some(token)) => BrainClientTransport::new(endpoint, token, timeout),
         (None, _) => Err("Brain-Endpunkt fehlt".to_string()),
         (_, None) => Err("Brain-Dienstschlüssel fehlt".to_string()),
     };
-    let route = match transport {
+    match transport {
         Ok(transport) => BrainRoute::new(Arc::new(transport)),
         Err(reason) => {
             tracing::error!(
-                use_case = TITLE_AI_USE_CASE,
+                use_case,
                 grund = %reason,
-                "Brain-Route für Titel ist aktiv, aber nicht nutzbar; Titelaufrufe schlagen fehl"
+                "Brain-Route ist aktiv, aber nicht nutzbar; Aufrufe schlagen fehl"
             );
             BrainRoute::unavailable(reason)
         }
+    }
+}
+
+#[async_trait]
+pub trait ConversationPort: Send + Sync {
+    async fn converse(
+        &self,
+        broadcaster_id: &str,
+        task: ConversationTask,
+    ) -> Result<BotReply, LlmError>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InstalledConversation;
+
+#[async_trait]
+impl ConversationPort for InstalledConversation {
+    async fn converse(
+        &self,
+        broadcaster_id: &str,
+        task: ConversationTask,
+    ) -> Result<BotReply, LlmError> {
+        converse(broadcaster_id, task).await
+    }
+}
+
+pub async fn converse(broadcaster_id: &str, task: ConversationTask) -> Result<BotReply, LlmError> {
+    let capability = task.capability();
+    let result = match installed(CONVERSATION_USE_CASE) {
+        Some(route) => route.converse(broadcaster_id, task).await,
+        None => Err(LlmError::Unavailable(
+            "Brain-Gesprächsroute ist nicht eingerichtet".into(),
+        )),
     };
-    install(TITLE_AI_USE_CASE, route)
+    if let Err(error) = &result {
+        tb_observability::warning_budget::warn(
+            error.code(),
+            "Brain-Gespräch fehlgeschlagen; gleiche Fehler werden zusammengefasst",
+        );
+        tracing::debug!(capability = capability.as_str(), code = error.code(), fehler = %error, "Brain-Gespräch fehlgeschlagen");
+    }
+    result
+}
+
+pub fn answered_text(reply: BotReply) -> Option<String> {
+    match reply {
+        BotReply::Answered { text, .. } => {
+            let text = text.trim();
+            (!text.is_empty()).then(|| text.to_string())
+        }
+        BotReply::Silent { .. } => None,
+    }
 }
 
 pub fn is_installed(use_case: &str) -> bool {
@@ -1098,8 +1315,94 @@ mod tests {
         );
     }
 
+    fn chat_task() -> ConversationTask {
+        ConversationTask::TwitchChat {
+            stream: StreamContext {
+                streamer_login: "kanal".into(),
+                game: None,
+                title: None,
+                deadlock_live: true,
+            },
+            author: "zuschauer".into(),
+            message: "Moin".into(),
+            recent_messages: Vec::new(),
+            persona: ChatPersona::Veteran,
+            talkative: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn gespraech_sendet_strukturierte_aufgabe_und_verbucht_faehigkeit() {
+        let brain = MockServer::start().await;
+        let ledger = Arc::new(RecordingLedger::default());
+        Mock::given(method("POST"))
+            .and(path("/v1/task"))
+            .respond_with(|request: &wiremock::Request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "contract_version": BOT_TASK_VERSION,
+                    "request_id": body["request_id"],
+                    "result": {
+                        "kind": "conversation",
+                        "capability": "twitch_chat",
+                        "reply": {"kind": "answered", "text": "Moin zurück"},
+                        "model": "m",
+                        "usage": {"input_tokens": 2, "output_tokens": 3}
+                    }
+                }))
+            })
+            .expect(1)
+            .mount(&brain)
+            .await;
+        let reply = route(&brain, Arc::clone(&ledger))
+            .converse("42", chat_task())
+            .await
+            .expect("Antwort");
+        assert_eq!(answered_text(reply).as_deref(), Some("Moin zurück"));
+        let received = brain.received_requests().await.expect("Requests");
+        let body: Value = serde_json::from_slice(&received[0].body).expect("JSON");
+        assert_eq!(body["task"]["kind"], "conversation");
+        assert_eq!(body["task"]["capability"], "twitch_chat");
+        assert_eq!(body["identity"]["broadcaster_id"], "42");
+        assert_eq!(*ledger.purposes.lock().unwrap(), vec!["twitch_chat"]);
+        assert_eq!(ledger.completions.lock().unwrap()[0].total, Some(5));
+    }
+
+    #[tokio::test]
+    async fn schweigen_und_fehler_ergeben_keinen_text() {
+        let brain = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(|request: &wiremock::Request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "contract_version": BOT_TASK_VERSION,
+                    "request_id": body["request_id"],
+                    "result": {
+                        "kind": "conversation",
+                        "capability": "twitch_chat",
+                        "reply": {"kind": "silent", "reason": "no_occasion"}
+                    }
+                }))
+            })
+            .mount(&brain)
+            .await;
+        let ledger = Arc::new(RecordingLedger::default());
+        let reply = route(&brain, Arc::clone(&ledger))
+            .converse("42", chat_task())
+            .await
+            .expect("Schweigen");
+        assert_eq!(answered_text(reply), None);
+        assert!(ledger.completions.lock().unwrap()[0].success);
+
+        let failing = BrainRoute::unavailable("Brain-Dienstschlüssel fehlt");
+        assert!(matches!(
+            failing.converse("42", chat_task()).await,
+            Err(LlmError::Unavailable(_))
+        ));
+    }
+
     #[test]
-    fn nur_title_ai_hat_eine_brain_route() {
+    fn nur_titel_und_gespraech_haben_eine_brain_route() {
         assert_eq!(
             install("ai_chat", BrainRoute::unavailable("x")).err(),
             Some(BrainRouteError::UnsupportedUseCase)

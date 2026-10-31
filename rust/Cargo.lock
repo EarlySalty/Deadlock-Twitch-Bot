@@ -419,7 +419,7 @@ checksum = "dc0b364ead1874514c8c2855ab558056ebfeb775653e7ae45ff72f28f8f3166c"
 [[package]]
 name = "brain-client"
 version = "0.1.0"
-source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=139bc39214d183c339fb0f06a00c6b1af42383cc#139bc39214d183c339fb0f06a00c6b1af42383cc"
+source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=78fce755772b746e5aa25d44a00d5f958ef003bf#78fce755772b746e5aa25d44a00d5f958ef003bf"
 dependencies = [
  "brain-contracts",
  "reqwest",
@@ -431,7 +431,7 @@ dependencies = [
 [[package]]
 name = "brain-contracts"
 version = "0.1.0"
-source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=139bc39214d183c339fb0f06a00c6b1af42383cc#139bc39214d183c339fb0f06a00c6b1af42383cc"
+source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=78fce755772b746e5aa25d44a00d5f958ef003bf#78fce755772b746e5aa25d44a00d5f958ef003bf"
 dependencies = [
  "chrono",
  "regex",
@@ -4231,6 +4231,7 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "brain-client",
+ "brain-contracts",
  "chrono",
  "fireworks-model-selection",
  "fs2",
@@ -5023,7 +5024,7 @@ dependencies = [
 [[package]]
 name = "uplink-infisical-transport"
 version = "0.1.1"
-source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=139bc39214d183c339fb0f06a00c6b1af42383cc#139bc39214d183c339fb0f06a00c6b1af42383cc"
+source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=78fce755772b746e5aa25d44a00d5f958ef003bf#78fce755772b746e5aa25d44a00d5f958ef003bf"
 dependencies = [
  "reqwest",
 ]
