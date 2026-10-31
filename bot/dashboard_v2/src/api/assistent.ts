@@ -12,6 +12,7 @@ export interface AssistentAntwort {
   sources: string[];
   grounded: boolean;
   page: string;
+  silent: boolean;
 }
 
 export class AssistentRateLimitError extends Error {
@@ -36,7 +37,7 @@ export async function askAssistent(params: {
   const timer = setTimeout(() => controller.abort(), ASSISTENT_TIMEOUT_MS);
 
   try {
-    const data = await fetchJson<Partial<AssistentAntwort>>(
+    const data = await fetchJson<Partial<AssistentAntwort> & { status?: string }>(
       buildApiUrl('/dashboard/assistent/ask'),
       withCookieCredentials({
         method: 'POST',
@@ -55,6 +56,7 @@ export async function askAssistent(params: {
       sources: Array.isArray(data.sources) ? data.sources : [],
       grounded: Boolean(data.grounded),
       page: typeof data.page === 'string' ? data.page : page,
+      silent: data.status === 'silent',
     };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 429) {

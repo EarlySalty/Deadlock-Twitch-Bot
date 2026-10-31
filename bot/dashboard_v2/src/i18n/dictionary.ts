@@ -734,6 +734,7 @@ const EN: Record<string, string> = {
   'Deine Frage': 'Your question',
   'Frage senden': 'Send question',
   'Die Antwort konnte nicht geladen werden.': 'The answer could not be loaded.',
+  'Dazu ist gerade keine Antwort verfügbar.': 'No answer is available for this right now.',
   'Zu viele Fragen gerade. Probier es gleich noch einmal.':
     'Too many questions right now. Try again in a moment.',
   'Hi {name}! Ich helfe dir hier im Dashboard weiter. Frag mich alles zum Bot, zum Partnernetz und zu deinem Kanal.':

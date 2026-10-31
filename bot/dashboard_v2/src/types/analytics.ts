@@ -1445,6 +1445,7 @@ export interface AIChatMessage {
 }
 
 export interface AIChatResponse {
+  status?: 'answered' | 'silent';
   message: string;
   followUpsRemaining: number;
   rateLimitReset?: number;

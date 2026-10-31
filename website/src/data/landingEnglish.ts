@@ -204,6 +204,7 @@ export const landingEnglish: Record<string, string> = {
     "Too many questions right now. Please try again shortly.",
   "Die Antwort konnte nicht geladen werden.": "The answer could not be loaded.",
   "Der Bot hat keine Antwort geliefert.": "The bot did not return an answer.",
+  "Dazu ist gerade keine Antwort verfügbar.": "No answer is available for this right now.",
   "Verbindung fehlgeschlagen. Probier es noch einmal.":
     "Connection failed. Please try again.",
   "Hilfe zum Twitch-Bot": "Twitch bot help",

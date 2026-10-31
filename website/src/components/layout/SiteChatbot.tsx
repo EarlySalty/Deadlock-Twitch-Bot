@@ -21,6 +21,7 @@ interface AskResponse {
   answer?: string;
   parts?: string[];
   sources?: string[];
+  status?: "answered" | "silent";
 }
 
 interface ChatMessage {
@@ -44,6 +45,7 @@ export function SiteChatbot({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [silent, setSilent] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const helpButtonRef = useRef<HTMLButtonElement>(null);
   const messageId = useRef(0);
@@ -93,6 +95,7 @@ export function SiteChatbot({
     setQuestion("");
     setLoading(true);
     setError(null);
+    setSilent(false);
 
     const controller = new AbortController();
     const timer = window.setTimeout(
@@ -120,6 +123,10 @@ export function SiteChatbot({
       }
 
       const data: AskResponse = await response.json();
+      if (data.status === "silent") {
+        setSilent(true);
+        return;
+      }
       const answerParts = data.parts?.length
         ? data.parts
         : data.answer
@@ -242,6 +249,12 @@ export function SiteChatbot({
                 <Loader2 size={16} className="animate-spin text-accent" />
                 {landingText("Antwort wird erstellt…")}
               </div>
+            )}
+
+            {silent && (
+              <p className="rounded-xl border border-border bg-white/[0.05] px-4 py-3 text-sm text-text-secondary">
+                {landingText("Dazu ist gerade keine Antwort verfügbar.")}
+              </p>
             )}
 
             {error && (

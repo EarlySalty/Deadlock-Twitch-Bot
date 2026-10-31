@@ -16,6 +16,7 @@ interface AskResponse {
   answer?: string;
   parts?: string[];
   grounded?: boolean;
+  status?: "answered" | "silent";
 }
 
 /**
@@ -28,6 +29,7 @@ export function BotQuestionBox() {
   const [parts, setParts] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [silent, setSilent] = useState(false);
 
   async function ask(raw: string) {
     const q = raw.trim();
@@ -35,6 +37,7 @@ export function BotQuestionBox() {
 
     setLoading(true);
     setError(null);
+    setSilent(false);
     setParts([]);
 
     const controller = new AbortController();
@@ -57,6 +60,10 @@ export function BotQuestionBox() {
       }
 
       const data: AskResponse = await res.json();
+      if (data.status === "silent") {
+        setSilent(true);
+        return;
+      }
       const answerParts =
         data.parts && data.parts.length
           ? data.parts
@@ -116,7 +123,7 @@ export function BotQuestionBox() {
         </button>
       </form>
 
-      {!parts.length && !loading && !error && (
+      {!parts.length && !loading && !error && !silent && (
         <div className="mt-4 flex flex-wrap gap-2">
           {SUGGESTIONS.map((s) => (
             <button
@@ -140,6 +147,12 @@ export function BotQuestionBox() {
             <Loader2 size={18} className="animate-spin text-accent" />
             <span>{landingText("Der Bot überlegt kurz…")}</span>
           </div>
+        )}
+
+        {silent && !loading && (
+          <p className="rounded-xl border border-border px-5 py-4 text-sm text-text-secondary">
+            {landingText("Dazu ist gerade keine Antwort verfügbar.")}
+          </p>
         )}
 
         {error && !loading && (

@@ -62,6 +62,7 @@ export function DashboardAssistent() {
   const [messages, setMessages] = useState<ChatNachricht[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [silent, setSilent] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const messageId = useRef(0);
   const [slug, setSlug] = useState(() => seiteSlug());
@@ -102,9 +103,14 @@ export function DashboardAssistent() {
     setQuestion('');
     setLoading(true);
     setError(null);
+    setSilent(false);
 
     try {
       const antwort = await askAssistent({ question: text, history, page: aktuellerSlug, language, csrfToken });
+      if (antwort.silent) {
+        setSilent(true);
+        return;
+      }
       const teile = antwort.parts.length ? antwort.parts : antwort.answer ? [antwort.answer] : [];
       if (!teile.length) {
         setError(t('Die Antwort konnte nicht geladen werden.'));
@@ -204,6 +210,8 @@ export function DashboardAssistent() {
                 {t('Antwort wird erstellt …')}
               </div>
             )}
+
+            {silent && <p className="assistent-hinweis">{t('Dazu ist gerade keine Antwort verfügbar.')}</p>}
 
             {error && <p className="assistent-fehler">{error}</p>}
           </div>

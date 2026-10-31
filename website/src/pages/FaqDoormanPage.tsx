@@ -40,6 +40,7 @@ interface AskResponse {
   answer?: string;
   parts?: string[];
   sources?: string[];
+  status?: "answered" | "silent";
 }
 
 interface Entry {
@@ -54,6 +55,7 @@ export function FaqDoormanPage() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [silent, setSilent] = useState(false);
   const [ringing, setRinging] = useState(false);
 
   const nextId = useRef(0);
@@ -91,6 +93,7 @@ export function FaqDoormanPage() {
     }
 
     setError(null);
+    setSilent(false);
     setQuestion("");
     addEntry("guest", text);
     setLoading(true);
@@ -118,6 +121,10 @@ export function FaqDoormanPage() {
       }
 
       const data: AskResponse = await response.json();
+      if (data.status === "silent") {
+        setSilent(true);
+        return;
+      }
       const parts = data.parts?.length ? data.parts : data.answer ? [data.answer] : [];
       const sources = Array.isArray(data.sources) ? data.sources : [];
 
@@ -261,6 +268,22 @@ export function FaqDoormanPage() {
                 <span className="thinking-dot inline-block h-1.5 w-1.5 rounded-full bg-[#c8a86b]" />
               </span>
             </p>
+          ) : null}
+
+          {silent ? (
+            <div
+              role="status"
+              className="rounded-lg border border-[rgba(239,212,157,0.24)] px-4 py-3 text-sm text-[#efd49d]"
+            >
+              <p>{landingText("Dazu ist gerade keine Antwort verfügbar.")}</p>
+              <a
+                href={landingLink(DISCORD_URL)}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="mt-1.5 inline-flex items-center gap-1.5 underline underline-offset-2"
+              >{landingText("Direkt im Discord fragen ")}<ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            </div>
           ) : null}
 
           {error ? (

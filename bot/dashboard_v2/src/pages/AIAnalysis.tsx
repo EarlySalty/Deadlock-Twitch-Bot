@@ -191,7 +191,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
         ...prev,
         {
           role: 'assistant',
-          content: response.message,
+          content: response.status === 'silent' ? t('Dazu ist gerade keine Antwort verfügbar.') : response.message,
           timestamp: new Date().toISOString(),
         },
       ]);

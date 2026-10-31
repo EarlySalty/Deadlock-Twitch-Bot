@@ -474,17 +474,10 @@ async fn main() {
             }
         });
     }
-    let brain_token = if config.dashboard.options.brain_client.mode
-        == tb_config::dashboard_options::BrainClientMode::Legacy
-    {
-        None
-    } else {
-        tb_dashboard_api::uplink_config::brain_service_token()
-    };
     let brain_runtime =
         tb_dashboard_api::handlers::self_explainer::SelfExplainerBrainRuntime::from_config(
             &config.dashboard.options.brain_client,
-            brain_token.as_deref(),
+            title_brain_token.as_deref(),
         );
     let mut app = tb_dashboard_api::build_router_with_analysis_writer(
         pool.clone(),

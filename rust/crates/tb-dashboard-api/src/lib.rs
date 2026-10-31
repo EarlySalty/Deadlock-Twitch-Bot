@@ -102,7 +102,7 @@ fn security_header_layers() -> [SetResponseHeaderLayer<HeaderValue>; 5] {
 pub fn build_public_router(pool: PgPool) -> Router {
     build_public_router_with_brain(
         pool,
-        handlers::self_explainer::SelfExplainerBrainRuntime::legacy(),
+        handlers::self_explainer::SelfExplainerBrainRuntime::unavailable(),
     )
 }
 
@@ -127,7 +127,7 @@ pub fn build_public_router_with_brain(
             "/twitch/api/v2/public/recent-bans",
             get(bans::recent_bans_handler),
         )
-        // Frage-Box auf /streamer: erklärt den Bot grounded (öffentlich, rate-limitiert).
+        // Frage-Box auf /streamer: erklärt den Bot über das Brain (öffentlich, rate-limitiert).
         .route(
             "/twitch/api/v2/self-explainer/ask",
             post(self_explainer::self_explainer_ask),
@@ -2357,7 +2357,7 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
         pool,
         token,
         helix,
-        handlers::self_explainer::SelfExplainerBrainRuntime::legacy(),
+        handlers::self_explainer::SelfExplainerBrainRuntime::unavailable(),
     )
 }
 
