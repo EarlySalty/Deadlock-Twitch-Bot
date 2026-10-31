@@ -5,14 +5,14 @@ on:
     branches: [main]
     paths:
       - "rust/**"
-      - "ops/systemd/**"
+      - "ops/**"
       - ".github/workflows/rust.yml"
       - ".github/cargo-deny.toml"
   pull_request:
     branches: [main]
     paths:
       - "rust/**"
-      - "ops/systemd/**"
+      - "ops/**"
       - ".github/workflows/rust.yml"
       - ".github/cargo-deny.toml"
   workflow_dispatch:
