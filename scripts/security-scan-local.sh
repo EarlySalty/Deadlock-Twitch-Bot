@@ -127,7 +127,7 @@ fi
 
 say "== Security-Scan lokal (kein GitHub, keine Lizenz) =="
 if [ "$STRICT" -eq 1 ]; then
-  say "Modus: strict (wie der Wochenjob auf GitHub)"
+  say "Modus: strict (wie die Security- und Rust-Workflows auf GitHub)"
 else
   say "Modus: Push-Gate (Secrets und RustSec blocken, Rest nur melden)"
 fi
@@ -241,11 +241,11 @@ fi
 
 say ""
 if [ "$FAILED" -ne 0 ]; then
-  say "Push gestoppt: Secrets oder RustSec. Remote-GitHub bleibt wöchentlich."
+  say "Push gestoppt: Secrets oder RustSec. GitHub prüft zusätzlich bei jedem Push und Pull Request."
   exit 1
 fi
 if [ "$WARNED" -ne 0 ]; then
-  say "Push erlaubt, aber es gab Hinweise. Mit --strict wie der Wochenjob werten."
+  say "Push erlaubt, aber es gab Hinweise. Mit --strict wie die GitHub-Workflows werten."
   exit 0
 fi
 say "Alles grün."

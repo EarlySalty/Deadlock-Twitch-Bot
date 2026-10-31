@@ -4,6 +4,8 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
     groups:
       # init und analyze muessen dieselbe Version haben, sonst bricht die Analyse
       # mit "Loaded a configuration file for version X, but running version Y".
@@ -19,6 +21,8 @@ updates:
     directory: "/bot/dashboard_v2"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
       - "javascript"
@@ -37,6 +41,8 @@ updates:
     directory: "/bot/admin_dashboard"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
       - "javascript"
@@ -52,6 +58,8 @@ updates:
     directory: "/website"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
       - "javascript"
@@ -67,6 +75,8 @@ updates:
     directory: "/rust"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
       - "rust"

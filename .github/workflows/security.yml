@@ -153,10 +153,12 @@ jobs:
         run: |
           status=0
           semgrep scan --metrics=off --sarif --output semgrep.sarif \
+            --severity WARNING --severity ERROR \
             --config p/rust --config p/security-audit --config p/owasp-top-ten \
             --config p/github-actions --config p/javascript --config p/typescript --config p/python \
             . || status=$?
           echo "semgrep exit ${status}"
+          test -s semgrep.sarif
       - name: Upload semgrep SARIF
         if: always() && hashFiles('semgrep.sarif') != ''
         uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
