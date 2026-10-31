@@ -15,8 +15,7 @@ pub use crate::model_resolver::configured_fireworks_model;
 
 /// Bestehende öffentliche Konstante für fachliche Guard-Tests. Inzwischen gilt
 /// dieselbe Fireworks-Bindung für jeden Anwendungsfall.
-pub const FIREWORKS_ONLY_USE_CASES: &[&str] =
-    &["ricky_crew_review", "outreach_shadow", "promo_pitch"];
+pub const FIREWORKS_ONLY_USE_CASES: &[&str] = &["ricky_crew_review", "outreach_shadow"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LlmEndpoint {

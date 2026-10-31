@@ -1,7 +1,7 @@
 //! Geschichtete Soul: dynamische Erweiterungen unter dem statischen Kern-Soul
 //! (Port von `bot/engagement/soul_store.py`).
 //!
-//! Der Kern-Soul ist eine Konstante in [`crate::llm_chat::SOUL`]. Hier kommen
+//! Der Kern-Soul liegt im Brain. Hier kommen
 //! die wachsenden Teile dazu, persistiert in `twitch_engagement_soul`:
 //! `hero_takes` (kuratierte Hero-Vorlieben = Meinung, nicht Ton) und `anchor`
 //! (selbst-gemerkte Notizen). [`SoulStore::get_soul_extension_fragment`] baut

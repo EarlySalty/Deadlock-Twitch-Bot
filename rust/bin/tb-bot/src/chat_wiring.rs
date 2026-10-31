@@ -1281,10 +1281,7 @@ pub async fn build_runtime(
     // unten besitzt bewusst keinen Sender.
     // Die sieben Background-Jobs (Thread-Extractor, Match-Poller, …) laufen
     // unabhängig vom Sende-Account (Python `ensure_started`).
-    let engagement = Arc::new(EngagementPipeline::with_defaults(
-        pool.clone(),
-        EngagementLlmClient::new(None, None, None, None),
-    ));
+    let engagement = Arc::new(EngagementPipeline::new(pool.clone()));
     let stealth = build_engagement_stealth(pool.clone()).await;
     if stealth.is_none() {
         tracing::warn!(
