@@ -123,10 +123,13 @@ jobs:
           echo "deb https://packagecloud.io/timescale/timescaledb/ubuntu/ $(lsb_release -cs) main" \
             | sudo tee /etc/apt/sources.list.d/timescaledb.list
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends postgresql-16 timescaledb-2-postgresql-16 ffmpeg
+          sudo apt-get install --yes --no-install-recommends postgresql-16 postgresql-client-16 timescaledb-2-postgresql-16 ffmpeg
           /usr/lib/postgresql/16/bin/postgres --version
           ffmpeg -version | head -n 1
           test -f /usr/lib/postgresql/16/lib/timescaledb.so
+
+      - name: Create the twitch_analytics database the migrations grant access to
+        run: psql "$TB_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE twitch_analytics"
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
